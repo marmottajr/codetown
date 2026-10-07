@@ -22,22 +22,31 @@ import {
 const SCALE = 3;
 const DIRS: readonly Dir[] = ['down', 'left', 'up', 'right'];
 const DIR_PT: Record<Dir, string> = { down: 'baixo', left: 'esquerda', up: 'cima', right: 'direita' };
-const POSES: readonly Pose[] = ['stand', 'walk', 'run', 'sit', 'type', 'sleep', 'drink', 'use', 'raise_hand', 'talk', 'stretch', 'read', 'play'];
+const POSES: readonly Pose[] = ['stand', 'walk', 'run', 'sit', 'type', 'sleep', 'drink', 'use', 'raise_hand', 'talk', 'stretch', 'read', 'play', 'wait'];
 const POSE_PT: Record<Pose, string> = {
   stand: 'parado', walk: 'andando', run: 'correndo', sit: 'sentado', type: 'digitando', sleep: 'cochilando', drink: 'bebendo',
   use: 'usando máquina', raise_hand: 'mão levantada', talk: 'conversando', stretch: 'espreguiçando', read: 'lendo', play: 'ping-pong',
+  wait: 'esperando',
 };
-const HELD: readonly HeldItem[] = ['coffee', 'water', 'papers', 'laptop', 'book', 'box', 'paddle'];
-const HELD_PT: Record<HeldItem, string> = { none: 'nada', coffee: 'café', water: 'água', papers: 'papéis', laptop: 'notebook', book: 'livro', box: 'caixa', paddle: 'raquete' };
-const SCREENS: readonly ScreenMode[] = ['off', 'standby', 'idle', 'code', 'terminal', 'browser', 'search', 'chat', 'docs', 'tasks', 'alert'];
+/** Poses que sempre são sentadas (as demais podem ser em pé ou sentadas). */
+const SEATED_POSES: readonly Pose[] = ['sit', 'type', 'sleep', 'wait'];
+const HELD: readonly HeldItem[] = ['coffee', 'water', 'papers', 'laptop', 'book', 'box', 'paddle', 'popcorn'];
+const HELD_PT: Record<HeldItem, string> = {
+  none: 'nada', coffee: 'café', water: 'água', papers: 'papéis', laptop: 'notebook', book: 'livro', box: 'caixa', paddle: 'raquete', popcorn: 'pipoca',
+};
+const SCREENS: readonly ScreenMode[] = ['off', 'standby', 'idle', 'code', 'terminal', 'browser', 'search', 'chat', 'docs', 'tasks', 'alert', 'progress'];
 const SCREEN_PT: Record<ScreenMode, string> = {
   off: 'desligado', standby: 'em espera', idle: 'descanso', code: 'código', terminal: 'terminal', browser: 'navegador', search: 'busca', chat: 'chat', docs: 'documento', tasks: 'tarefas', alert: 'alerta',
+  progress: 'progresso',
 };
 const FLOORS: readonly FloorKind[] = ['carpet', 'wood', 'tile_check', 'tile_white', 'concrete', 'marble', 'grass', 'sidewalk', 'street'];
 const FLOOR_PT: Record<FloorKind, string> = {
   carpet: 'carpete', wood: 'madeira', tile_check: 'xadrez', tile_white: 'azulejo', concrete: 'cimento polido', marble: 'mármore', grass: 'grama', sidewalk: 'calçada', street: 'asfalto',
 };
-const ICONS: readonly IconName[] = ['alert', 'question', 'zzz', 'check', 'heart', 'coffee', 'music', 'idea', 'sweat', 'star', 'lightning', 'chat', 'box', 'wave'];
+const ICONS: readonly IconName[] = [
+  'alert', 'question', 'zzz', 'check', 'heart', 'coffee', 'music', 'idea', 'sweat', 'star', 'lightning', 'chat', 'box', 'wave',
+  'hourglass', 'hourglass_flip', 'cobweb', 'storm',
+];
 
 type Painter = (ctx: CanvasRenderingContext2D, t: number) => void;
 const painters: { ctx: CanvasRenderingContext2D; w: number; h: number; bg: string; paint: Painter }[] = [];
@@ -272,6 +281,110 @@ function sampleScene(): void {
   });
 }
 
+// ------------------------------------------------------------------ esperando o shell
+
+/**
+ * A piada do estado 'shell' montada só com peças do módulo de arte, em escalada cômica pela idade
+ * do shell: pipoca (0–3 min), impaciência com giro na cadeira (3–10), teia crescendo (> 10),
+ * cochilo coberto de teia (> 25) e o desfecho (sucesso com confete / falha com nuvem de chuva).
+ * Em cima: de frente, atrás da desk_back (o verso do monitor esconde o colo). Embaixo: de costas,
+ * diante do monitor em 'progress'. Partículas (pipoca, confete) e giro são simulados aqui só para
+ * a prévia — no escritório quem anima é o mundo.
+ */
+function shellWait(): void {
+  const s = section(
+    'shell',
+    'Esperando o shell',
+    'Pose wait (com e sem pipoca), ampulheta girando, tela progress, teia (1× e 2×), cochilo, e o desfecho: estrela com confete (sucesso) ou nuvem de chuva (falha). Em cima de frente (atrás da desk_back); embaixo de costas, diante do monitor.',
+  );
+  type Stage = { name: string; pose: Pose; held?: HeldItem; icon?: IconName | 'hourglass'; web?: 1 | 2; spin?: boolean; fx?: 'popcorn' | 'confetti' };
+  const stages: Stage[] = [
+    { name: '0-3 min', pose: 'wait', held: 'popcorn', icon: 'hourglass', fx: 'popcorn' },
+    { name: '3-10 min', pose: 'wait', icon: 'hourglass', spin: true },
+    { name: '> 10 min', pose: 'wait', icon: 'hourglass', web: 1 },
+    { name: '> 25 min', pose: 'sleep', icon: 'zzz', web: 2 },
+    { name: 'terminou', pose: 'raise_hand', icon: 'star', fx: 'confetti' },
+    { name: 'falhou', pose: 'sit', icon: 'storm' },
+  ];
+  const cw = 64;
+  const rowH = 78;
+  const theme = art.roomTheme(3);
+  const who = art.appearanceFromSeed(5150, { look: 'f' });
+  const SPIN_DOWN: readonly Dir[] = ['down', 'left', 'up', 'right'];
+  const SPIN_UP: readonly Dir[] = ['up', 'right', 'down', 'left'];
+  const CONFETTI = ['#ff6b6b', '#ffd84d', '#5bd1ff', '#7be07b', '#c38cff', '#ff9f43'];
+  const H = rowH * 2 + 6;
+  canvas(s, cw * stages.length, H, (ctx, t) => {
+    art.drawFloor(ctx, 'carpet', 0, 0, cw * stages.length, H, { seed: 3, tint: theme.carpet, tint2: theme.carpet2 });
+    stages.forEach((st, i) => {
+      const cx = i * cw + cw / 2;
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillRect(i * cw + 1, 0, cw - 2, 11);
+      labelCentered(ctx, st.name, i * cw, cw, 4, '#2b3142');
+      for (const row of [0, 1] as const) {
+        const front = row === 0;
+        const cy = front ? 60 : 60 + rowH;
+        // Giro na cadeira: a cada 5 s, quatro direções em 0,8 s.
+        let dir: Dir = front ? 'down' : 'up';
+        const ph = (t + i * 700) % 5000;
+        if (st.spin && ph < 800) dir = (front ? SPIN_DOWN : SPIN_UP)[Math.floor(ph / 200) % 4];
+        const sprite = art.characterSprite({ appearance: who, dir, pose: st.pose, frame: frameOf(st.pose, t, i * 90), held: st.held, seated: true });
+        if (front) {
+          blit(ctx, art.furnitureSprites('office_chair_front', theme.chairVariant).base, cx, cy);
+          blit(ctx, sprite, cx, cy - SEAT_FOOT_DY);
+          blit(ctx, art.furnitureSprites('desk_back', theme.deskVariant, 0, { seed: 0 }).base, cx, cy + TILE);
+        } else {
+          const desk = art.furnitureSprites('desk', theme.deskVariant, 0, { seed: 0 }).base;
+          blit(ctx, desk, cx, cy - TILE);
+          const r = desk.rects?.screen;
+          const mode: ScreenMode = st.name === 'terminou' ? 'tasks' : st.name === 'falhou' ? 'alert' : 'progress';
+          if (r) art.drawScreen(ctx, { x: cx - desk.ax + r.x, y: cy - TILE - desk.ay + r.y, w: r.w, h: r.h }, mode, t, 4);
+          const chair = art.furnitureSprites('office_chair', theme.chairVariant);
+          blit(ctx, chair.base, cx, cy);
+          blit(ctx, sprite, cx, cy - SEAT_FOOT_DY);
+          if (chair.front) blit(ctx, chair.front, cx, cy);
+        }
+        const headTop = cy - SEAT_FOOT_DY - 23;
+        // Teia: 1× no canto ao lado da cadeira; 2× já cobrindo quem cochila.
+        if (st.web) {
+          const web = art.iconSprite('cobweb').canvas;
+          if (st.web === 1) ctx.drawImage(web, cx - 21, headTop + 6);
+          else ctx.drawImage(web, cx - 22, headTop - 4, web.width * 2, web.height * 2);
+        }
+        // Pipoca pulando do balde (de frente ele fica sob o queixo; de costas, ao lado do quadril).
+        if (st.fx === 'popcorn') {
+          const u = ((t + row * 900) % 2300) / 650;
+          if (u < 1) {
+            const bx = front ? cx - 1 : cx - 10;
+            const by = front ? cy - 15 : cy - 12;
+            const px = Math.round(bx + (front ? 5 : -4) * u);
+            const py = Math.round(by - 7 * Math.sin(u * Math.PI) + 2 * u);
+            ctx.fillStyle = '#fff9e6';
+            ctx.fillRect(px, py, 1, 1);
+            ctx.fillStyle = '#ffd75e';
+            ctx.fillRect(px + 1, py, 1, 1);
+          }
+        }
+        if (st.fx === 'confetti') {
+          for (let k = 0; k < 14; k++) {
+            const life = ((t / 1600 + k / 14) % 1 + 1) % 1;
+            const px = Math.round(cx - 12 + ((k * 37) % 25) + Math.sin(life * 9 + k) * 2);
+            const py = Math.round(headTop - 14 + life * 30);
+            ctx.fillStyle = CONFETTI[k % CONFETTI.length];
+            ctx.fillRect(px, py, k % 3 === 0 ? 2 : 1, 1);
+          }
+        }
+        // Ícone acima da cabeça (a ampulheta alterna com a versão deitada a cada 1,2 s).
+        if (st.icon) {
+          const name: IconName = st.icon === 'hourglass' ? (Math.floor(t / 1200) % 2 ? 'hourglass_flip' : 'hourglass') : st.icon;
+          const bob = st.icon === 'zzz' ? Math.round(Math.sin(t / 500) * 1.5) : 0;
+          blit(ctx, art.iconSprite(name), cx + (st.web === 2 ? 3 : 0), headTop - 1 + bob);
+        }
+      }
+    });
+  }, '#e9ecf1', 4);
+}
+
 // ------------------------------------------------------------------ personagens
 
 function characters(): void {
@@ -295,7 +408,8 @@ function poses(): void {
   const cw = 30;
   const ch = 40;
   const list: { pose: Pose; seated: boolean; held?: HeldItem }[] = [
-    ...POSES.map((pose) => ({ pose, seated: pose === 'sit' || pose === 'type' || pose === 'sleep' })),
+    ...POSES.map((pose) => ({ pose, seated: SEATED_POSES.includes(pose) })),
+    { pose: 'wait', seated: true, held: 'popcorn' },
     { pose: 'raise_hand', seated: true },
     { pose: 'talk', seated: true },
     { pose: 'read', seated: true, held: 'papers' },
@@ -308,7 +422,8 @@ function poses(): void {
     ctx.translate(0, 6);
     list.forEach((p, row) => {
       label(ctx, POSE_PT[p.pose], 2, row * ch + 16);
-      if (p.seated && !['sit', 'type', 'sleep'].includes(p.pose)) label(ctx, '(sentado)', 2, row * ch + 23);
+      if (p.held && p.pose === 'wait') label(ctx, `(${HELD_PT[p.held]})`, 2, row * ch + 23);
+      else if (p.seated && !SEATED_POSES.includes(p.pose)) label(ctx, '(sentado)', 2, row * ch + 23);
       DIRS.forEach((dir, k) => {
         [a, b].forEach((ap, j) => {
           const x = 72 + (k * 2 + j) * cw;
@@ -522,7 +637,7 @@ function windows(): void {
 }
 
 function clockAndIcons(): void {
-  const s = section('icones', 'Relógio, ícones e temas', 'Relógio com a hora local; os 14 ícones de estado; temas de sala (piso, parede, mesa e cadeira).');
+  const s = section('icones', 'Relógio, ícones e temas', `Relógio com a hora local; os ${ICONS.length} ícones de estado (a teia, com contorno translúcido, também em 2×); temas de sala (piso, parede, mesa e cadeira).`);
   const row = document.createElement('div');
   row.className = 'row';
   s.appendChild(row);
@@ -535,6 +650,19 @@ function clockAndIcons(): void {
   });
   canvas(row, ICONS.length * 16, 16, (ctx) => {
     ICONS.forEach((n, i) => blit(ctx, art.iconSprite(n), i * 16 + 8, 14));
+  }, '#5b6b85');
+  // Ampulheta girando (alterna as duas a cada 1,2 s, como o mundo faz) e a teia em 1× e 2× sobre
+  // fundos claro e escuro.
+  canvas(row, 82, 30, (ctx, t) => {
+    ctx.fillStyle = '#e9ecf1';
+    ctx.fillRect(16, 0, 66, 30);
+    blit(ctx, art.iconSprite(Math.floor(t / 1200) % 2 ? 'hourglass_flip' : 'hourglass'), 8, 24);
+    const web = art.iconSprite('cobweb');
+    ctx.drawImage(web.canvas, 20, 2);
+    ctx.drawImage(web.canvas, 36, 2, web.canvas.width * 2, web.canvas.height * 2);
+    ctx.fillStyle = '#3f62a3';
+    ctx.fillRect(66, 0, 16, 30);
+    ctx.drawImage(web.canvas, 67, 2);
   }, '#5b6b85');
   const th = document.createElement('div');
   s.appendChild(th);
@@ -575,6 +703,7 @@ function avatars(): void {
 // ------------------------------------------------------------------ laço de animação
 
 sampleScene();
+shellWait();
 characters();
 poses();
 heldItems();

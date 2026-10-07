@@ -2,10 +2,11 @@
 // Puro (sem Node/DOM): roda no servidor (CODETOWN_DEMO=1) e no navegador (?mock=1).
 //
 // Gera sessões fictícias com ciclos realistas: prompt -> trabalho -> (permissão) -> (subagentes)
-// -> fim de turno -> pausa -> ... e encerra sessões de tempos em tempos para exercitar
-// as animações de chegada, saída, "apagar a luz" e sumiço de salas.
-import type { AccountInfo, Activity, AgentInfo, FeedItem, Notice, OfficeSnapshot, RoomInfo, TaskItem } from '../types';
-import { describePrompt, describeTool, SPECIAL, type ActivityDescription } from '../activity';
+// -> (comando longo em primeiro plano) -> fim de turno -> (esperando shell em segundo plano) ->
+// pausa -> ... e encerra sessões de tempos em tempos para exercitar as animações de chegada,
+// saída, "apagar a luz" e sumiço de salas.
+import type { AccountInfo, Activity, AgentInfo, FeedItem, Notice, OfficeSnapshot, RoomInfo, ShellJob, TaskItem } from '../types';
+import { describePrompt, describeShellJob, describeTool, SHELL_DONE_TOOL, SHELL_WAIT_TOOL, SPECIAL, type ActivityDescription, type ShellOutcome } from '../activity';
 import { hash32, mulberry32 } from '../hash';
 import { pickName } from '../names';
 
@@ -91,6 +92,31 @@ const SUB_TASKS = [
 ];
 const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1'];
 
+/** Comandos que os agentes deixam rodando em segundo plano (e encerram o turno esperando). */
+const BACKGROUND_JOBS: Array<{ description: string; command: string }> = [
+  { description: 'Rodar a suíte de testes', command: 'npm test -- --runInBand' },
+  { description: 'Build de produção', command: 'npm run build -- --mode production' },
+  { description: 'Migração do banco', command: 'npm run db:migrate && npm run db:seed' },
+  { description: 'Rodar os testes de integração', command: 'pytest -q tests/integration' },
+  { description: 'Gerar o relatório completo', command: 'python pipelines/report.py --full' },
+  { description: 'Subir os containers', command: 'docker compose up --build --wait' },
+  { description: 'Testes de ponta a ponta', command: 'npx playwright test' },
+  { description: 'Auditoria de desempenho', command: 'npx lighthouse http://localhost:4321 --quiet' },
+];
+/** Comandos demorados em primeiro plano (o agente fica parado esperando o resultado). */
+const FOREGROUND_JOBS: Array<{ description: string; command: string }> = [
+  { description: 'Instalar as dependências', command: 'npm ci' },
+  { description: 'Rodar os testes do módulo', command: 'npm test -- src/api' },
+  { description: 'Compilar o projeto', command: 'npm run build' },
+  { description: 'Baixar a imagem do banco', command: 'docker pull postgres:17' },
+];
+/** Chance de, ao fim de um turno, deixar um shell em segundo plano rodando. */
+const SHELL_CHANCE = 0.35;
+/** Chance, a cada ação, de rodar um comando longo em primeiro plano (no máximo um por turno). */
+const FOREGROUND_CHANCE = 0.07;
+/** Chance de um shell em segundo plano falhar. */
+const SHELL_FAIL_CHANCE = 0.15;
+
 type DemoAccount = Omit<AccountInfo, 'sessions' | 'usage' | 'usageStatus'>;
 
 // No ?mock=1 as contas imitam o cenário real (C e D). Misturado aos dados reais no servidor
@@ -105,7 +131,7 @@ const MERGED_ACCOUNTS: Array<Pick<DemoAccount, 'short' | 'name' | 'color'>> = [
 ];
 const HOUR = 3_600_000;
 
-type Phase = 'working' | 'waiting' | 'idle' | 'delegating' | 'leaving';
+type Phase = 'working' | 'waiting' | 'idle' | 'delegating' | 'shell' | 'leaving';
 
 interface SimAgent {
   info: AgentInfo;
@@ -119,6 +145,13 @@ interface SimAgent {
   closeAt: number;
   removeAt?: number;
   taskCursor: number;
+  /** Fim (e desfecho) de cada shell em segundo plano rodando, por id do job. */
+  shellEnds: Map<string, { at: number; outcome: ShellOutcome }>;
+  /** Comando em primeiro plano rodando até este instante. */
+  foregroundUntil?: number;
+  /** Já disparou shell (segundo plano) ou comando longo (primeiro plano) neste turno. */
+  shelledThisTurn: boolean;
+  foregroundThisTurn: boolean;
 }
 
 export interface DemoTickResult {
@@ -179,8 +212,11 @@ export class DemoSimulator {
         weekReset: now + (2 + i * 2.5) * 24 * HOUR,
       }),
     );
-    // Começa com o escritório já movimentado.
+    // Começa com o escritório já movimentado — e com alguém esperando um shell (a espera leva minutos;
+    // sem isso, a primeira só apareceria depois do primeiro turno completo).
     for (let i = 0; i < this.target - 1; i++) this.spawnSession(now, true);
+    const first = [...this.agents.values()].find((a) => a.info.kind === 'main');
+    if (first) this.startBackgroundShells(first, now, true);
     this.nextSpawnAt = now + this.ms(20_000, 40_000);
     // Descarta o feed/avisos de abertura.
     this.pendingFeed = [];
@@ -306,6 +342,9 @@ export class DemoSimulator {
       children: [],
       closeAt: now + this.ms(150_000, 420_000),
       taskCursor: 0,
+      shellEnds: new Map(),
+      shelledThisTurn: false,
+      foregroundThisTurn: false,
     };
     this.agents.set(id, a);
     const acc = this.accounts.find((x) => x.id === info.account);
@@ -354,6 +393,9 @@ export class DemoSimulator {
       children: [],
       closeAt: Infinity,
       taskCursor: n,
+      shellEnds: new Map(),
+      shelledThisTurn: true,
+      foregroundThisTurn: true,
     };
     this.agents.set(id, sub);
     parent.children.push(id);
@@ -381,6 +423,8 @@ export class DemoSimulator {
           const prompt = this.pick(a.project.prompts, a.rng);
           a.info.title = prompt;
           a.phase = 'working';
+          a.shelledThisTurn = false;
+          a.foregroundThisTurn = false;
           a.actionsLeft = 5 + Math.floor(a.rng() * 9);
           a.nextActionAt = now + this.ms(1_200, 2_500);
           this.setStatus(a, 'working', now);
@@ -406,9 +450,38 @@ export class DemoSimulator {
         }
         break;
       }
+      case 'shell': {
+        // Shell(s) terminando: a notificação acorda o agente, que lê o resultado e trabalha mais um pouco.
+        const due = [...a.shellEnds].filter(([, e]) => e.at <= now).map(([id]) => id);
+        if (!due.length) break;
+        for (const id of due) this.finishShell(a, id, now);
+        a.phase = 'working';
+        a.actionsLeft = 1 + Math.floor(a.rng() * 3);
+        a.nextActionAt = now + this.ms(2_000, 3_500);
+        this.setStatus(a, 'working', now);
+        break;
+      }
       case 'working':
         if (now < a.nextActionAt) break;
+        if (a.foregroundUntil !== undefined) this.endForeground(a);
+        // Shell em segundo plano terminando no meio do turno: a notificação chega e o agente segue trabalhando.
+        for (const [id, end] of [...a.shellEnds]) {
+          if (end.at > now) continue;
+          this.finishShell(a, id, now);
+          a.actionsLeft = Math.max(a.actionsLeft, 1);
+          a.nextActionAt = now + this.ms(2_000, 3_500);
+        }
+        if (now < a.nextActionAt) break;
         if (a.actionsLeft <= 0) {
+          // Ainda há shell em segundo plano rodando (já pedido antes): volta a esperar por ele.
+          if (a.shellEnds.size) {
+            this.waitForShells(a, now, false);
+            break;
+          }
+          if (!a.shelledThisTurn && a.rng() < SHELL_CHANCE) {
+            this.startBackgroundShells(a, now, false);
+            break;
+          }
           a.phase = 'idle';
           a.phaseUntil = now + this.ms(20_000, 75_000);
           this.advanceTask(a, 'completed');
@@ -432,6 +505,8 @@ export class DemoSimulator {
             this.activity(a, now, describeTool('Agent', { description: `${count} frentes em paralelo`, subagent_type: 'general-purpose' }));
             for (let i = 0; i < count; i++) this.spawnSub(a, now);
             a.phase = 'delegating';
+          } else if (roll < 0.2 + FOREGROUND_CHANCE && !a.foregroundThisTurn && a.actionsLeft > 0) {
+            this.startForeground(a, now);
           } else {
             this.activity(a, now, this.randomTool(a));
             a.nextActionAt = now + this.ms(1_800, 5_500);
@@ -457,6 +532,85 @@ export class DemoSimulator {
       this.activity(a, now, this.randomTool(a));
       a.nextActionAt = now + this.ms(1_500, 4_500);
     }
+  }
+
+  // ---------------------------------------------------------------- shells
+
+  /**
+   * Deixa 1 (ou 2) comandos rodando em segundo plano e encerra o turno esperando por eles (status 'shell').
+   * `warm` = abertura do escritório: o shell já roda há um tempo e não há aviso.
+   */
+  private startBackgroundShells(a: SimAgent, now: number, warm: boolean): void {
+    const count = a.rng() < 0.25 ? 2 : 1;
+    const specs = BACKGROUND_JOBS.slice();
+    const jobs: ShellJob[] = [];
+    if (warm) {
+      a.info.title = this.pick(a.project.prompts, a.rng);
+      this.activity(a, now, describePrompt(a.info.title));
+    }
+    const base = warm ? now - this.ms(20_000, 150_000) : now;
+    for (let i = 0; i < count; i++) {
+      const spec = specs.splice(Math.floor(a.rng() * specs.length), 1)[0];
+      const d = describeShellJob('Bash', spec);
+      const id = `b${Math.floor(this.rng() * 2 ** 40).toString(36)}`;
+      // Um tool_use depois do outro: o primeiro é o mais antigo (é ele que dá o tempo da espera).
+      const job: ShellJob = { id, label: d.label, startedAt: base - (count - 1 - i) * 1_200, background: true, kind: 'shell' };
+      if (d.command) job.command = d.command;
+      jobs.push(job);
+      a.shellEnds.set(id, { at: now + this.ms(40_000, 150_000), outcome: a.rng() < SHELL_FAIL_CHANCE ? 'failed' : 'ok' });
+      this.activity(a, now, describeTool('Bash', { ...spec, run_in_background: true }));
+    }
+    a.info.shells = [...(a.info.shells ?? []), ...jobs].sort(byStart);
+    a.shelledThisTurn = true;
+    if (!warm) this.advanceTask(a, 'completed');
+    this.waitForShells(a, now, !warm);
+  }
+
+  /** Fim de turno com shell(s) em segundo plano rodando: fica na mesa esperando. */
+  private waitForShells(a: SimAgent, now: number, notify: boolean): void {
+    const jobs = (a.info.shells ?? []).filter((j) => j.background);
+    const main = jobs[0];
+    a.phase = 'shell';
+    this.setStatus(a, 'shell', now);
+    this.activity(a, now, SPECIAL.waitingShell(main?.label, jobs.length, main?.command));
+    if (notify && main) this.notice(now, 'info', `⏳ ${a.info.name} está esperando o shell em ${a.project.name}: ${main.label}`, a.info.id, a.info.roomId);
+  }
+
+  /** Um shell em segundo plano terminou: atividade 'ShellDone' (o mundo comemora ou lamenta) e aviso. */
+  private finishShell(a: SimAgent, id: string, now: number): void {
+    const end = a.shellEnds.get(id);
+    a.shellEnds.delete(id);
+    const job = a.info.shells?.find((j) => j.id === id);
+    this.setShells(a, (a.info.shells ?? []).filter((j) => j.id !== id));
+    if (!job || !end) return;
+    this.activity(a, now, SPECIAL.shellDone(job.label, end.outcome, now - job.startedAt, job.command));
+    if (end.outcome === 'ok') this.notice(now, 'success', `✅ ${a.info.name}: shell terminou em ${a.project.name} — ${job.label}`, a.info.id, a.info.roomId);
+    else this.notice(now, 'warn', `❌ ${a.info.name}: shell falhou em ${a.project.name} — ${job.label}`, a.info.id, a.info.roomId);
+  }
+
+  /** Comando demorado em primeiro plano: o agente fica parado esperando o resultado (status continua 'working'). */
+  private startForeground(a: SimAgent, now: number): void {
+    const spec = this.pick(FOREGROUND_JOBS, a.rng);
+    const d = describeShellJob('Bash', spec);
+    const job: ShellJob = { id: `toolu_demo_${this.tag}_${++this.seq}`, label: d.label, startedAt: now, background: false, kind: 'shell' };
+    if (d.command) job.command = d.command;
+    this.setShells(a, [...(a.info.shells ?? []), job]);
+    a.foregroundThisTurn = true;
+    a.foregroundUntil = now + this.ms(15_000, 40_000);
+    a.nextActionAt = a.foregroundUntil;
+    this.activity(a, now, describeTool('Bash', spec));
+  }
+
+  /** O comando em primeiro plano devolveu o resultado. */
+  private endForeground(a: SimAgent): void {
+    a.foregroundUntil = undefined;
+    this.setShells(a, (a.info.shells ?? []).filter((j) => j.background));
+  }
+
+  private setShells(a: SimAgent, jobs: ShellJob[]): void {
+    if (jobs.length) a.info.shells = jobs.sort(byStart);
+    else delete a.info.shells;
+    this.dirty = true;
   }
 
   private randomTool(a: SimAgent): ActivityDescription {
@@ -496,12 +650,13 @@ export class DemoSimulator {
     }
   }
 
-  private activity(a: SimAgent, now: number, d: ActivityDescription): void {
+  private activity(a: SimAgent, now: number, d: ActivityDescription & { tool?: string; error?: boolean }): void {
     const act: Activity = { id: `${this.prefix}${this.tag}-a${++this.seq}`, at: now, ...d };
     a.info.activity = act;
     a.info.recent = [...a.info.recent, act].slice(-30);
     a.info.lastEventAt = now;
-    if (d.kind !== 'prompt' && d.kind !== 'done' && d.kind !== 'wait' && d.kind !== 'think') {
+    const synthetic = d.tool === SHELL_DONE_TOOL || d.tool === SHELL_WAIT_TOOL;
+    if (!synthetic && d.kind !== 'prompt' && d.kind !== 'done' && d.kind !== 'wait' && d.kind !== 'think') {
       a.info.stats.toolCalls++;
     }
     const u = this.usage.get(a.info.account);
@@ -555,12 +710,16 @@ export class DemoSimulator {
   }
 }
 
+const byStart = (x: ShellJob, y: ShellJob) => x.startedAt - y.startedAt || x.id.localeCompare(y.id);
+
 function structuredCloneAgent(a: AgentInfo): AgentInfo {
-  return {
+  const c: AgentInfo = {
     ...a,
     recent: a.recent.slice(),
     tasks: a.tasks.map((t) => ({ ...t })),
     stats: { ...a.stats },
     activity: a.activity ? { ...a.activity } : undefined,
   };
+  if (a.shells) c.shells = a.shells.map((j) => ({ ...j }));
+  return c;
 }

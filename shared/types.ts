@@ -11,10 +11,29 @@ export type AgentKind = 'main' | 'sub';
  * - working: processando um turno (ocupado). Fica na mesa digitando.
  * - waiting: precisa do usuário (permissão, pergunta, diálogo). Fica na mesa com a mão levantada.
  * - idle: terminou o turno e espera a próxima instrução. Circula pelo escritório (café, bebedouro...).
+ * - shell: terminou o turno, mas há shell(s) rodando em segundo plano (ver `shells`); está esperando
+ *   o shell terminar. Fica na mesa, de olho no terminal. (O registro do Claude Code grava "shell"
+ *   quando a sessão está ociosa com shells em segundo plano.)
  * - done: subagente concluiu. Entrega o resultado ao agente principal e vai embora.
  * - offline: sessão encerrada. Vai embora (se for o último da sala, apaga a luz).
  */
-export type AgentStatus = 'working' | 'waiting' | 'idle' | 'done' | 'offline';
+export type AgentStatus = 'working' | 'waiting' | 'idle' | 'shell' | 'done' | 'offline';
+
+/** Um comando de shell que o agente está esperando terminar. */
+export interface ShellJob {
+  /** Id da tarefa em segundo plano (ex.: "bo0ov3q3l") ou, em primeiro plano, o id do tool_use. */
+  id: string;
+  /** Texto curto em PT-BR: a descrição do Bash ou um resumo do comando (segredos mascarados). */
+  label: string;
+  /** Comando completo (mascarado, até ~300 caracteres), quando houver. */
+  command?: string;
+  /** Epoch ms em que o comando começou. */
+  startedAt: number;
+  /** true = run_in_background (o agente encerrou o turno e espera a notificação); false = comando em primeiro plano ainda sem resultado. */
+  background: boolean;
+  /** 'monitor' = ferramenta Monitor (acompanha um processo); 'shell' = Bash. */
+  kind: 'shell' | 'monitor';
+}
 
 export type ActivityKind =
   | 'prompt' // recebeu nova instrução do usuário
@@ -107,6 +126,8 @@ export interface AgentInfo {
   /** Últimas atividades, da mais antiga para a mais recente (máx. ~30). */
   recent: Activity[];
   tasks: TaskItem[];
+  /** Shells rodando que o agente espera: em segundo plano e o comando em primeiro plano ainda sem resultado. */
+  shells?: ShellJob[];
   model?: string;
   gitBranch?: string;
   permissionMode?: string;

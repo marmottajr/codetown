@@ -1,11 +1,21 @@
 // API de depuração do mundo (console: `codetown.world.debug`), usada em testes visuais para
-// forçar cenários: sessões simuladas chegando/saindo, salas fechando, hora do dia, câmera.
-import type { AgentInfo, AgentStatus, RoomInfo } from '../../../shared/types';
+// forçar cenários: sessões simuladas chegando/saindo, salas fechando, hora do dia, câmera e a
+// espera de shell (shells rodando, envelhecer a espera, terminar com sucesso/falha).
+import type { Activity, AgentInfo, AgentStatus, RoomInfo, ShellJob } from '../../../shared/types';
+import { SPECIAL, type ShellOutcome } from '../../../shared/activity';
 import { hash32 } from '../../../shared/hash';
 import { TILE } from '../art/api';
 import type { Camera } from './camera';
 import type { Renderer } from './render/renderer';
+import { oldestShell } from './sim/shell';
 import type { Sim } from './sim/sim';
+
+/** Um shell para os cenários de depuração: campos de ShellJob opcionais + idade relativa. */
+export interface ShellJobInput extends Partial<ShellJob> {
+  /** Há quantos minutos o comando começou (ignorado se `startedAt` vier). */
+  ageMinutes?: number;
+  ageSeconds?: number;
+}
 
 export interface SpawnOptions {
   /** Nome do projeto (sala). Padrão: um nome novo; se a sala existir, reaproveita. */
@@ -16,6 +26,11 @@ export interface SpawnOptions {
   status?: AgentStatus;
   /** Quantos subagentes (trabalhando) disparar junto. */
   subs?: number;
+  /**
+   * Já começa esperando shell(s): status 'shell' (ou 'working' com `background: false`, um comando
+   * longo em primeiro plano). `count` > 1 cria vários (o "×N" da ampulheta).
+   */
+  shell?: { label?: string; command?: string; ageMinutes?: number; count?: number; background?: boolean; kind?: 'shell' | 'monitor' };
 }
 
 export interface WorldDebug {
@@ -45,6 +60,20 @@ export interface WorldDebug {
   wanderNow(): void;
   /** Junta dois ociosos numa conversa ou partida de ping-pong. Retorna os nomes ou null. */
   socialize(kind: 'talk' | 'pingpong'): string[] | null;
+  /**
+   * Define os shells que um agente espera (sessão simulada ou agente real; o real fica sobreposto
+   * até reset()). Algum em segundo plano -> status 'shell'; só em primeiro plano -> 'working';
+   * lista vazia -> 'idle' (se estava em 'shell').
+   */
+  setShells(agentId: string, jobs: ShellJobInput[]): void;
+  /** Envelhece os shells (todas as sessões com shells, ou só um agente) em `minutes` — para ver os estágios. */
+  ageShells(minutes: number, agentId?: string): void;
+  /**
+   * Termina o shell mais antigo (ou todos, `opts.all`) de um agente: registra a Activity 'ShellDone'
+   * (error em 'failed'/'killed'), o que dispara o confete ou a chuva. Sem shells em segundo plano
+   * restantes, o status vira `opts.then` (padrão 'working': o agente acorda com a notificação).
+   */
+  finishShell(agentId: string, result?: 'completed' | 'failed' | 'killed', opts?: { all?: boolean; then?: AgentStatus }): void;
   readonly sim: Sim;
   readonly camera: Camera;
 }
@@ -82,6 +111,56 @@ export function createDebug(sim: Sim, renderer: Renderer, camera: Camera, onCame
     };
   };
 
+  const makeJobs = (jobs: readonly ShellJobInput[]): ShellJob[] =>
+    jobs.map((j) => ({
+      id: j.id ?? `bdbg${(++seq).toString(36)}`,
+      label: j.label ?? 'Rodar a suíte de testes',
+      command: j.command ?? 'npm test',
+      startedAt: j.startedAt ?? now() - (j.ageMinutes ?? 0) * 60_000 - (j.ageSeconds ?? 0) * 1000,
+      background: j.background ?? true,
+      kind: j.kind ?? 'shell',
+    }));
+
+  /** Status coerente com os shells: segundo plano -> 'shell'; só primeiro plano -> 'working'. */
+  const statusFor = (cur: AgentStatus, shells: readonly ShellJob[]): AgentStatus => {
+    if (cur === 'waiting' || cur === 'offline' || cur === 'done') return cur;
+    if (shells.some((j) => j.background)) return 'shell';
+    if (shells.length) return 'working';
+    return cur === 'shell' ? 'idle' : cur;
+  };
+
+  /**
+   * Edita um agente como um snapshot novo faria (cópia alterada): sessões simuladas diretamente;
+   * agentes reais por sobreposição (sim.agentPatches) até reset().
+   */
+  const editAgent = (id: string, fn: (a: AgentInfo) => void): boolean => {
+    const i = sim.injected.agents.findIndex((x) => x.id === id);
+    if (i >= 0) {
+      const a: AgentInfo = { ...sim.injected.agents[i] };
+      fn(a);
+      sim.injected.agents[i] = a;
+      return true;
+    }
+    const ch = sim.chars.get(id);
+    if (!ch) return false;
+    const a: AgentInfo = { ...ch.info };
+    fn(a);
+    const patch: Partial<AgentInfo> = { ...sim.agentPatches.get(id) };
+    for (const k of ['status', 'statusSince', 'shells', 'activity'] as const) if (a[k] !== ch.info[k]) Object.assign(patch, { [k]: a[k] });
+    sim.agentPatches.set(id, patch);
+    return true;
+  };
+
+  const applyShells = (a: AgentInfo, shells: ShellJob[]) => {
+    const status = statusFor(a.status, shells);
+    if (status !== a.status) a.statusSince = now();
+    a.status = status;
+    a.shells = shells;
+    // como o servidor: o status 'shell' vale desde o início da espera
+    const oldest = oldestShell(shells, false);
+    if (status === 'shell' && oldest) a.statusSince = Math.min(a.statusSince, oldest.startedAt);
+  };
+
   return {
     state: () => ({
       cols: sim.building.cols,
@@ -109,6 +188,10 @@ export function createDebug(sim: Sim, renderer: Renderer, camera: Camera, onCame
         spot: c.atSpot,
         leaving: c.leaving,
         pose: c.pose,
+        held: c.held,
+        dir: c.dir,
+        icon: c.icon,
+        shell: c.mode === 'shell' ? { stage: c.shellStage, count: c.shellCount, label: c.shellLabel, ageMin: Math.round(((now() - c.shellSince) / 60_000) * 10) / 10 } : null,
       })),
     }),
 
@@ -133,6 +216,23 @@ export function createDebug(sim: Sim, renderer: Renderer, camera: Camera, onCame
         status: opts.status ?? 'working',
         title: `Sessão de teste ${n}`,
       });
+      if (opts.shell) {
+        const sh = opts.shell;
+        const n = Math.max(1, Math.floor(sh.count ?? 1));
+        const jobs: ShellJobInput[] = [];
+        for (let i = 0; i < n; i++) {
+          jobs.push({
+            label: i === 0 ? sh.label : `${sh.label ?? 'Rodar a suíte de testes'} (${i + 1})`,
+            command: sh.command,
+            // os demais começaram depois do primeiro
+            ageMinutes: Math.max(0, (sh.ageMinutes ?? 0) - i * 0.5),
+            background: sh.background ?? true,
+            kind: sh.kind,
+          });
+        }
+        applyShells(main, makeJobs(jobs));
+        main.activity = { id: `dbg-act-${++seq}`, kind: 'run', icon: '💻', text: 'Rodando em segundo plano', tool: 'Bash', at: now() };
+      }
       sim.injected.agents.push(main);
       for (let i = 0; i < (opts.subs ?? 0); i++) {
         const k = ++seq;
@@ -183,6 +283,7 @@ export function createDebug(sim: Sim, renderer: Renderer, camera: Camera, onCame
     },
 
     reset: () => {
+      sim.agentPatches.clear();
       sim.forcedOffline.clear();
       sim.hiddenRooms.clear();
       sim.injected.agents = [];
@@ -227,6 +328,49 @@ export function createDebug(sim: Sim, renderer: Renderer, camera: Camera, onCame
       const idle = [...sim.chars.values()].filter((c) => c.mode === 'idle' && !c.leaving && !c.meeting && !c.arriving);
       if (idle.length < 2) return null;
       return sim.startMeeting(kind, idle[0], idle[1]) ? [idle[0].info.name, idle[1].info.name] : null;
+    },
+
+    setShells: (id, jobs) => {
+      if (editAgent(id, (a) => applyShells(a, makeJobs(jobs)))) reapply();
+    },
+
+    ageShells: (minutes, agentId) => {
+      const ms = minutes * 60_000;
+      if (!Number.isFinite(ms) || !ms) return;
+      const ids = agentId ? [agentId] : [...sim.injected.agents.map((a) => a.id), ...sim.agentPatches.keys()];
+      for (const id of ids) {
+        editAgent(id, (a) => {
+          if (!a.shells?.length) return;
+          a.shells = a.shells.map((j) => ({ ...j, startedAt: j.startedAt - ms }));
+          if (a.status === 'shell') a.statusSince -= ms;
+        });
+      }
+      reapply();
+    },
+
+    finishShell: (id, result = 'completed', opts = {}) => {
+      const ok = result === 'completed';
+      const done = editAgent(id, (a) => {
+        const shells = [...(a.shells ?? [])].sort((x, y) => x.startedAt - y.startedAt);
+        const ended = opts.all ? shells : shells.slice(0, 1);
+        const rest = opts.all ? [] : shells.slice(1);
+        const t = now();
+        const ms = ended[0] ? t - ended[0].startedAt : undefined;
+        // mesmos textos do servidor ("Shell terminou: <rótulo> (<duração>)", "Shell falhou: …")
+        const outcome: ShellOutcome = ok ? 'ok' : result === 'killed' ? 'killed' : 'failed';
+        const detail = ended.map((j) => j.command ?? j.label).join(' | ') || undefined;
+        const activity: Activity = { id: `dbg-act-${++seq}`, at: t, ...SPECIAL.shellDone(ended[0]?.label, outcome, ms, detail) };
+        if (ok && ms !== undefined) activity.durationMs = ms;
+        a.activity = activity;
+        a.recent = [...(a.recent ?? []), activity].slice(-30);
+        a.shells = rest;
+        const next = rest.some((j) => j.background) ? 'shell' : rest.length ? 'working' : (opts.then ?? 'working');
+        if (next !== a.status) {
+          a.status = next;
+          a.statusSince = t;
+        }
+      });
+      if (done) reapply();
     },
 
     sim,

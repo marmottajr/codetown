@@ -1,8 +1,8 @@
 // Peças visuais reutilizadas pelos painéis: chip de conta, ponto de status, selo de papel, barra de progresso.
 import type { AccountInfo, Activity, AgentInfo, AgentStatus } from '../../../shared/types';
-import { h, setAttr, setStyleVar, setText, setTitle, setVariant } from './dom';
+import { h, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
 import { WORDMARK } from './icons';
-import { statusLabel } from './model';
+import { shellDoneKind, shellLine, shellStage, statusLabel, type ShellWait } from './model';
 
 /** Chip quadrado com a letra curta da conta ("C", "D") na cor da conta. */
 export function createAccountChip(size: 'sm' | 'md' | 'lg' = 'sm'): HTMLElement {
@@ -57,19 +57,58 @@ export function updateProgress(bar: HTMLElement, done: number, total: number, pa
   bar.classList.toggle('is-complete', total > 0 && done === total);
 }
 
-/** Linha "ícone + texto" de atividade, com reticências. */
+/**
+ * Linha "ícone + texto" de atividade, com reticências. Tem também um cronômetro e um contador "×N"
+ * (ocultos fora da espera por shell), para que o tempo nunca seja cortado pelas reticências do texto.
+ */
 export function createActivityLine(): HTMLElement {
   const el = h('span', { class: 'ui-activity' });
-  el.append(h('span', { class: 'ui-activity__icon', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'ui-activity__text' }));
+  el.append(
+    h('span', { class: 'ui-activity__icon', attrs: { 'aria-hidden': 'true' } }),
+    h('span', { class: 'ui-activity__text' }),
+    h('span', { class: 'ui-activity__time', hidden: true }),
+    h('span', { class: 'ui-activity__count', hidden: true }),
+  );
   return el;
 }
 
+function activityParts(el: HTMLElement): [HTMLElement, HTMLElement, HTMLElement, HTMLElement] {
+  return el.children as unknown as [HTMLElement, HTMLElement, HTMLElement, HTMLElement];
+}
+
 export function updateActivityLine(el: HTMLElement, activity: Activity | undefined, fallback = 'Sem atividade ainda'): void {
-  const [icon, text] = el.children as unknown as [HTMLElement, HTMLElement];
+  const [icon, text, time, count] = activityParts(el);
   setText(icon, activity?.icon ?? '·');
   setText(text, activity?.text ?? fallback);
+  setHidden(time, true);
+  setHidden(count, true);
+  el.classList.remove('is-shell');
   el.classList.toggle('is-error', !!activity?.error);
+  // Fim de um shell (✅/❌ do servidor): destaque próprio, para não se perder entre as outras atividades.
+  const done = shellDoneKind(activity);
+  el.classList.toggle('is-shell-ok', done === 'ok');
+  el.classList.toggle('is-shell-fail', done === 'fail');
   setTitle(el, activity ? (activity.detail ? `${activity.text}\n${activity.detail}` : activity.text) : fallback);
+}
+
+/** Mesma linha para quem espera um shell: "⏳ <label> · 12:31 ×2", com o tempo correndo. */
+export function updateShellActivityLine(el: HTMLElement, wait: ShellWait, now: number): void {
+  const [icon, text, time, count] = activityParts(el);
+  const line = shellLine(wait, now);
+  setText(icon, '⏳');
+  setText(text, line.label);
+  setText(time, line.time);
+  setHidden(time, false);
+  setText(count, line.count);
+  setHidden(count, !line.count);
+  el.classList.add('is-shell');
+  el.classList.remove('is-error', 'is-shell-ok', 'is-shell-fail');
+  const stage = shellStage(now - wait.since);
+  const main = wait.main;
+  setTitle(
+    el,
+    [line.text, main?.command && main.command !== main.label ? main.command : '', `${stage.emoji} ${stage.text}`].filter(Boolean).join('\n'),
+  );
 }
 
 /** Nome do produto como logotipo em pixels (o texto fica para leitores de tela). */

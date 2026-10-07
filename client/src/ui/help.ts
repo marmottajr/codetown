@@ -3,12 +3,13 @@ import type { AgentStatus } from '../../../shared/types';
 import type { HelpSection } from './context';
 import { h, iconButton, prefersReducedMotion } from './dom';
 import { ICONS } from './icons';
-import { STATUS_LABEL } from './model';
+import { SHELL_STAGES, STATUS_LABEL } from './model';
 import { createUsageSetup } from './usage';
 
 const STATUS_HELP: [AgentStatus, string][] = [
   ['working', 'Na mesa, digitando: está processando um pedido.'],
   ['waiting', 'Mão levantada: espera uma resposta sua no terminal (permissão, pergunta ou escolha).'],
+  ['shell', 'Ampulheta sobre a cabeça: terminou o turno e fica na mesa esperando um shell terminar.'],
   ['idle', 'Terminou o turno e circula pelo escritório até a próxima instrução.'],
   ['done', 'Subagente que concluiu: entrega o resultado e vai embora.'],
   ['offline', 'A sessão foi fechada: o personagem vai até o elevador e sai.'],
@@ -22,13 +23,22 @@ const ICON_HELP: [string, string][] = [
   ['✏️', 'Editando'],
   ['📝', 'Escrevendo arquivo'],
   ['💻', 'Comando no terminal'],
+  ['⏳', 'Esperando um shell'],
   ['🧪', 'Rodando testes'],
   ['🌐', 'Pesquisando na web'],
   ['🗒️', 'Organizando tarefas'],
   ['👥', 'Chamando subagentes'],
   ['✋', 'Precisa de você'],
   ['✅', 'Concluiu'],
+  ['❌', 'Shell falhou'],
+  ['🛑', 'Shell interrompido'],
   ['⚠️', 'Algo deu errado'],
+];
+
+/** O fim da espera (o servidor marca com uma atividade ✅ ou ❌). */
+const SHELL_END_HELP: [string, string][] = [
+  ['🎉', 'Terminou bem: levanta, comemora com confete e uma estrela.'],
+  ['🌧️', 'Falhou ou foi interrompido: nuvenzinha de chuva sobre a cabeça e ombros caídos.'],
 ];
 
 const INTRO =
@@ -82,6 +92,7 @@ export class HelpDialog {
         h('section', { class: 'ui-help__intro' }, h('p', { text: INTRO })),
         h('section', {}, h('h3', { text: 'Status' }), statusList),
         h('section', {}, h('h3', { text: 'Atividades' }), iconList),
+        this.shellSection(),
         h(
           'section',
           {},
@@ -117,6 +128,24 @@ export class HelpDialog {
       const heading = target.querySelector<HTMLElement>('h3');
       heading?.focus({ preventScroll: true });
     });
+  }
+
+  /** Legenda da espera por shell: a "escalada cômica" do personagem conforme o shell demora. */
+  private shellSection(): HTMLElement {
+    const item = (emoji: string, text: string) =>
+      h('li', {}, h('span', { class: 'ui-icon-legend__icon', text: emoji, attrs: { 'aria-hidden': 'true' } }), h('span', { text }));
+    return h(
+      'section',
+      { class: 'ui-help__shell' },
+      h('h3', { text: 'Esperando o shell' }),
+      h('p', {
+        class: 'ui-help__lead',
+        text:
+          'Quando o agente termina o turno com um comando rodando em segundo plano (ou fica mais de 10 s parado num comando), ele não sai para passear: ' +
+          'fica na mesa com a ampulheta virando, o monitor mostra o progresso e um balão diz qual shell ele espera e há quanto tempo. Quanto mais demora…',
+      }),
+      h('ul', { class: 'ui-shell-legend' }, ...SHELL_STAGES.map((s) => item(s.emoji, s.help)), ...SHELL_END_HELP.map(([e, t]) => item(e, t))),
+    );
   }
 
   private usageSection(): HTMLElement {

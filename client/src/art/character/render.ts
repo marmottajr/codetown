@@ -19,15 +19,15 @@ export const SEAT_DROP = 4;
 
 export const POSE_FRAMES: Readonly<Record<Pose, number>> = {
   stand: 2, walk: 4, run: 4, sit: 2, type: 4, sleep: 2, drink: 2, use: 2, raise_hand: 2, talk: 2, stretch: 2,
-  read: 2, play: 2,
+  read: 2, play: 2, wait: 2,
 };
 
 export const POSE_DURATION: Readonly<Record<Pose, number>> = {
   stand: 650, walk: 140, run: 95, sit: 800, type: 120, sleep: 1000, drink: 700, use: 380, raise_hand: 320, talk: 280,
-  stretch: 800, read: 1100, play: 200,
+  stretch: 800, read: 1100, play: 200, wait: 480,
 };
 
-const SEATED_ONLY: ReadonlySet<Pose> = new Set<Pose>(['sit', 'type', 'sleep']);
+const SEATED_ONLY: ReadonlySet<Pose> = new Set<Pose>(['sit', 'type', 'sleep', 'wait']);
 const NEVER_SEATED: ReadonlySet<Pose> = new Set<Pose>(['walk', 'run', 'stretch', 'play']);
 
 export function isSeated(pose: Pose, seated?: boolean): boolean {
@@ -105,13 +105,27 @@ interface Rig {
   /** Braço A = esquerdo da tela (frente/costas) ou distante (perfil). B = direito/próximo. */
   armA: Arm;
   armB: Arm;
-  eyes: 'open' | 'closed';
+  /** 'half' = pálpebras a meio mastro (tédio/impaciência). */
+  eyes: 'open' | 'closed' | 'half';
   mouth: 'none' | 'open';
   held: HeldItem;
   /** Item atrás do corpo (costas). */
   itemBehind: boolean;
   /** Mãos que seguram o item com as duas mãos (desenhadas por cima do item). */
   twoHands: boolean;
+  /**
+   * Posição FIXA do item (coordenadas em pé, sem ub/lean), independente da mão — ex.: o balde de
+   * pipoca no colo enquanto a mão vai do balde à boca. null = o item acompanha a mão do braço B.
+   */
+  itemAt: Pt | null;
+  /** Sentado: a ponta do sapato direito sobe 1px (pé batendo, impaciência). */
+  toeTap: boolean;
+  /** Pontas dos dedos (2 px de pele) batendo sobre o braço — de costas, nos braços cruzados. */
+  tapAt: Pt | null;
+  /** Uma pipoca entre os dedos (2 px), a caminho da boca. */
+  kernelAt: Pt | null;
+  /** De frente: braços cruzados desenhados à mão (ver drawCrossedArms); 1 = dedos levantados. */
+  crossFront: 0 | 1 | null;
 }
 
 /** Braços retos ao lado do corpo (frente/costas). */
@@ -145,6 +159,11 @@ function makeRig(req: CharacterFrameRequest, view: HeadView): Rig {
     held,
     itemBehind: view === 'up',
     twoHands: false,
+    itemAt: null,
+    toeTap: false,
+    tapAt: null,
+    kernelAt: null,
+    crossFront: null,
   };
   const side = view === 'side';
 
@@ -250,6 +269,9 @@ function makeRig(req: CharacterFrameRequest, view: HeadView): Rig {
       else rig.armB = arm([10, 18], [8, 20], [5 - p, 20]);
       break;
     }
+    case 'wait':
+      waitRig(rig, view, f, held);
+      break;
     case 'drink': {
       if (held === 'none') rig.held = 'coffee';
       const up = f === 1;
@@ -262,7 +284,7 @@ function makeRig(req: CharacterFrameRequest, view: HeadView): Rig {
 
   // Itens segurados: braços e posição do item (exceto poses que já posicionam a mão).
   const h = rig.held;
-  if (h !== 'none' && pose !== 'play' && pose !== 'drink' && pose !== 'raise_hand' && pose !== 'stretch') {
+  if (h !== 'none' && !rig.itemAt && pose !== 'play' && pose !== 'drink' && pose !== 'raise_hand' && pose !== 'stretch') {
     if (TWO_HANDED.has(h) || pose === 'read') {
       rig.twoHands = true;
       if (side) {
@@ -280,6 +302,103 @@ function makeRig(req: CharacterFrameRequest, view: HeadView): Rig {
   }
   if (h === 'paddle' && pose !== 'play') rig.held = pose === 'stand' || pose === 'walk' || pose === 'run' ? 'paddle' : 'none';
   return rig;
+}
+
+/**
+ * Pose 'wait' (esperando um shell terminar): sentado e recostado 1px para trás — para cima de frente
+ * (o encosto fica ao norte), para baixo de costas (encosto ao sul) e para trás no perfil.
+ * - Com pipoca: balde no colo/abraçado e a mão alternando entre o balde (quadro 0) e a boca (1).
+ *   De costas o balde fica apoiado ao lado do quadril (fora do encosto) para continuar legível.
+ * - Sem item: braços cruzados, dedos batendo no braço e a ponta do pé batendo; olhar entediado.
+ * - Outros itens: como 'sit' segurando o item (a lógica genérica de itens cuida dos braços).
+ */
+function waitRig(rig: Rig, view: HeadView, f: number, held: HeldItem): void {
+  if (view === 'down') rig.ub -= 1;
+  else if (view === 'up') rig.ub += 1;
+  else rig.lean = 1;
+  const eat = f === 1;
+  if (held === 'popcorn') {
+    rig.itemBehind = false;
+    if (view === 'down') {
+      // Balde abraçado colado ao queixo: a desk_back (verso do monitor) esconde o sprite a partir de
+      // y≈26, então pipoca, aro e três listras precisam caber acima disso. A mão vai da lateral do
+      // balde (mastigando, boca aberta) até a boca (cobrindo-a, com uma pipoca entre os dedos).
+      rig.itemAt = [9, 17];
+      rig.armA = arm([6, 18], [6, 21], [9, 21]);
+      rig.armB = eat ? arm([16, 18], [17, 19], [11, 15]) : arm([16, 18], [16, 20], [15, 20]);
+      rig.mouth = eat ? 'none' : 'open';
+      if (eat) rig.kernelAt = [11, 14];
+    } else if (view === 'up') {
+      // De costas: balde ao lado do quadril esquerdo; o braço esquerdo mergulha nele e leva à boca
+      // (a mão some atrás da cabeça, o cotovelo aparece para fora).
+      rig.itemAt = [0, 18];
+      rig.armB = arm([16, 18], [16, 22]);
+      rig.armA = eat ? arm([6, 18], [3, 16], [6, 13]) : arm([6, 18], [4, 20], [3, 18]);
+    } else {
+      // Perfil (virado à esquerda): balde no colo, à frente da barriga.
+      rig.itemAt = [3, 18];
+      rig.armA = arm([12, 18], [12, 21], [8, 22]);
+      rig.armB = eat ? arm([10, 18], [9, 21], [5, 16]) : arm([10, 18], [10, 21], [6, 19]);
+      rig.mouth = eat ? 'none' : 'open';
+      if (eat) rig.kernelAt = [5, 15];
+    }
+    return;
+  }
+  if (held !== 'none') return;
+  // Braços cruzados, batendo os dedos (no 2º quadro a mão de cima sobe 1px) e o pé.
+  const lifted = f === 1;
+  rig.eyes = 'half';
+  rig.toeTap = lifted;
+  const tap = lifted ? -1 : 0;
+  if (view === 'down') {
+    rig.crossFront = lifted ? 1 : 0;
+  } else if (view === 'up') {
+    // De costas só aparecem os cotovelos para fora; a ponta dos dedos bate no braço esquerdo.
+    rig.armA = arm([6, 18], [4, 20], [6, 22]);
+    rig.armB = arm([16, 18], [18, 20], [16, 22]);
+    rig.tapAt = [3, 19 + tap];
+  } else {
+    rig.armA = arm([12, 18], [12, 21], [9, 21]);
+    rig.armB = arm([10, 18], [10, 21], [7, 20 + tap]);
+  }
+}
+
+/**
+ * Braços cruzados de frente (pixel a pixel: com mangas compridas o pincel 2x2 some na blusa).
+ * O antebraço direito da tela passa por cima (linha clara + base), o outro aparece por baixo
+ * (linha escura); a mão de cima segura o braço esquerdo e bate os dedos; a de baixo espia à direita.
+ */
+function drawCrossedArms(dc: Dc, sleeveCol: Ramp, sleeve: number, fingersUp: boolean): void {
+  const { b, p, r } = dc;
+  const y = r.ub;
+  const sl = sleeveCol;
+  const fa = sleeve < 4 ? p.skin : sl; // antebraço: pele em mangas curtas
+  const sk = p.skin;
+  // Tudo bem alto no peito: atrás da desk_back só ~4 px do tronco ficam à mostra.
+  // Braços (ombro -> cotovelo) dos dois lados.
+  for (let yy = 18; yy <= 20; yy++) {
+    b.set(6, yy + y, yy === 20 ? sl.dk : sl.base);
+    b.set(7, yy + y, sl.dk);
+    b.set(16, yy + y, sl.base);
+    b.set(17, yy + y, yy === 20 ? sl.dd : sl.dk);
+  }
+  // Antebraço de baixo (só a borda inferior aparece) e a mão escondida espiando à direita.
+  b.hline(8, 15, 21 + y, fa.dk);
+  b.set(16, 21 + y, sk.base);
+  b.set(17, 21 + y, sk.dk);
+  // Antebraço de cima, do cotovelo direito até a mão sobre o braço esquerdo.
+  b.hline(8, 17, 19 + y, fa.lt);
+  b.hline(8, 17, 20 + y, fa.base);
+  b.set(17, 20 + y, fa.dk);
+  b.set(12, 20 + y, fa.dk); // dobra onde os antebraços se cruzam
+  // Mão sobre o braço esquerdo; nos quadros ímpares os dedos sobem (batendo).
+  const hy = fingersUp ? 18 : 19;
+  b.set(5, hy + y, sk.lt);
+  b.set(6, hy + y, sk.base);
+  b.set(5, hy + 1 + y, sk.base);
+  b.set(6, hy + 1 + y, sk.dk);
+  b.set(7, 19 + y, sk.base);
+  b.set(7, 20 + y, sk.dk);
 }
 
 // ---------------------------------------------------------------- desenho
@@ -330,12 +449,16 @@ function drawHead(dc: Dc): void {
   const tpl = HEAD_BASE[r.view];
   const dy = r.ub + r.hd;
   const closed = r.eyes === 'closed';
+  const half = r.eyes === 'half';
+  // Semicerrado: a linha de cima vira pálpebra e a de baixo usa o tom mais escuro do olho
+  // (em peles escuras eyeTop é o brilho claro, então a pupila fica com eyeBot).
+  const pupil = luminance(p.eyeTop) > 0.5 ? p.eyeBot : p.eyeTop;
   const pal: Palette = {
     s: p.skin.base,
     S: p.skin.dk,
     L: p.skin.lt,
-    e: closed ? p.skin.base : p.eyeTop,
-    E: closed ? shade(p.skin.base, -0.3) : p.eyeBot,
+    e: closed ? p.skin.base : half ? shade(p.skin.base, -0.16) : p.eyeTop,
+    E: closed ? shade(p.skin.base, -0.3) : half ? pupil : p.eyeBot,
     b: p.blush,
     m: r.mouth === 'open' ? p.mouthOpen : dc.a.look === 'f' ? mix(p.mouth, '#c0505a', 0.25) : p.mouth,
     r: p.skin.dk,
@@ -603,9 +726,16 @@ function drawLegs(dc: Dc): void {
         b.rect(13, y0 + 2, 3, 1, pants.dk);
       }
       b.rect(8, 30, 3, 1, sh.base);
-      b.rect(13, 30, 3, 1, sh.base);
       b.set(8, 30, sh.lt);
-      b.set(13, 30, sh.lt);
+      if (r.toeTap) {
+        // Ponta do pé direito no ar (o calcanhar fica no chão).
+        b.rect(13, 29, 3, 1, sh.base);
+        b.set(13, 29, sh.lt);
+        b.set(14, 30, sh.dk);
+      } else {
+        b.rect(13, 30, 3, 1, sh.base);
+        b.set(13, 30, sh.lt);
+      }
     } else {
       const y0 = 24 + r.ub;
       b.rect(8, y0, 8, 2, pants.base);
@@ -663,8 +793,15 @@ function drawLegsSide(dc: Dc, pants: Ramp, sh: Ramp, skinLeg: boolean): void {
     const shin = skinLeg ? p.skin : pants;
     b.rect(7, y0 + 1, 2, 30 - (y0 + 1), shin.base);
     b.set(8, y0 + 1, shin.dk);
-    b.rect(5, 30, 4, 1, sh.base);
-    b.set(5, 30, sh.lt);
+    if (r.toeTap) {
+      // Ponta do pé levantada, calcanhar apoiado.
+      b.rect(5, 29, 2, 1, sh.base);
+      b.set(5, 29, sh.lt);
+      b.rect(7, 30, 2, 1, sh.base);
+    } else {
+      b.rect(5, 30, 4, 1, sh.base);
+      b.set(5, 30, sh.lt);
+    }
     return;
   }
   const top = 24 + r.ub;
@@ -955,16 +1092,38 @@ function drawItem(dc: Dc, x: number, y: number): void {
     case 'paddle':
       b.stamp(['.rr.', 'rRrr', 'rrrd', '.rd.', '.h..', '.h..'], x, y, { r: '#d64545', R: '#ef7a6a', d: '#a83232', h: '#6b4a32' }, side);
       break;
+    case 'popcorn':
+      b.stamp(POPCORN, x, y, POPCORN_PAL);
+      break;
     case 'none':
       break;
   }
 }
+
+/**
+ * Balde de pipoca (6x7, canto superior esquerdo = início da pipoca): pipocas transbordando por cima,
+ * aro claro e listras verticais vermelho/branco que afinam para baixo. Luz do alto-esquerda.
+ */
+const POPCORN: readonly string[] = ['.pk.p.', 'kpypkK', 'aAAAAa', 'lwrwrW', 'lwrwrW', 'lwrwrW', '.wrwr.'];
+const POPCORN_PAL: Palette = {
+  p: '#fff9e6', // pipoca (luz)
+  k: '#f3e3b8', // pipoca (sombra)
+  K: '#e2cc92',
+  y: '#ffd75e', // manteiga
+  a: '#e9e3d6', // aro (bordas)
+  A: '#fbf8f1', // aro
+  l: '#ef6457', // listra vermelha iluminada (borda esquerda)
+  r: '#d8413f', // listra vermelha
+  w: '#f6f1e6', // listra branca
+  W: '#cfc6b6', // listra branca na sombra (borda direita)
+};
 
 /** Posição do item em relação à mão (mão = último ponto do braço B, em coordenadas desenhadas). */
 function itemPos(dc: Dc): Pt | null {
   const { r } = dc;
   const it = r.held;
   if (it === 'none') return null;
+  if (r.itemAt) return [r.itemAt[0] + r.lean, r.itemAt[1] + r.ub];
   const hand = r.armB.pts[r.armB.pts.length - 1];
   const hx = hand[0] + r.lean;
   const hy = hand[1] + r.ub;
@@ -983,6 +1142,9 @@ function itemPos(dc: Dc): Pt | null {
       return r.view === 'side' ? [hx - 2, hy - 3] : [hx, hy - 3];
     case 'paddle':
       return r.view === 'side' ? [hx - 2, hy - 5] : [hx + 1, hy - 4];
+    case 'popcorn':
+      // Segurado pela lateral do balde (a mão fica na borda de trás/esquerda).
+      return r.view === 'side' ? [hx - 5, hy - 4] : [hx + 1, hy - 4];
     default:
       return [hx, hy - 2];
   }
@@ -1008,7 +1170,30 @@ export function renderCharacter(req: CharacterFrameRequest): BufSprite {
   drawHair(dc, 'back');
   if (ip && r.itemBehind) drawItem(dc, ip[0], ip[1]);
 
-  if (view === 'side') {
+  const headStack = () => {
+    drawHead(dc);
+    drawFacialHair(dc);
+    drawHair(dc, 'front');
+    drawAccessory(dc);
+  };
+
+  if (view !== 'side' && r.itemAt) {
+    // Item em posição fixa (pipoca na pose 'wait'). De costas: balde e braços antes da cabeça (a mão
+    // que vai à boca some atrás dela). De frente: cabeça, balde, braço que abraça e a mão por cima.
+    drawLegs(dc);
+    drawTorso(dc);
+    if (view === 'up') {
+      if (ip) drawItem(dc, ip[0], ip[1]);
+      drawArm(dc, r.armA, sr, sleeve);
+      drawArm(dc, r.armB, sr, sleeve);
+      headStack();
+    } else {
+      headStack();
+      if (ip) drawItem(dc, ip[0], ip[1]);
+      drawArm(dc, r.armA, sr, sleeve);
+      drawArm(dc, r.armB, sr, sleeve);
+    }
+  } else if (view === 'side') {
     drawArm(dc, r.armA, sr, sleeve, 0.08);
     drawLegs(dc);
     drawTorso(dc);
@@ -1027,7 +1212,7 @@ export function renderCharacter(req: CharacterFrameRequest): BufSprite {
       drawArm(dc, r.armB, sr, sleeve);
     }
     const raisedHigh = (arm: Arm) => arm.pts[arm.pts.length - 1][1] < 16;
-    if (!armsBehindHead) {
+    if (r.crossFront === null && !armsBehindHead) {
       if (!raisedHigh(r.armA)) drawArm(dc, r.armA, sr, sleeve);
       if (!raisedHigh(r.armB) && !(ip && !r.itemBehind && r.twoHands)) drawArm(dc, r.armB, sr, sleeve);
     }
@@ -1035,6 +1220,8 @@ export function renderCharacter(req: CharacterFrameRequest): BufSprite {
     drawFacialHair(dc);
     drawHair(dc, 'front');
     drawAccessory(dc);
+    // Braços cruzados por cima do cabelo comprido que cai no peito (a mão que bate fica visível).
+    if (r.crossFront !== null) drawCrossedArms(dc, sr, sleeve, r.crossFront === 1);
     if (ip && !r.itemBehind) {
       drawItem(dc, ip[0], ip[1]);
       if (r.twoHands) {
@@ -1043,10 +1230,20 @@ export function renderCharacter(req: CharacterFrameRequest): BufSprite {
         drawArm(dc, r.armB, sr, sleeve);
       }
     }
-    if (!armsBehindHead) {
+    if (!armsBehindHead && r.crossFront === null) {
       if (raisedHigh(r.armA)) drawArm(dc, r.armA, sr, sleeve);
       if (raisedHigh(r.armB)) drawArm(dc, r.armB, sr, sleeve);
     }
+  }
+  if (r.tapAt) {
+    const [tx, ty] = r.tapAt;
+    b.set(tx + r.lean, ty + r.ub, dc.p.skin.base);
+    b.set(tx + r.lean, ty + 1 + r.ub, dc.p.skin.dk);
+  }
+  if (r.kernelAt) {
+    const [kx, ky] = r.kernelAt;
+    b.set(kx + r.lean, ky + r.ub, POPCORN_PAL.p);
+    b.set(kx + 1 + r.lean, ky + r.ub, POPCORN_PAL.y);
   }
 
   b.outline();

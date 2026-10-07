@@ -32,4 +32,50 @@ describe('DemoSimulator', () => {
     }
     expect(ids.size).toBeGreaterThan(10);
   });
+
+  it('abre com alguém esperando um shell em segundo plano (com job e balão), e o shell termina com ShellDone', () => {
+    const start = 5_000;
+    const sim = new DemoSimulator({ seed: 3 }, start);
+    const waiting = sim.snapshot(start).agents.filter((a) => a.status === 'shell');
+    expect(waiting.length).toBeGreaterThanOrEqual(1);
+    const a = waiting[0];
+    expect(a.shells?.length).toBeGreaterThanOrEqual(1);
+    expect(a.shells!.every((j) => j.background && j.kind === 'shell' && j.startedAt < start && j.label)).toBe(true);
+    expect(a.activity).toMatchObject({ tool: 'ShellWait' });
+    const done: string[] = [];
+    for (let t = start; t < start + 200_000; t += 250) {
+      for (const f of sim.tick(t).feed) if (f.activity.tool === 'ShellDone') done.push(f.agentId);
+    }
+    expect(done).toContain(a.id);
+  });
+
+  it('com o tempo: shells em segundo plano (status shell), comandos longos em primeiro plano e falhas', () => {
+    for (const seed of [1, 2, 3]) {
+      const sim = new DemoSimulator({ seed, speed: 10, sessions: 5 }, 0);
+      const seen = { shell: 0, foreground: 0, ok: 0, failed: 0, noticeWait: 0 };
+      for (let t = 0; t < 3_600_000 / 10; t += 250) {
+        const r = sim.tick(t);
+        for (const f of r.feed) {
+          if (f.activity.tool !== 'ShellDone') continue;
+          if (f.activity.error) seen.failed++;
+          else seen.ok++;
+        }
+        seen.noticeWait += r.notices.filter((n) => n.text.includes('está esperando o shell')).length;
+        if (!r.changed) continue;
+        for (const a of sim.snapshot(t).agents) {
+          if (a.status === 'shell') {
+            seen.shell++;
+            expect(a.shells?.some((j) => j.background)).toBe(true);
+          }
+          if (a.status === 'working' && a.shells?.some((j) => !j.background)) seen.foreground++;
+          if (a.status === 'idle') expect(a.shells).toBeUndefined();
+        }
+      }
+      expect(seen.shell).toBeGreaterThan(0);
+      expect(seen.foreground).toBeGreaterThan(0);
+      expect(seen.ok).toBeGreaterThan(0);
+      expect(seen.noticeWait).toBeGreaterThan(0);
+      if (seed === 1) expect(seen.ok + seen.failed).toBeGreaterThan(3);
+    }
+  });
 });

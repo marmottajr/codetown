@@ -9,6 +9,7 @@ import type { WorldOptions } from '../api';
 import type { Camera } from '../camera';
 import { COL_W, CORRIDOR_Y, SOUTH_Y } from '../constants';
 import type { Character } from '../sim/character';
+import { shellAgeKey, shellBubbleAlpha, shellBubbleText, STORM_LIFT, unitHash } from '../sim/shell';
 import type { Sim } from '../sim/sim';
 import { buildAnim } from './anim';
 import type { HeadInfo, Renderer } from './renderer';
@@ -48,7 +49,10 @@ const CORE_NAMES: Record<string, string> = {
   'core:lounge': 'Lounge',
 };
 
-type Tone = 'info' | 'alert' | 'deliver';
+/** 'shell' = espera de shell: balão escuro de terminal com texto verde. */
+type Tone = 'info' | 'alert' | 'deliver' | 'shell';
+/** Ícone do balão de espera de shell. */
+export const SHELL_BUBBLE_ICON = '⏳';
 
 interface Bubble {
   type: 'bubble';
@@ -98,6 +102,12 @@ function luminance(hex: string): number {
   if (!m) return 0.5;
   const n = parseInt(m[1], 16);
   return (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+}
+
+/** Altura (px de mundo) ocupada pelos ícones sobre a cabeça: balões e etiquetas sobem para não cobri-los. */
+export function headIconLift(ch: Pick<Character, 'mode' | 'icon'>): number {
+  if (ch.icon === 'storm') return 13 + STORM_LIFT;
+  return ch.mode === 'wait' || ch.mode === 'shell' || ch.icon ? 13 : 0;
 }
 
 /** Texto do balão de espera: só o motivo (o amarelo e o ✋ já dizem "precisa de você"). */
@@ -318,7 +328,7 @@ export class Overlay {
       let n = 0;
       for (const it of items) {
         if (it.type === 'bubble') {
-          // atividade comum some; alerta, entrega e o selecionado viram só o ícone
+          // atividade comum some; alerta, entrega, espera de shell e o selecionado viram só o ícone
           if (it.tone === 'info' && it.prio < 75) continue;
           it.chip = true;
         }
@@ -333,7 +343,7 @@ export class Overlay {
     rin.length = 0;
     idx.length = 0;
     for (const it of items) {
-      if (it.type !== 'bubble' || it.tone !== 'info' || it.prio >= 75) continue;
+      if (it.type !== 'bubble' || (it.tone !== 'info' && it.tone !== 'shell') || it.prio >= 75) continue;
       // por área FÍSICA (onde o personagem está agora), que é o que polui a tela
       const ch = it.ch;
       rin.push({ room: `${Math.floor(ch.tx / COL_W)}:${ch.ty < CORRIDOR_Y ? 'n' : ch.ty < SOUTH_Y ? 'c' : 's'}`, prio: it.prio, changedAt: it.changedAt });
@@ -443,7 +453,8 @@ export class Overlay {
       }
     }
     const extras = 18 + dots.length * 10 + cw;
-    const compact = text.length < 4;
+    // Só vira pílula compacta quando o nome precisou ser cortado (nomes curtos como "app" cabem inteiros).
+    const compact = text !== name && text.length < 4;
     const tw = compact ? 0 : this.measure(ROOM_FONT, text);
     const w = Math.round(compact ? Math.max(12, 10 + cw + dots.length * 10) : tw + extras);
     const h = 22;
@@ -544,6 +555,10 @@ export class Overlay {
       return this.takeBubble(ch, head, ch.bubbleIcon, ch.bubbleText, 'deliver', 90, a, ch.bubbleAt);
     }
     const act = ch.info.activity;
+    if (ch.mode === 'shell' && ch.shellSince > 0 && !ch.leaving) {
+      const sb = this.shellBubble(ch, head, now, opts, selected, hovered);
+      if (sb) return sb;
+    }
     if (!act || ch.leaving) return null;
     const age = now - ch.activityChangedAt;
     if (selected) return this.takeBubble(ch, head, act.icon, act.text, 'info', 80, 1, ch.activityChangedAt);
@@ -556,11 +571,39 @@ export class Overlay {
     return null;
   }
 
+  /**
+   * Balão "⏳ <rótulo> · <tempo>" de quem espera um shell. Modo 'all': sempre; 'important': ao entrar
+   * no estado e depois por 4 s a cada ~30 s; selecionado/hover: sempre. Uma atividade nova (ex.: o
+   * fim de um dos shells) tem a vez enquanto é recente.
+   */
+  private shellBubble(ch: Character, head: HeadInfo, now: number, opts: WorldOptions, selected: boolean, hovered: boolean): Bubble | null {
+    const recent = now - ch.activityChangedAt < RECENT_MS && ch.activityChangedAt > ch.shellEnteredAt + 500;
+    if (recent && !selected && !hovered) return null;
+    const text = this.shellText(ch, now);
+    if (selected) return this.takeBubble(ch, head, SHELL_BUBBLE_ICON, text, 'shell', 80, 1, ch.shellEnteredAt);
+    if (hovered) return this.takeBubble(ch, head, SHELL_BUBBLE_ICON, text, 'shell', 75, 1, ch.shellEnteredAt);
+    if (opts.bubbles === 'all') return this.takeBubble(ch, head, SHELL_BUBBLE_ICON, text, 'shell', 45, 1, ch.shellEnteredAt);
+    // cada personagem no seu ritmo (os balões da sala não piscam juntos)
+    const a = shellBubbleAlpha(now - ch.shellEnteredAt, unitHash(ch.info.seed, 0, 3) * 9000);
+    return a > 0.01 ? this.takeBubble(ch, head, SHELL_BUBBLE_ICON, text, 'shell', 50, a, ch.shellEnteredAt) : null;
+  }
+
+  /** Texto do balão de shell, refeito só quando o tempo exibido muda (não a cada frame). */
+  private shellText(ch: Character, now: number): string {
+    const age = now - ch.shellSince;
+    const key = shellAgeKey(age);
+    if (key !== ch.shellTextKey || !ch.shellText) {
+      ch.shellTextKey = key;
+      ch.shellText = shellBubbleText(ch.shellLabel, age);
+    }
+    return ch.shellText;
+  }
+
   /** Calcula o retângulo do balão (completo ou só o ícone) na posição base sobre a cabeça. */
   private layoutBubble(b: Bubble): void {
     const { camera } = this;
     // acima do ícone da cabeça (quando houver), que é desenhado em espaço de mundo
-    const lift = (b.ch.mode === 'wait' || b.ch.icon ? 13 : 1) * this.zoom + b.extraLift;
+    const lift = Math.max(1, headIconLift(b.ch)) * this.zoom + b.extraLift;
     const headX = this.sx(b.head.x);
     const headY = this.sy(b.head.y);
     const iconW = b.icon ? this.measure(BUBBLE_FONT, b.icon) + 4 : 0;
@@ -611,9 +654,9 @@ export class Overlay {
     const { x, y, w, h } = b;
     const headX = this.sx(b.head.x);
     const tone = b.tone;
-    const bg = tone === 'alert' ? '#ffcf4a' : tone === 'deliver' ? '#e2f0ff' : '#fffdf8';
-    const border = tone === 'alert' ? '#c58f10' : tone === 'deliver' ? '#7aa7d9' : 'rgba(40,48,66,0.22)';
-    const fg = tone === 'alert' ? '#3b2a00' : tone === 'deliver' ? '#17324f' : '#232a36';
+    const bg = tone === 'alert' ? '#ffcf4a' : tone === 'deliver' ? '#e2f0ff' : tone === 'shell' ? '#1d2433' : '#fffdf8';
+    const border = tone === 'alert' ? '#c58f10' : tone === 'deliver' ? '#7aa7d9' : tone === 'shell' ? '#4b5d7e' : 'rgba(40,48,66,0.22)';
+    const fg = tone === 'alert' ? '#3b2a00' : tone === 'deliver' ? '#17324f' : tone === 'shell' ? '#b9f6b4' : '#232a36';
     const pulse = tone === 'alert' ? 1 + Math.sin(now / 160) * 0.035 : 1;
     ctx.save();
     ctx.globalAlpha = b.alpha;
@@ -730,7 +773,7 @@ export class Overlay {
     const h = LABEL_H;
     const x = Math.round(this.sx(l.head.x) - w / 2);
     const below = Math.round(this.sy(l.head.feetY) + 3);
-    const iconLift = l.ch.mode === 'wait' || l.ch.icon ? 13 * this.zoom : 0;
+    const iconLift = headIconLift(l.ch) * this.zoom;
     const over = Math.round(this.sy(l.head.y) - iconLift - h - 3);
     const first = l.above ? over : below;
     const second = l.above ? below : over;

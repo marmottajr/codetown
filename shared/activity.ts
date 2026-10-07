@@ -746,6 +746,45 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}min` : ''}`;
 }
 
+// ------------------------------------------------------------------ shells (espera por comandos)
+
+/** Marcador (Activity.tool) do fim de um shell em segundo plano: o mundo comemora (ou lamenta, com `error`). */
+export const SHELL_DONE_TOOL = 'ShellDone';
+/** Marcador (Activity.tool) do balão "Esperando o shell", sintetizado enquanto o status é 'shell'. */
+export const SHELL_WAIT_TOOL = 'ShellWait';
+
+/** Como um shell em segundo plano terminou. */
+export type ShellOutcome = 'ok' | 'failed' | 'killed';
+
+/** Atividade com marcador de ferramenta (pode ir direto num `Activity` com `...desc`). */
+export type MarkedDescription = ActivityDescription & { tool: string; error?: boolean };
+
+/**
+ * Rótulo (≤ 46 caracteres) e comando (≤ 300) de um Bash/Monitor que o agente vai esperar, já mascarados.
+ * O rótulo é o `description` da ferramenta; sem ele, o resumo do comando ("Rodando testes").
+ */
+export function describeShellJob(name: string, rawInput: unknown): { label: string; command?: string; kind: 'shell' | 'monitor' } {
+  const input = (rawInput && typeof rawInput === 'object' ? rawInput : {}) as Record<string, unknown>;
+  const kind = name === 'Monitor' ? 'monitor' : 'shell';
+  const ws = input.ws && typeof input.ws === 'object' ? str((input.ws as Record<string, unknown>).url) : '';
+  const command = str(input.command).trim() || ws.trim();
+  const description = str(input.description).trim();
+  let label: string;
+  if (description) label = truncate(maskSecrets(description.slice(0, MAX_TEXT * 8)), MAX_TEXT);
+  else if (kind === 'monitor') label = ws ? `Escutando ${domainOf(ws)}` : 'Monitorando um processo';
+  else label = command ? describeCommand(command).text : 'Comando no terminal';
+  const out: { label: string; command?: string; kind: 'shell' | 'monitor' } = { label, kind };
+  if (command) out.command = truncate(maskSecrets(command.slice(0, MAX_DETAIL * 4)), MAX_DETAIL);
+  return out;
+}
+
+/** "<prefixo><rótulo><sufixo>" cabendo em MAX_TEXT: só o rótulo é cortado (a duração nunca some). */
+function fitLabel(prefix: string, label: string | undefined, suffix = ''): string {
+  if (!label) return `${prefix.replace(/:\s*$/, '')}${suffix}`;
+  const room = Math.max(8, MAX_TEXT - prefix.length - suffix.length);
+  return `${prefix}${truncate(label, room)}${suffix}`;
+}
+
 export const SPECIAL = {
   think: (): ActivityDescription => make('think', '💭', 'Pensando…'),
   respond: (text?: string): ActivityDescription => make('respond', '💬', 'Escrevendo a resposta', text),
@@ -760,6 +799,21 @@ export const SPECIAL = {
   cleared: (): ActivityDescription => make('compact', '🧽', 'Começou uma conversa nova (/clear)'),
   supervising: (): ActivityDescription => make('delegate', '👥', 'Acompanhando os subagentes'),
   answered: (question?: string): ActivityDescription => make('ask', '💬', 'Recebeu a sua resposta', question),
+  /** Balão do status 'shell': "Esperando o shell: <rótulo>" (ou "Esperando 2 shells: ..."). */
+  waitingShell: (label?: string, n = 1, detail?: string): MarkedDescription => ({
+    ...make('wait', '⏳', fitLabel(n > 1 ? `Esperando ${n} shells: ` : 'Esperando o shell: ', label), detail),
+    tool: SHELL_WAIT_TOOL,
+  }),
+  /**
+   * Fim de um shell em segundo plano (marcador 'ShellDone'): sucesso "Shell terminou: <rótulo> (<duração>)",
+   * falha "Shell falhou: <rótulo>" e morto "Shell interrompido: <rótulo>" (os dois com `error`).
+   */
+  shellDone: (label: string | undefined, outcome: ShellOutcome, ms?: number, detail?: string): MarkedDescription => {
+    if (outcome === 'failed') return { ...make('run', '❌', fitLabel('Shell falhou: ', label), detail), tool: SHELL_DONE_TOOL, error: true };
+    if (outcome === 'killed') return { ...make('run', '🛑', fitLabel('Shell interrompido: ', label), detail), tool: SHELL_DONE_TOOL, error: true };
+    const took = ms !== undefined && ms >= 1_000 ? ` (${formatDuration(ms)})` : '';
+    return { ...make('run', '✅', fitLabel('Shell terminou: ', label, took), detail), tool: SHELL_DONE_TOOL };
+  },
 } as const;
 
 /** Traduz o `waitingFor` do registro de sessões do Claude Code. */

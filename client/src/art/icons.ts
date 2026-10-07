@@ -6,7 +6,29 @@ import type { BufSprite } from './core/sprite';
 interface IconDef {
   rows: readonly string[];
   pal: Palette;
+  /**
+   * Opacidade do contorno (0–1). Padrão 1. Fios finos (teia) ficam com contorno translúcido para
+   * não virarem traços grossos e escuros — continuam legíveis tanto no piso claro quanto na cadeira.
+   */
+  outlineAlpha?: number;
+  /**
+   * Opacidade do contorno nos "buracos" (áreas transparentes cercadas pelo desenho, como as células
+   * da teia). Sem isso o halo enche cada célula e a teia vira um borrão cinza. Padrão = outlineAlpha.
+   */
+  holeOutlineAlpha?: number;
 }
+
+// Ampulheta: tampas de madeira, vidro azulado com brilho à esquerda e areia dourada.
+const HOURGLASS_PAL: Palette = {
+  t: '#e6b37a', // madeira (brilho)
+  c: '#c48a52', // madeira
+  C: '#8f5d36', // madeira (sombra)
+  g: '#e4f3fc', // vidro
+  w: '#ffffff', // reflexo
+  G: '#a6c9e3', // vidro na sombra (direita)
+  s: '#f5c451', // areia
+  S: '#d6952a', // areia na sombra
+};
 
 const ICONS: Readonly<Record<IconName, IconDef>> = {
   alert: {
@@ -183,6 +205,79 @@ const ICONS: Readonly<Record<IconName, IconDef>> = {
     ],
     pal: { h: '#e2b47a', c: '#c99a5e', t: '#f1dfb6', l: '#8b6a43', d: '#a87b45' },
   },
+  hourglass: {
+    // Em pé: quase toda a areia em cima, um fio caindo e um montinho embaixo.
+    rows: [
+      'tcccccccC',
+      'CCCCCCCCC',
+      '.wgggggG.',
+      '.wsssssG.',
+      '..wsssG..',
+      '...gSG...',
+      '..wgsgG..',
+      '.wggsggG.',
+      '.wgsssSG.',
+      'tcccccccC',
+      'CCCCCCCCC',
+    ],
+    pal: HOURGLASS_PAL,
+  },
+  hourglass_flip: {
+    // A mesma ampulheta deitada (meio giro): a areia escorre para o lado de baixo dos dois bulbos.
+    // Alternada com 'hourglass' (mesma âncora no centro inferior) parece girar sobre a cabeça.
+    rows: [
+      'tc.......tc',
+      'tcw.....Gtc',
+      'tcwg...gGtc',
+      'tcggg.ggGtc',
+      'tcsssSggGtc',
+      'tcsss.ggGtc',
+      'tcSs...sStc',
+      'tcS.....Stc',
+      'tc.......tc',
+    ],
+    pal: { ...HOURGLASS_PAL, t: '#d9a46c', c: '#a8723f' },
+  },
+  cobweb: {
+    // Teia de canto, triangular (o canto fica em cima à esquerda; espelhe para outros cantos):
+    // fios das bordas, o raio diagonal e dois arcos de quarto de círculo; uma aranhinha de olhos
+    // claros na borda de fora. Fios brancos com contorno translúcido só na silhueta (as células
+    // ficam quase limpas), legível tanto no piso claro quanto no estofado escuro.
+    rows: [
+      'wwwwwwwwwwww',
+      'wf...w....w.',
+      'w.f..w....w.',
+      'w..fw.....w.',
+      'w..wf....w..',
+      'www..f...w..',
+      'w.....f.w...',
+      'w......w....',
+      'w.....w.l.l.',
+      'w...ww.lkKkl',
+      'wwww....eke.',
+      'w......l...l',
+    ],
+    pal: { w: '#ffffff', f: '#d3dbe5', k: '#3a3346', K: '#6f6287', e: '#fff7d6', l: '#55496a' },
+    outlineAlpha: 0.6,
+    holeOutlineAlpha: 0.14,
+  },
+  storm: {
+    // Nuvem carregada com chuva e um raio amarelo (algo falhou).
+    rows: [
+      '...hHHh....',
+      '.hhHHHHhhh.',
+      'hhHhhhhhhcc',
+      'cccccccccdd',
+      '.dddddddddd',
+      '......yo..b',
+      '.b...yo...B',
+      '.B..yyyyo..',
+      '......yo...',
+      '.b...yo....',
+      '.B...o.....',
+    ],
+    pal: { h: '#8d97ab', H: '#b3bccc', c: '#6b7489', d: '#4f566a', y: '#ffd84d', o: '#e3a530', b: '#9fd2f6', B: '#5a9fd8' },
+  },
   wave: {
     rows: [
       '..s.s.s..',
@@ -207,8 +302,59 @@ export function renderIcon(name: IconName): BufSprite {
   const h = def.rows.length;
   const b = new PixelBuf(w + 2, h + 2);
   b.stamp(def.rows, 1, 1, def.pal);
+  const soft = def.outlineAlpha !== undefined || def.holeOutlineAlpha !== undefined;
+  const before = soft ? b.data.slice() : null;
   b.outline();
+  if (before) {
+    // Só os pixels criados pelo contorno ganham a opacidade reduzida (menor ainda nos buracos).
+    const outer = alpha255(def.outlineAlpha ?? 1);
+    const hole = alpha255(def.holeOutlineAlpha ?? def.outlineAlpha ?? 1);
+    const outside = reachableFromBorder(before, b.w, b.h);
+    for (let p = 0; p < b.w * b.h; p++) {
+      const i = p * 4 + 3;
+      if (before[i] === 0 && b.data[i] > 0) b.data[i] = outside[p] ? outer : hole;
+    }
+  }
   return { buf: b, ax: Math.floor((w + 2) / 2), ay: h + 2 };
+}
+
+function alpha255(a: number): number {
+  return Math.round(Math.max(0, Math.min(1, a)) * 255);
+}
+
+/**
+ * Pixels transparentes alcançáveis a partir da borda andando só por transparentes (vizinhança 4).
+ * Os demais transparentes são "buracos" cercados pelo desenho (linhas diagonais também fecham,
+ * porque a vizinhança 4 não atravessa um degrau diagonal).
+ */
+function reachableFromBorder(data: Uint8ClampedArray, w: number, h: number): Uint8Array {
+  const seen = new Uint8Array(w * h);
+  const stack: number[] = [];
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    const p = y * w + x;
+    if (seen[p] || data[p * 4 + 3] !== 0) return;
+    seen[p] = 1;
+    stack.push(p);
+  };
+  for (let x = 0; x < w; x++) {
+    push(x, 0);
+    push(x, h - 1);
+  }
+  for (let y = 0; y < h; y++) {
+    push(0, y);
+    push(w - 1, y);
+  }
+  while (stack.length) {
+    const p = stack.pop() as number;
+    const x = p % w;
+    const y = (p - x) / w;
+    push(x + 1, y);
+    push(x - 1, y);
+    push(x, y + 1);
+    push(x, y - 1);
+  }
+  return seen;
 }
 
 export function iconTemplates(): Readonly<Record<IconName, IconDef>> {

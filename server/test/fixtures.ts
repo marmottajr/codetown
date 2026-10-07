@@ -78,6 +78,36 @@ export const L = {
     const text = `<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>${status}</status>\n<summary>${summary}</summary>\n</task-notification>`;
     return JSON.stringify({ ...base('user', o), origin: { kind: 'task-notification' }, message: { role: 'user', content: text } });
   },
+  /** Bash em segundo plano lançado: tool_result com o id da tarefa (como o Claude Code grava). */
+  bgLaunched(toolUseId: string, taskId: string, o: LineOpts = {}): string {
+    return L.result(toolUseId, `Command running in background with ID: ${taskId}. Output is being written to: /tmp/tasks/${taskId}.output`, {
+      ...o,
+      toolUseResult: { stdout: '', stderr: '', interrupted: false, isImage: false, noOutputExpected: false, backgroundTaskId: taskId },
+    });
+  },
+  /**
+   * Fim de um shell em segundo plano: 'queue' = linha queue-operation (enqueue, no momento em que termina);
+   * 'message' = a notificação entregue ao agente como mensagem user.
+   */
+  shellNotification(
+    via: 'queue' | 'message',
+    n: { taskId: string; toolUseId?: string; status: string; summary?: string },
+    o: LineOpts = {},
+  ): string {
+    const text = [
+      '<task-notification>',
+      `<task-id>${n.taskId}</task-id>`,
+      ...(n.toolUseId ? [`<tool-use-id>${n.toolUseId}</tool-use-id>`] : []),
+      `<output-file>/tmp/tasks/${n.taskId}.output</output-file>`,
+      `<status>${n.status}</status>`,
+      `<summary>${n.summary ?? `Background command "x" ${n.status}`}</summary>`,
+      '</task-notification>',
+    ].join('\n');
+    if (via === 'queue') {
+      return JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: ts(o.at ?? Date.now()), sessionId: o.sessionId ?? 'sess-teste', content: text });
+    }
+    return JSON.stringify({ ...base('user', o), origin: { kind: 'task-notification' }, message: { role: 'user', content: text } });
+  },
 };
 
 /** Pasta temporária para um teste (apagada com `cleanup`). */

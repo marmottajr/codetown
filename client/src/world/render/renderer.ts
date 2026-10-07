@@ -12,9 +12,12 @@ import type { ExteriorProp } from '../layout/types';
 import { screenModeFor } from '../sim/behavior';
 import type { Character } from '../sim/character';
 import type { RoomState } from '../sim/room-state';
+import { cobwebScale, hourglassIcon, HOURGLASS_FLIP_MS, STORM_LIFT } from '../sim/shell';
 import type { Sim } from '../sim/sim';
 import { buildAnim, duskFactor, furnitureScale, nightFactor, NO_ANIM, sweepDelay, type BuildAnim } from './anim';
+import { Particles } from './particles';
 import { carSprite, glowSprite, propSprite, shadowSprite } from './props';
+import { countBadge, fallbackIcon } from './shell-sprites';
 import { buildAreaVis, furnitureSprites, opaqueBounds, paintShell, toWallVis, WALL_MARGIN, wallItemOrigin, wallSprites, type AreaVis, type FurnVis, type WallVis } from './scene';
 
 const enum K {
@@ -56,6 +59,14 @@ export interface HeadInfo {
 }
 
 const TV_MODES: ScreenMode[] = ['browser', 'idle', 'chat', 'code'];
+/**
+ * Boca do balde de pipoca (px relativos aos pés) na pose 'wait' sentada, por direção — segue o rig
+ * da arte: abraçado no peito de frente, ao lado do quadril de costas, no colo de perfil.
+ */
+const POPCORN_DX: Readonly<Record<string, number>> = { down: 0, up: -9, left: -5, right: 5 };
+const POPCORN_DY: Readonly<Record<string, number>> = { down: 11, up: 8, left: 9, right: 9 };
+/** Teia ao lado de um vizinho: no máximo isto (px) para fora do corpo. */
+const WEB_MAX_OUT = 9;
 /** Tom das bordas da área externa (vinheta) e do gramado além dela. */
 const VIGNETTE_ALPHA = 0.2;
 const VIGNETTE_EDGE = `rgba(18,40,26,${VIGNETTE_ALPHA})`;
@@ -79,7 +90,11 @@ export class Renderer {
   private ents: Ent[] = [];
   private pool: Ent[] = [];
   private date = new Date();
-  private icons: { x: number; y: number; name: IconName; bounce: number; alpha: number }[] = [];
+  private icons: { x: number; y: number; name: IconName; bounce: number; alpha: number; badge: number }[] = [];
+  /** Pipoca, confete e chuva (pool fixo). */
+  readonly particles = new Particles();
+  /** dt do frame atual (s), para as partículas emitidas durante o desenho. */
+  private dt = 0;
   private iconCount = 0;
   private elevatorVis: WallVis[] = [];
   private occupiedSlots = new Set<number>();
@@ -298,6 +313,7 @@ export class Renderer {
   frame(now: number, dt: number, opts: WorldOptions, sel: { agent: string | null; room: string | null; hover: string | null }): void {
     const { ctx, camera } = this;
     this.date.setTime(Date.now());
+    this.dt = dt;
     this.updateCars(now, dt);
     const W = this.canvas.width;
     const H = this.canvas.height;
@@ -455,6 +471,11 @@ export class Renderer {
       }
     }
     this.drawPingPong(now);
+    // ---- espera de shell: teias de aranha, confete/pipoca/chuva (por cima das entidades)
+    this.drawCobwebs(now);
+    this.drainEffects(now);
+    this.particles.update(dt);
+    this.particles.draw(ctx, vx0, vy0, vx1, vy1, now);
 
     // ---- luz: noite, salas apagadas, brilhos
     this.night = opts.dayNight ? nightFactor(hour) : 0;
@@ -466,7 +487,14 @@ export class Renderer {
       const s = this.icon(ic.name);
       if (!s) continue;
       ctx.globalAlpha = ic.alpha;
-      ctx.drawImage(s.canvas, Math.round(ic.x - s.ax), Math.round(ic.y - s.ay - ic.bounce));
+      const ix = Math.round(ic.x - s.ax);
+      const iy = Math.round(ic.y - s.ay - ic.bounce);
+      ctx.drawImage(s.canvas, ix, iy);
+      if (ic.badge > 1) {
+        // "×N": mais de um shell rodando
+        const b = countBadge(ic.badge);
+        ctx.drawImage(b.canvas, ix + s.canvas.width - 1, iy + s.canvas.height - b.ay + 1);
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -714,6 +742,8 @@ export class Renderer {
     if (ch.mode === 'wait') return 'alert';
     if (!seated) return 'idle';
     if (ch.mode === 'work') return screenModeFor(ch.info.activity?.kind);
+    // esperando um shell: terminal com a barra de progresso andando (o "filme" da pipoca)
+    if (ch.mode === 'shell') return 'progress';
     return 'idle';
   }
 
@@ -731,7 +761,7 @@ export class Renderer {
   }
 
   private drawCharacter(ch: Character, now: number, sel: { agent: string | null; hover: string | null }): void {
-    const { ctx, art } = this;
+    const { ctx } = this;
     const head = this.headOf(ch);
     // faixa lateral de quem anda (dois no mesmo caminho não viram um boneco de duas cabeças)
     const x = Math.round(ch.x + ch.offX);
@@ -746,20 +776,26 @@ export class Renderer {
       ctx.drawImage(sh.canvas, x - sh.ax, y - sh.ay);
     }
     let sprite: Sprite | null = null;
+    const req: CharacterFrameRequest = this.req;
+    req.appearance = ch.appearance;
+    req.dir = ch.dir;
+    req.pose = ch.pose;
+    req.held = ch.held;
+    req.seated = ch.seated;
     try {
-      const count = Math.max(1, art.poseFrameCount(ch.pose));
-      const dur = Math.max(30, art.poseFrameDuration(ch.pose));
-      const frame = Math.floor(ch.animT / dur) % count;
-      const req: CharacterFrameRequest = this.req;
-      req.appearance = ch.appearance;
-      req.dir = ch.dir;
-      req.pose = ch.pose;
-      req.frame = frame;
-      req.held = ch.held;
-      req.seated = ch.seated;
-      sprite = art.characterSprite(req);
+      sprite = this.charSprite(req, ch.animT);
     } catch {
       sprite = null;
+    }
+    if (!sprite && (req.pose === 'wait' || req.held === 'popcorn')) {
+      // arte ainda sem a pose de espera/pipoca: sentado parado
+      req.pose = req.pose === 'wait' ? 'sit' : req.pose;
+      req.held = 'none';
+      try {
+        sprite = this.charSprite(req, ch.animT);
+      } catch {
+        sprite = null;
+      }
     }
     if (sprite) {
       const sx = x - sprite.ax;
@@ -784,17 +820,132 @@ export class Renderer {
     head.visible = true;
     head.depth = ch.depth();
     // ícone sobre a cabeça (desenhado depois da luz)
-    const name: IconName | null = ch.mode === 'wait' ? 'alert' : ch.icon;
-    if (name && this.iconCount < 256) {
-      let ic = this.icons[this.iconCount];
-      if (!ic) this.icons[this.iconCount] = ic = { x: 0, y: 0, name, bounce: 0, alpha: 1 };
-      ic.x = x;
-      ic.y = head.y - 2;
-      ic.name = name;
-      ic.alpha = ch.alpha;
-      ic.bounce = name === 'alert' ? Math.round(Math.abs(Math.sin(now / 180)) * 4) : name === 'zzz' ? Math.round(Math.sin(now / 500) * 1.5) : Math.round(Math.max(0, 1 - (now - ch.iconAt) / 250) * 4);
-      this.iconCount++;
+    let name: IconName | null = ch.mode === 'wait' ? 'alert' : ch.icon;
+    const shell = ch.mode === 'shell' && ch.shellSince > 0 && !ch.leaving;
+    let badge = 0;
+    if (shell && (!name || name === 'zzz')) {
+      // ampulheta virando (com "×N" quando há mais de um shell)
+      name = hourglassIcon(now);
+      badge = ch.shellCount;
     }
+    if (name) {
+      const bounce =
+        name === 'alert'
+          ? Math.round(Math.abs(Math.sin(now / 180)) * 4)
+          : name === 'zzz'
+            ? Math.round(Math.sin(now / 500) * 1.5)
+            : name === 'hourglass' || name === 'hourglass_flip'
+              ? now % HOURGLASS_FLIP_MS < 110 ? 1 : 0
+              : Math.round(Math.max(0, 1 - (now - ch.iconAt) / 250) * 4);
+      const lift = name === 'storm' ? STORM_LIFT : 0;
+      this.pushIcon(x, head.y - 2 - lift, name, bounce, ch.alpha, badge);
+      // chuva: pingos caem da nuvem até a cabeça
+      if (name === 'storm' && Math.random() < this.dt * 24) this.particles.rain(x - 3 + Math.floor(Math.random() * 7), head.y - 3 - lift, lift + 1);
+    }
+    if (shell && ch.shellStage === 'nap' && ch.pose === 'sleep') {
+      // cochilando: "zzz" flutuando acima e à direita da ampulheta (o selo "×N" fica embaixo)
+      this.pushIcon(x + 10, head.y - 13, 'zzz', Math.round(Math.sin(now / 500) * 1.5), ch.alpha, 0);
+    }
+    // pipoca pulando do balde de vez em quando
+    if (shell && ch.pose === 'wait' && ch.held === 'popcorn' && sprite && now >= ch.popcornAt) {
+      ch.popcornAt = now + 450 + Math.random() * 1200;
+      const px = x - 1 + (POPCORN_DX[ch.dir] ?? 0);
+      const py = y - 1 - (POPCORN_DY[ch.dir] ?? 10);
+      this.particles.popcorn(px, py);
+      if (Math.random() < 0.3) this.particles.popcorn(px, py);
+    }
+  }
+
+  private pushIcon(x: number, y: number, name: IconName, bounce: number, alpha: number, badge: number): void {
+    if (this.iconCount >= 256) return;
+    let ic = this.icons[this.iconCount];
+    if (!ic) this.icons[this.iconCount] = ic = { x: 0, y: 0, name, bounce: 0, alpha: 1, badge: 0 };
+    ic.x = x;
+    ic.y = y;
+    ic.name = name;
+    ic.bounce = bounce;
+    ic.alpha = alpha;
+    ic.badge = badge;
+    this.iconCount++;
+  }
+
+  /** Sprite do personagem no frame da animação (tolera arte sem a pose: contagem/duração inválidas). */
+  private charSprite(req: CharacterFrameRequest, animT: number): Sprite {
+    const { art } = this;
+    const count = Math.max(1, art.poseFrameCount(req.pose) || 1);
+    const dur = Math.max(30, art.poseFrameDuration(req.pose) || 500);
+    req.frame = Math.floor(animT / dur) % count;
+    return art.characterSprite(req);
+  }
+
+  /**
+   * Teia de aranha no canto do personagem que espera um shell há mais de 10 min (escala inteira:
+   * 1x, depois 2x com 20 min). Cochilando, fica coberto: uma teia de cada lado. A teia vai para o
+   * lado sem vizinho; com vizinhos dos dois lados, cobre mais o próprio personagem (não invade a
+   * mesa ao lado).
+   */
+  private drawCobwebs(now: number): void {
+    const { ctx } = this;
+    for (const ch of this.sim.chars.values()) {
+      if (ch.mode !== 'shell' || !ch.shellSince || ch.leaving || !ch.seated || ch.atSpot !== ch.homeSpot) continue;
+      const scale = cobwebScale(now - ch.shellSince);
+      if (!scale) continue;
+      const head = this.heads.get(ch.id);
+      if (!head || !head.visible) continue;
+      const web = this.icon('cobweb');
+      if (!web) return;
+      let left = (ch.info.seed & 1) === 0;
+      const busyL = this.neighborAt(head, -1);
+      const busyR = this.neighborAt(head, 1);
+      if (left ? busyL && !busyR : busyR && !busyL) left = !left;
+      ctx.globalAlpha = ch.alpha;
+      this.drawWeb(web, head, left, scale, left ? busyL : busyR);
+      if (ch.shellStage === 'nap') this.drawWeb(web, head, !left, 1, left ? busyR : busyL);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Alguém visível logo ao lado (mesma fileira, até ~2 mesas) no lado `side` (-1 esquerda, 1 direita)? */
+  private neighborAt(head: HeadInfo, side: -1 | 1): boolean {
+    for (const h of this.heads.values()) {
+      if (h === head || !h.visible || Math.abs(h.feetY - head.feetY) > 10) continue;
+      const dx = (h.x - head.x) * side;
+      if (dx > 0 && dx < 2.2 * TILE) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Uma teia presa no ombro (o canto da teia, em cima, fica para fora do corpo; espelhada do lado
+   * direito). Com vizinho do lado, no máximo WEB_MAX_OUT px para fora: o resto cobre o personagem.
+   */
+  private drawWeb(web: Sprite, head: HeadInfo, left: boolean, scale: number, crowded: boolean): void {
+    const { ctx } = this;
+    const w = web.canvas.width * scale;
+    const h = web.canvas.height * scale;
+    const out = crowded ? Math.min(w - 3 * scale, WEB_MAX_OUT) : w - 3 * scale;
+    const y = Math.round(head.by + 2);
+    if (left) {
+      ctx.drawImage(web.canvas, Math.round(head.bx - out), y, w, h);
+      return;
+    }
+    const x = Math.round(head.bx + head.bw + out - w);
+    ctx.save();
+    ctx.translate(x + w, y);
+    ctx.scale(-1, 1);
+    ctx.drawImage(web.canvas, 0, 0, w, h);
+    ctx.restore();
+  }
+
+  /** Efeitos pedidos pela simulação (confete do shell concluído), sobre a cabeça de quem comemora. */
+  private drainEffects(now: number): void {
+    const fx = this.sim.effects;
+    for (let i = 0; i < fx.length; i++) {
+      const e = fx[i];
+      const head = this.heads.get(e.charId);
+      if (e.kind === 'confetti' && head && head.visible && now - e.at < 1500) this.particles.confetti(head.x, head.y - 4);
+    }
+    fx.length = 0;
   }
 
   private req: CharacterFrameRequest = {
@@ -906,10 +1057,12 @@ export class Renderer {
 
   private icon(name: IconName): Sprite | null {
     try {
-      return this.art.iconSprite(name);
+      const s = this.art.iconSprite(name);
+      if (s && s.canvas.width > 0) return s;
     } catch {
-      return null;
+      // arte ainda sem este ícone
     }
+    return fallbackIcon(name);
   }
 
   // =================================================================== luz

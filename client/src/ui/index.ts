@@ -16,6 +16,7 @@ import { Drawer } from './drawer';
 import { FeedPanel } from './feed';
 import { HelpDialog } from './help';
 import { HoverTip } from './hovertip';
+import { hasRunningShells } from './model';
 import { Notifier } from './notify';
 import { ConnectionBanner, EmptyState, Splash } from './overlays';
 import { loadPrefs, safeLocalStorage, savePrefs, worldOptionsFrom, type UiPrefs } from './prefs';
@@ -27,6 +28,8 @@ import { FreeArea } from './viewport';
 
 /** Relógio dos tempos relativos ("há 5 s"). */
 const CLOCK_MS = 5_000;
+/** Relógio do cronômetro dos shells ("12:31"), ligado só enquanto há shells rodando. */
+const SHELL_CLOCK_MS = 1_000;
 const NARROW_QUERY = '(max-width: 900px)';
 
 function isTypingTarget(t: EventTarget | null): boolean {
@@ -217,6 +220,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   setInterval(() => {
     if (!document.hidden) invalidate();
   }, CLOCK_MS);
+  setInterval(() => {
+    if (!document.hidden && hasRunningShells(store.snapshot)) invalidate();
+  }, SHELL_CLOCK_MS);
 
   addEventListener('keydown', (e) => onKey(e));
 

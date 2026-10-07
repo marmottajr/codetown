@@ -13,10 +13,11 @@ import type {
   NoticeLevel,
   OfficeSnapshot,
   RoomInfo,
+  ShellJob,
   SourceInfo,
   TaskItem,
 } from '../../shared/types';
-import { SPECIAL } from '../../shared/activity';
+import { SHELL_WAIT_TOOL, SPECIAL, type ShellOutcome } from '../../shared/activity';
 import { DemoSimulator } from '../../shared/demo/simulator';
 import { hash32 } from '../../shared/hash';
 import type { NameStore } from './names';
@@ -26,6 +27,8 @@ export const OFFLINE_GRACE_MS = 20_000;
 export const DONE_GRACE_MS = 25_000;
 export const SLOT_COOLDOWN_MS = 30_000;
 export const NOTICE_DEDUPE_MS = 10_000;
+/** Aviso "está esperando o shell": no máximo um a cada 10 min por agente. */
+export const SHELL_NOTICE_DEDUPE_MS = 600_000;
 const RECENT_LIMIT = 30;
 /**
  * Atividades de cada agente que vão no snapshot (SSE). O snapshot inteiro sai a cada mudança, e o
@@ -92,6 +95,17 @@ interface AgentRecord {
   synthDone?: { id: string; at: number };
   /** Atividade "Precisa de você" sintetizada; ao sair da espera, a atividade anterior volta a ser a atual. */
   synthWait?: { id: string; prev?: Activity };
+  /** Balão "Esperando o shell" sintetizado neste episódio do status 'shell' (e a atividade que ele cobriu). */
+  shellWait?: { id: string; prev?: Activity };
+}
+
+/** O que terminou (para a atividade 'ShellDone' e o aviso). */
+export interface ShellDoneInput {
+  /** Id do job (tarefa em segundo plano ou tool_use): torna a atividade idempotente numa releitura. */
+  id: string;
+  label: string;
+  startedAt: number;
+  command?: string;
 }
 
 export interface CommitResult {
@@ -101,7 +115,7 @@ export interface CommitResult {
   notices: Notice[];
 }
 
-type NoticeKind = 'arrive' | 'room' | 'wait' | 'deliver' | 'done' | 'leave';
+type NoticeKind = 'arrive' | 'room' | 'wait' | 'deliver' | 'done' | 'leave' | 'shell' | 'shellDone';
 
 /** Pergunta ainda sem resposta (o balão dela já diz que o agente espera você). */
 function isOpenQuestion(a: Activity | undefined): boolean {
@@ -113,8 +127,12 @@ function zeroStats(): AgentStats {
 }
 
 function cloneAgent(a: AgentInfo): AgentInfo {
-  return { ...a, recent: a.recent.slice(), tasks: a.tasks.map((t) => ({ ...t })), stats: { ...a.stats } };
+  const c: AgentInfo = { ...a, recent: a.recent.slice(), tasks: a.tasks.map((t) => ({ ...t })), stats: { ...a.stats } };
+  if (a.shells) c.shells = a.shells.map((j) => ({ ...j }));
+  return c;
 }
+
+const byStart = (a: ShellJob, b: ShellJob) => a.startedAt - b.startedAt || a.id.localeCompare(b.id);
 
 export class Office {
   private agents = new Map<string, AgentRecord>();
@@ -282,7 +300,19 @@ export class Office {
     else delete info.waitingFor;
     const room = this.roomName(info.roomId);
 
-    if (status === 'working' && (prev === 'idle' || rec.turnStart === undefined)) rec.turnStart = now;
+    if (status === 'working' && (prev === 'idle' || prev === 'shell' || rec.turnStart === undefined)) rec.turnStart = now;
+    if (status === 'shell' && prev !== 'shell') {
+      // Terminou o turno com shell(s) rodando: o balão (fillShellActivity) e o aviso falam da espera, não de "concluiu".
+      const { label } = this.shellSummary(rec);
+      this.notice('shell', id, 'info', `⏳ ${info.name} está esperando o shell em ${room}${label ? `: ${label}` : ''}`, info.roomId, {
+        dedupeMs: SHELL_NOTICE_DEDUPE_MS,
+      });
+    }
+    if (prev === 'shell' && status !== 'shell' && rec.shellWait) {
+      // Saiu da espera sem nada novo no transcript: volta a mostrar o que estava antes do balão sintetizado.
+      if (info.activity?.id === rec.shellWait.id && rec.shellWait.prev) info.activity = rec.shellWait.prev;
+      delete rec.shellWait;
+    }
     if (status === 'waiting' && prev !== 'waiting') {
       if (!this.booting && !isOpenQuestion(info.activity)) {
         const prevActivity = info.activity;
@@ -321,9 +351,89 @@ export class Office {
     const cur = rec.info.activity;
     const now = this.now();
     if (cur && (cur.kind !== 'done' || now - cur.at < 15_000)) return;
+    // Parado num comando em primeiro plano (sem resultado ainda): não está "pensando", está esperando o comando.
+    if (rec.info.shells?.some((j) => !j.background)) return;
     const busySubs = [...this.agents.values()].some((r) => r.info.parentId === id && r.info.status === 'working');
     const desc = busySubs ? SPECIAL.supervising() : SPECIAL.think();
     this.addActivity(id, { id: `${id}#busy:${++this.seq}`, at: now, ...desc }, true, { filler: true });
+  }
+
+  // ---------------------------------------------------------------- shells
+
+  /** Shells que o agente está esperando (lista vazia = nenhum; o campo some do snapshot). */
+  setShells(id: string, jobs: readonly ShellJob[]): void {
+    const rec = this.agents.get(id);
+    if (!rec) return;
+    const info = rec.info;
+    if (info.status === 'offline' || (info.kind === 'sub' && info.status === 'done')) jobs = [];
+    const next = jobs.length ? jobs.map((j) => ({ ...j })).sort(byStart) : undefined;
+    if (JSON.stringify(info.shells) === JSON.stringify(next)) return;
+    if (next) info.shells = next;
+    else delete info.shells;
+    this.markDirty();
+  }
+
+  /**
+   * Status 'shell': o balão mostra "Esperando o shell: <rótulo>" — nunca o "Concluiu em …" do fim do turno.
+   * Só cobre o que ficou para trás (fim de turno, atividades anteriores à espera, o próprio balão com outro
+   * rótulo); o que acontece durante a espera (ex.: o fim de um dos shells) continua aparecendo.
+   * O primeiro balão de cada espera vai para o feed; as atualizações, não.
+   */
+  fillShellActivity(id: string): void {
+    const rec = this.agents.get(id);
+    if (!rec || rec.info.status !== 'shell') return;
+    const info = rec.info;
+    const { label, count, detail } = this.shellSummary(rec);
+    const desc = SPECIAL.waitingShell(label, count, detail);
+    const cur = info.activity;
+    const mine = cur?.tool === SHELL_WAIT_TOOL;
+    if (mine && cur.text === desc.text) return;
+    if (cur && !mine && cur.kind !== 'done' && cur.at > info.statusSince) return;
+    const now = this.now();
+    const act: Activity = { id: `${id}#shell-wait:${++this.seq}`, at: Math.max(now, info.statusSince), ...desc };
+    const first = !rec.shellWait;
+    const prev = mine ? rec.shellWait?.prev : cur;
+    this.addActivity(id, act, true, { filler: !first || this.booting });
+    rec.shellWait = prev ? { id: act.id, prev } : { id: act.id };
+  }
+
+  /**
+   * Um shell em segundo plano terminou: atividade 'ShellDone' (o mundo comemora; `error` = falhou/morto)
+   * e aviso de sucesso/falha. `live: false` = releitura do passado (só histórico, sem aviso).
+   */
+  shellDone(id: string, job: ShellDoneInput, outcome: ShellOutcome, at: number, opts: { live?: boolean; summary?: string } = {}): void {
+    const rec = this.agents.get(id);
+    if (!rec) return;
+    const info = rec.info;
+    const live = opts.live !== false;
+    const ms = Math.max(0, at - job.startedAt);
+    const act: Activity = { id: `${id}#shell-done:${job.id}`, at, ...SPECIAL.shellDone(job.label, outcome, ms, opts.summary ?? job.command) };
+    if (outcome === 'ok') act.durationMs = ms;
+    this.addActivity(id, act, true, { feed: live });
+    if (!live || outcome === 'killed') return;
+    const room = this.roomName(info.roomId);
+    const text =
+      outcome === 'ok' ? `✅ ${info.name}: shell terminou em ${room} — ${job.label}` : `❌ ${info.name}: shell falhou em ${room} — ${job.label}`;
+    this.notice('shellDone', id, outcome === 'ok' ? 'success' : 'warn', text, info.roomId, { dedupeKey: `${id}|shellDone|${job.id}` });
+  }
+
+  /** Rótulo do shell mais antigo (Bash antes de Monitor), quantos são e o detalhe (comando). */
+  private shellSummary(rec: AgentRecord): { label?: string; count: number; detail?: string } {
+    let jobs = rec.info.shells ?? [];
+    if (!jobs.length) {
+      // Sem shells próprios conhecidos: algum subagente pode ter disparado o comando.
+      jobs = this.descendants(rec.info.id)
+        .flatMap((r) => r.info.shells ?? [])
+        .filter((j) => j.background)
+        .sort(byStart);
+    }
+    const shells = jobs.filter((j) => j.kind === 'shell' && j.background);
+    const main = shells[0] ?? jobs.find((j) => j.kind === 'shell') ?? jobs[0];
+    if (!main) return { count: 0 };
+    // "Esperando 2 shells": conta os Bash em segundo plano (monitores só se não houver nenhum).
+    const out: { label?: string; count: number; detail?: string } = { label: main.label, count: shells.length || jobs.length };
+    if (main.command) out.detail = main.command;
+    return out;
   }
 
   closeMain(id: string): void {
@@ -334,9 +444,13 @@ export class Office {
     info.status = 'offline';
     info.statusSince = now;
     delete info.waitingFor;
+    // Os shells morrem com a sessão.
+    delete info.shells;
+    delete rec.shellWait;
     rec.removeAt = now + OFFLINE_GRACE_MS;
     // Subagentes ainda presentes saem junto.
     for (const sub of this.descendants(id)) {
+      delete sub.info.shells;
       if (sub.info.status !== 'done') {
         sub.info.status = 'done';
         sub.info.statusSince = now;
@@ -392,6 +506,7 @@ export class Office {
     const info = rec.info;
     info.status = 'done';
     info.statusSince = now;
+    delete info.shells;
     rec.removeAt = now + DONE_GRACE_MS;
     if (!this.booting && info.activity?.kind !== 'done') {
       const act: Activity = { id: `${id}#done:${++this.seq}`, at: now, ...SPECIAL.turnDone(now - info.startedAt), durationMs: now - info.startedAt };
@@ -648,15 +763,24 @@ export class Office {
     if (this.feed.length > FEED_LIMIT) this.feed.splice(0, this.feed.length - FEED_LIMIT);
   }
 
-  private notice(kind: NoticeKind, key: string, level: NoticeLevel, text: string, roomId?: string): void {
+  private notice(
+    kind: NoticeKind,
+    key: string,
+    level: NoticeLevel,
+    text: string,
+    roomId?: string,
+    opts: { dedupeKey?: string; dedupeMs?: number } = {},
+  ): void {
     if (this.booting) return;
     const now = this.now();
-    const k = `${key}|${kind}`;
+    const k = opts.dedupeKey ?? `${key}|${kind}`;
+    const window = opts.dedupeMs ?? NOTICE_DEDUPE_MS;
     const last = this.noticeAt.get(k);
-    if (last !== undefined && now - last < NOTICE_DEDUPE_MS) return;
+    if (last !== undefined && now - last < window) return;
     this.noticeAt.set(k, now);
     if (this.noticeAt.size > 2_000) {
-      for (const [nk, t] of this.noticeAt) if (now - t > NOTICE_DEDUPE_MS) this.noticeAt.delete(nk);
+      // Só esquece o que já passou da janela mais longa (a do aviso de shell).
+      for (const [nk, t] of this.noticeAt) if (now - t > Math.max(NOTICE_DEDUPE_MS, SHELL_NOTICE_DEDUPE_MS)) this.noticeAt.delete(nk);
     }
     const n: Notice = { id: `n-${now.toString(36)}-${++this.seq}`, level, text, at: now };
     if (kind !== 'room') n.agentId = key;

@@ -15,7 +15,7 @@ export interface RegistryEntry {
   kind?: string;
   entrypoint?: string;
   name?: string;
-  /** 'busy' | 'idle' | 'waiting' (versões antigas não têm). */
+  /** 'busy' | 'idle' | 'waiting' | 'shell' (versões antigas não têm; 'shell' = ocioso com shell em segundo plano). */
   status?: string;
   waitingFor?: string;
   /** Agente customizado da sessão (`claude --agent frinus`). */
@@ -62,6 +62,20 @@ export function parseRegistryEntry(raw: string): RegistryEntry | undefined {
   return e;
 }
 
+/**
+ * Primeira versão do Claude Code sabidamente gravando "shell" no registro (ocioso com shell em segundo plano).
+ * Dela em diante, "idle" é a palavra final sobre shells: nada em segundo plano rodando.
+ */
+export const SHELL_STATUS_VERSION = '2.1.292';
+
+/** Compara versões "x.y.z" (sufixos como "-beta" são ignorados). */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(/[.-]/).slice(0, 3).map((x) => Number.parseInt(x, 10) || 0);
+  const pb = b.split(/[.-]/).slice(0, 3).map((x) => Number.parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+  return 0;
+}
+
 /** Status do registro -> status do personagem (undefined = desconhecido; o transcript decide). */
 export function registryStatus(e: RegistryEntry): { status?: AgentStatus; waitingFor?: string } {
   switch (e.status) {
@@ -69,6 +83,9 @@ export function registryStatus(e: RegistryEntry): { status?: AgentStatus; waitin
       return { status: 'working' };
     case 'idle':
       return { status: 'idle' };
+    // Ocioso, mas com shell(s) em segundo plano rodando (monitores não contam): esperando o shell.
+    case 'shell':
+      return { status: 'shell' };
     case 'waiting':
       return { status: 'waiting', waitingFor: describeWaitingFor(e.waitingFor) };
     default:

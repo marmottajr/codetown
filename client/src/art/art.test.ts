@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { FURNITURE, TILE, type Dir, type FloorKind, type FurnitureKind, type HeldItem, type Pose, type ScreenMode, type WallPattern } from './api';
 import { appearanceFromSeed, appearanceKey } from './character/appearance';
 import { HAIR, HEAD_BASE } from './character/hair';
-import { CHAR_AX, CHAR_AY, CHAR_H, CHAR_W, POSE_FRAMES, renderCharacter } from './character/render';
+import { CHAR_AX, CHAR_AY, CHAR_H, CHAR_W, POSE_DURATION, POSE_FRAMES, isSeated, renderCharacter } from './character/render';
+import { PixelBuf } from './core/pixbuf';
+import type { BufSprite } from './core/sprite';
 import { drawBoard, drawClock, drawScreen, drawWindowView } from './dynamic';
 import { normalizeFurniture, renderFurniture } from './furniture/index';
-import { ICON_NAMES, renderIcon } from './icons';
+import { ICON_NAMES, iconTemplates, renderIcon } from './icons';
 import { CHUNK_PX, floorChunk } from './surfaces/floor';
 import { southWallTile, wallFaceTile } from './surfaces/walls';
 import { THEME_COUNT, roomTheme } from './theme';
@@ -24,8 +26,26 @@ function digest(data: Uint8ClampedArray): string {
   }
   return `${h >>> 0}:${g >>> 0}`;
 }
+/** Quantos pixels opacos do buffer têm exatamente a cor `hex` (#rrggbb). */
+function countColor(buf: PixelBuf, hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const r = n >> 16;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  let c = 0;
+  for (let i = 0; i < buf.data.length; i += 4) if (buf.data[i + 3] > 200 && buf.data[i] === r && buf.data[i + 1] === g && buf.data[i + 2] === b) c++;
+  return c;
+}
+
+/** Desenha sprites (âncora no ponto dado) num buffer grande, na ordem — como o mundo compõe. */
+function compose(...layers: [BufSprite, number, number][]): PixelBuf {
+  const out = new PixelBuf(96, 96);
+  for (const [s, x, y] of layers) out.draw(s.buf, x - s.ax, y - s.ay);
+  return out;
+}
 const POSES = Object.keys(POSE_FRAMES) as Pose[];
-const HELD: HeldItem[] = ['none', 'coffee', 'water', 'papers', 'laptop', 'book', 'box', 'paddle'];
+const HELD: HeldItem[] = ['none', 'coffee', 'water', 'papers', 'laptop', 'book', 'box', 'paddle', 'popcorn'];
+const SCREEN_MODES: ScreenMode[] = ['off', 'standby', 'idle', 'code', 'terminal', 'browser', 'search', 'chat', 'docs', 'tasks', 'alert', 'progress'];
 
 describe('appearanceFromSeed', () => {
   it('é determinística', () => {
@@ -136,6 +156,127 @@ describe('personagens', () => {
       keys.add(digest(s.buf.data));
     }
     expect(keys.size).toBe(40);
+  });
+});
+
+describe("pose 'wait' (esperando o shell) e o balde de pipoca", () => {
+  /** Listras vermelhas do balde (iluminada e base). */
+  const red = (b: PixelBuf) => countColor(b, '#d8413f') + countColor(b, '#ef6457');
+  const KERNEL = '#fff9e6';
+  const cast = [
+    appearanceFromSeed(77, { look: 'm' }),
+    appearanceFromSeed(2024, { look: 'f', sub: true }),
+    appearanceFromSeed(5150, { look: 'f' }),
+    { ...appearanceFromSeed(31), topStyle: 'hoodie' as const, hairStyle: 'long' as const },
+  ];
+  /** Pés de quem senta ficam 3 px acima da base do assento (igual ao mundo). */
+  const FOOT = 3;
+  const X = 48;
+  const Y = 56;
+  const wait = (a: (typeof cast)[number], dir: Dir, frame: number, held: HeldItem) =>
+    renderCharacter({ appearance: a, dir, pose: 'wait', frame, held, seated: true });
+
+  it('é sentada, com 2 quadros e duração própria', () => {
+    expect(POSE_FRAMES.wait).toBe(2);
+    expect(POSE_DURATION.wait).toBeGreaterThanOrEqual(300);
+    expect(POSE_DURATION.wait).toBeLessThanOrEqual(800);
+    expect(isSeated('wait')).toBe(true);
+    expect(isSeated('wait', false)).toBe(true);
+  });
+
+  it('anima (os 2 quadros diferem) e é determinística em todas as direções, com e sem pipoca', () => {
+    for (const a of cast) {
+      for (const dir of DIRS) {
+        for (const held of ['popcorn', 'none'] as const) {
+          const f0 = digest(wait(a, dir, 0, held).buf.data);
+          const f1 = digest(wait(a, dir, 1, held).buf.data);
+          expect(f0, `${dir}/${held}`).not.toBe(f1);
+          expect(digest(wait(a, dir, 0, held).buf.data)).toBe(f0);
+        }
+      }
+    }
+  });
+
+  it('recosta 1 px para trás: de frente sobe, de costas desce, de perfil vai para trás', () => {
+    const a = { ...cast[0], hairStyle: 'buzz' as const, accessory: 'none' as const };
+    const top = (dir: Dir, pose: Pose) => renderCharacter({ appearance: a, dir, pose, frame: 0, seated: true }).buf.bounds()?.y ?? -1;
+    expect(top('down', 'wait')).toBe(top('down', 'sit') - 1);
+    expect(top('up', 'wait')).toBe(top('up', 'sit') + 1);
+    // Perfil virado à esquerda: a cabeça (linhas de cima) anda 1 px para a direita.
+    const headX = (pose: Pose) => renderCharacter({ appearance: a, dir: 'left', pose, frame: 0, seated: true }).buf.crop(0, 0, CHAR_W, 20).bounds()?.x ?? -1;
+    expect(headX('wait')).toBe(headX('sit') + 1);
+  });
+
+  it('pipoca legível na mesa: de frente acima da desk_back e de costas fora do encosto', () => {
+    for (const a of cast) {
+      for (const frame of [0, 1]) {
+        // De frente: office_chair_front, a pessoa e, 1 tile ao sul, a desk_back por cima (todas as variações).
+        for (let seed = 0; seed < 4; seed++) {
+          const scene = compose(
+            [renderFurniture('office_chair_front', 'blue').base, X, Y],
+            [wait(a, 'down', frame, 'popcorn'), X, Y - FOOT],
+            [renderFurniture('desk_back', 'white', 0, seed).base, X, Y + TILE],
+          );
+          expect(red(scene), `frente seed ${seed} q${frame}`).toBeGreaterThanOrEqual(6);
+        }
+        // De costas: office_chair com o encosto (front) desenhado por cima.
+        const chair = renderFurniture('office_chair', 'blue');
+        const back = compose([chair.base, X, Y], [wait(a, 'up', frame, 'popcorn'), X, Y - FOOT], [chair.front as BufSprite, X, Y]);
+        expect(red(back), `costas q${frame}`).toBeGreaterThanOrEqual(6);
+      }
+    }
+  });
+
+  it('pipoca também no sofá, na poltrona e na banqueta', () => {
+    const a = cast[0];
+    const sofa = renderFurniture('sofa', 'down');
+    expect(red(compose([sofa.base, X, Y], [wait(a, 'down', 0, 'popcorn'), X, Y - FOOT]))).toBeGreaterThanOrEqual(8);
+    for (const dir of ['left', 'right'] as const) {
+      const arm = renderFurniture('armchair', dir);
+      expect(red(compose([arm.base, X, Y], [wait(a, dir, 1, 'popcorn'), X, Y - FOOT])), dir).toBeGreaterThanOrEqual(8);
+    }
+    expect(red(compose([renderFurniture('stool').base, X, Y], [wait(a, 'down', 1, 'popcorn'), X, Y - FOOT]))).toBeGreaterThanOrEqual(8);
+  });
+
+  it('comendo: no quadro 1 a mão leva uma pipoca até a boca (de frente e de perfil)', () => {
+    for (const a of cast) {
+      for (const dir of ['down', 'left'] as const) {
+        // A coroa de pipoca do balde começa na linha 20; acima dela só a pipoca na mão.
+        const above = (frame: number) => countColor(wait(a, dir, frame, 'popcorn').buf.crop(0, 0, CHAR_W, 20), KERNEL);
+        expect(above(1), dir).toBeGreaterThan(0);
+        expect(above(0), dir).toBe(0);
+      }
+    }
+  });
+
+  it('o balde aparece na mão em pé e andando, nas 4 direções', () => {
+    for (const pose of ['stand', 'walk'] as const) {
+      for (const dir of DIRS) {
+        for (let frame = 0; frame < POSE_FRAMES[pose]; frame++) {
+          const s = renderCharacter({ appearance: cast[1], dir, pose, frame, held: 'popcorn' });
+          expect(red(s.buf), `${pose}/${dir}/${frame}`).toBeGreaterThanOrEqual(4);
+          expect(countColor(s.buf, KERNEL), `${pose}/${dir}/${frame}`).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+
+  it('sem item: braços cruzados acima do tampo da desk_back, com a mão batendo os dedos', () => {
+    for (const a of cast) {
+      const skin = (frame: number) => countColor(wait(a, 'down', frame, 'none').buf.crop(5, 20, 3, 6), a.skin);
+      // A mão sobre o braço esquerdo aparece nos dois quadros e muda de altura (dedos batendo).
+      expect(skin(0)).toBeGreaterThan(0);
+      expect(skin(1)).toBeGreaterThan(0);
+      const rowsWithSkin = (frame: number) => {
+        const b = wait(a, 'down', frame, 'none').buf;
+        return [20, 21, 22, 23, 24].filter((y) => countColor(b.crop(5, y, 2, 1), a.skin) > 0).join(',');
+      };
+      expect(rowsWithSkin(0)).not.toBe(rowsWithSkin(1));
+      // Visível com a desk_back na frente: braços (manga ou pele) acima da linha de corte.
+      const plain = compose([wait(a, 'down', 0, 'none'), X, Y - FOOT], [renderFurniture('desk_back', 'white', 0, 0).base, X, Y + TILE]);
+      const sit = compose([renderCharacter({ appearance: a, dir: 'down', pose: 'sit', frame: 0, seated: true }), X, Y - FOOT], [renderFurniture('desk_back', 'white', 0, 0).base, X, Y + TILE]);
+      expect(digest(plain.data)).not.toBe(digest(sit.data));
+    }
   });
 });
 
@@ -328,14 +469,66 @@ describe('pisos e paredes', () => {
 });
 
 describe('ícones e temas', () => {
-  it('os 14 ícones existem com contorno', () => {
-    expect(ICON_NAMES.length).toBe(14);
+  it('os 18 ícones existem com contorno', () => {
+    expect(ICON_NAMES.length).toBe(18);
+    for (const n of ['hourglass', 'hourglass_flip', 'cobweb', 'storm'] as const) expect(ICON_NAMES).toContain(n);
     for (const n of ICON_NAMES) {
       const s = renderIcon(n);
-      expect(s.buf.w).toBeGreaterThanOrEqual(8);
-      expect(s.buf.w).toBeLessThanOrEqual(13);
-      expect(s.buf.countOpaque()).toBeGreaterThan(20);
+      expect(s.buf.w, n).toBeGreaterThanOrEqual(8);
+      // A teia de canto tem 12 px + contorno; os demais cabem em 13.
+      expect(s.buf.w, n).toBeLessThanOrEqual(n === 'cobweb' ? 14 : 13);
+      expect(s.buf.h, n).toBeLessThanOrEqual(14);
+      expect(s.buf.countOpaque(), n).toBeGreaterThan(20);
+      // Âncora no centro inferior.
+      expect(s.ay).toBe(s.buf.h);
+      expect(Math.abs(s.ax - s.buf.w / 2)).toBeLessThanOrEqual(1);
+      // Templates só com caracteres da paleta e linhas de mesma largura.
+      const def = iconTemplates()[n];
+      for (const row of def.rows) {
+        expect(row.length, n).toBe(def.rows[0].length);
+        for (const ch of row) if (ch !== '.') expect(def.pal[ch], `${n} '${ch}'`).toBeDefined();
+      }
     }
+  });
+
+  it('ícones são determinísticos', () => {
+    for (const n of ICON_NAMES) expect(digest(renderIcon(n).buf.data), n).toBe(digest(renderIcon(n).buf.data));
+  });
+
+  it('ampulheta: em pé e deitada (para alternar e parecer girando), mesma areia e madeira', () => {
+    const up = renderIcon('hourglass');
+    const flip = renderIcon('hourglass_flip');
+    // Em pé é mais alta que larga; deitada, mais larga que alta.
+    expect(up.buf.h).toBeGreaterThan(up.buf.w);
+    expect(flip.buf.w).toBeGreaterThan(flip.buf.h);
+    const sand = '#f5c451';
+    expect(countColor(up.buf, sand)).toBeGreaterThan(4);
+    expect(countColor(flip.buf, sand)).toBeGreaterThan(4);
+    // Areia em cima (bulbo superior) na versão em pé.
+    const top = countColor(up.buf.crop(0, 0, up.buf.w, Math.floor(up.buf.h / 2)), sand);
+    expect(top).toBeGreaterThan(countColor(up.buf, sand) / 2);
+  });
+
+  it('teia: contorno translúcido (quase nada nas células) e uma aranha escura', () => {
+    const s = renderIcon('cobweb');
+    const d = s.buf.data;
+    let soft = 0;
+    let faint = 0;
+    for (let i = 3; i < d.length; i += 4) {
+      if (d[i] > 0 && d[i] < 200) soft++;
+      if (d[i] > 0 && d[i] < 60) faint++;
+    }
+    expect(soft).toBeGreaterThan(20);
+    expect(faint).toBeGreaterThan(5);
+    expect(countColor(s.buf, '#3a3346')).toBeGreaterThan(2);
+    expect(countColor(s.buf, '#ffffff')).toBeGreaterThan(30);
+  });
+
+  it('tempestade: nuvem escura, gotas azuis e raio amarelo', () => {
+    const s = renderIcon('storm');
+    expect(countColor(s.buf, '#ffd84d')).toBeGreaterThan(6);
+    expect(countColor(s.buf, '#9fd2f6')).toBeGreaterThan(2);
+    expect(countColor(s.buf, '#6b7489')).toBeGreaterThan(6);
   });
 
   it('temas vizinhos são diferentes e determinísticos', () => {
@@ -365,7 +558,7 @@ describe('desenhos por quadro', () => {
     rects.every(([x, y, w, h]) => x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h && w > 0 && h > 0);
 
   it('drawScreen fica dentro do retângulo em todos os modos e tamanhos', () => {
-    const modes: ScreenMode[] = ['off', 'standby', 'idle', 'code', 'terminal', 'browser', 'search', 'chat', 'docs', 'tasks', 'alert'];
+    const modes = SCREEN_MODES;
     for (const r of [{ x: 10, y: 20, w: 14, h: 9 }, { x: 3, y: 4, w: 28, h: 15 }, { x: 0, y: 0, w: 10, h: 7 }]) {
       for (const m of modes) {
         for (const t of [0, 777, 12345, 99999]) {
@@ -382,7 +575,7 @@ describe('desenhos por quadro', () => {
   it('drawScreen tem custo independente de t (o mundo passa Date.now())', () => {
     // Regressão: o modo terminal percorria todas as linhas desde t = 0 (~10^9 iterações por
     // monitor com t ≈ 1,8e12), congelando o app inteiro. Agora cada chamada é O(tamanho da tela).
-    const modes: ScreenMode[] = ['off', 'standby', 'idle', 'code', 'terminal', 'browser', 'search', 'chat', 'docs', 'tasks', 'alert'];
+    const modes = SCREEN_MODES;
     const r = { x: 10, y: 20, w: 14, h: 9 };
     const big = 1.8e12;
     const t0 = performance.now();
@@ -432,6 +625,39 @@ describe('desenhos por quadro', () => {
       const frames = new Set([0, 1300, 2600, 3900, 5200, 6500].map((d) => snap(base + d)));
       expect(frames.size).toBeGreaterThan(3);
     }
+  });
+
+  it("tela 'progress': barra que enche com o tempo, spinner girando, e recomeça (determinística)", () => {
+    const r = { x: 0, y: 0, w: 14, h: 9 };
+    /** Largura da parte cheia da barra (cores do enchimento) num instante. */
+    const snap = (t: number, seed = 2) => {
+      const fills: { c: string; x: number; y: number; w: number; h: number }[] = [];
+      const ctx = {
+        fillStyle: '',
+        fillRect(x: number, y: number, w: number, h: number) {
+          fills.push({ c: String((ctx as { fillStyle: string }).fillStyle), x, y, w, h });
+        },
+      };
+      drawScreen(ctx as unknown as CanvasRenderingContext2D, r, 'progress', t, seed);
+      return fills;
+    };
+    const filled = (t: number) => Math.max(0, ...snap(t).filter((f) => f.c === '#3ccf63' || f.c === '#b9ffca').map((f) => f.w));
+    for (const base of [0, 1.8e12]) {
+      expect(JSON.stringify(snap(base + 1234))).toBe(JSON.stringify(snap(base + 1234)));
+      // Ao longo de um ciclo (~3,4–4,6 s) a barra cresce e depois volta a zero.
+      const widths = Array.from({ length: 48 }, (_, k) => filled(base + k * 100));
+      expect(Math.max(...widths)).toBeGreaterThanOrEqual(r.w - 4);
+      expect(Math.min(...widths)).toBeLessThanOrEqual(1);
+      let grows = 0;
+      for (let k = 1; k < widths.length; k++) if (widths[k] > widths[k - 1]) grows++;
+      expect(grows).toBeGreaterThan(4);
+    }
+    // Spinner: a cabeça clara muda de lugar entre quadros próximos.
+    const head = (t: number) => JSON.stringify(snap(t).filter((f) => f.c === '#9ff3ff'));
+    expect(head(0)).not.toBe(head(110));
+    // Escuro como um terminal (fundo é o 1º fill e cobre a tela toda).
+    const bg = snap(0)[0];
+    expect(bg).toMatchObject({ x: 0, y: 0, w: 14, h: 9 });
   });
 
   it('drawWindowView, drawBoard e drawClock ficam dentro do retângulo', () => {

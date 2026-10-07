@@ -249,6 +249,110 @@ describe('parseLine — sinais de subagentes', () => {
   });
 });
 
+describe('parseLine — sinais de shells', () => {
+  it('Bash em segundo plano: início (rótulo, comando mascarado), lançamento com id da tarefa, término pela fila e pela mensagem', () => {
+    const s = createTranscriptState();
+    const r = feed(s, [
+      L.assistant(
+        [L.tool('toolu_bg', 'Bash', { command: 'API_TOKEN=abc123456 vendor/bin/phpunit', description: 'Rodar a suíte completa em grupos com phpunit', run_in_background: true, timeout: 600000 })],
+        { at: T0 },
+      ),
+      L.bgLaunched('toolu_bg', 'bo0ov3q3l', { at: T0 + 500 }),
+      L.shellNotification('queue', { taskId: 'bo0ov3q3l', toolUseId: 'toolu_bg', status: 'completed', summary: 'Background command "x" completed (exit code 0)' }, { at: T0 + 60_000 }),
+      L.shellNotification('message', { taskId: 'bo0ov3q3l', toolUseId: 'toolu_bg', status: 'completed' }, { at: T0 + 60_100 }),
+    ]);
+    expect(r[0].signals).toEqual([
+      {
+        type: 'shellStart',
+        shell: {
+          toolUseId: 'toolu_bg',
+          label: 'Rodar a suíte completa em grupos com phpunit',
+          command: 'API_TOKEN=*** vendor/bin/phpunit',
+          background: true,
+          kind: 'shell',
+          at: T0,
+        },
+      },
+    ]);
+    expect(r[1].signals).toEqual([{ type: 'shellResult', toolUseId: 'toolu_bg', taskId: 'bo0ov3q3l', error: false }]);
+    expect(r[1].at).toBe(T0 + 500);
+    expect(r[2]).toMatchObject({ activities: [], at: T0 + 60_000 });
+    expect(r[2].signals).toEqual([
+      { type: 'notification', taskId: 'bo0ov3q3l', toolUseId: 'toolu_bg', status: 'completed', summary: 'Background command "x" completed (exit code 0)' },
+    ]);
+    expect(r[3].signals[0]).toMatchObject({ type: 'notification', taskId: 'bo0ov3q3l' });
+    expect(r[3].activities[0].activity.text).toBe('Recebeu resultado em segundo plano');
+  });
+
+  it('Bash em primeiro plano: início sem segundo plano e resultado sem id; sem description, o rótulo resume o comando', () => {
+    const s = createTranscriptState();
+    const r = feed(s, [L.assistant([L.tool('fg', 'Bash', { command: 'npm test' })]), L.result('fg', 'ok, 10 testes')]);
+    expect(r[0].signals).toEqual([{ type: 'shellStart', shell: expect.objectContaining({ toolUseId: 'fg', label: 'Rodando testes', background: false }) }]);
+    expect(r[1].signals).toEqual([{ type: 'shellResult', toolUseId: 'fg', error: false }]);
+  });
+
+  it('a saída de um comando em primeiro plano não é confundida com um id de segundo plano', () => {
+    const s = createTranscriptState();
+    const r = feed(s, [
+      L.assistant([L.tool('fg', 'Bash', { command: 'cat log' })]),
+      L.result('fg', 'linha 1\nCommand running in background with ID: bzzzz'),
+      L.assistant([L.tool('fg2', 'Bash', { command: 'jq . t.jsonl' })]),
+      // Caso real: um comando que imprime o JSON de um tool_result com essa frase na primeira linha.
+      L.result('fg2', '[{"tool_use_id":"toolu_x","type":"tool_result","content":"Command running in background with ID: bo0ov3q3l. Output"}]'),
+      L.assistant([L.tool('bg', 'Bash', { command: 'sleep 99', run_in_background: true })]),
+      // Versões sem toolUseResult.backgroundTaskId: o id vem do texto do próprio Claude Code.
+      L.result('bg', 'Command running in background with ID: b7x2k9. Output is being written to: /tmp/x'),
+    ]);
+    expect(r[1].signals).toEqual([{ type: 'shellResult', toolUseId: 'fg', error: false }]);
+    expect(r[3].signals).toEqual([{ type: 'shellResult', toolUseId: 'fg2', error: false }]);
+    expect(r[5].signals).toEqual([{ type: 'shellResult', toolUseId: 'bg', taskId: 'b7x2k9', error: false }]);
+  });
+
+  it('Monitor é um job em segundo plano do tipo monitor; KillShell/TaskStop param o id; fim de turno e interrupção', () => {
+    const s = createTranscriptState();
+    const r = feed(s, [
+      L.assistant([L.tool('mon', 'Monitor', { description: 'erros no deploy.log', command: 'tail -f deploy.log | grep --line-buffered ERROR', timeout_ms: 600000 })]),
+      L.result('mon', 'Monitor started with ID: m4k2z9', { toolUseResult: { taskId: 'm4k2z9' } }),
+      L.assistant([L.tool('k1', 'KillShell', { shell_id: 'bo0ov3q3l' })]),
+      L.result('k1', 'killed'),
+      L.system('turn_duration', { durationMs: 1_000 }),
+      L.prompt('[Request interrupted by user]'),
+    ]);
+    expect(r[0].signals).toEqual([{ type: 'shellStart', shell: expect.objectContaining({ kind: 'monitor', background: true, label: 'erros no deploy.log', timeoutMs: 600000 }) }]);
+    expect(r[1].signals).toEqual([{ type: 'shellResult', toolUseId: 'mon', taskId: 'm4k2z9', error: false }]);
+    expect(r[3].signals).toEqual([{ type: 'stopped', taskId: 'bo0ov3q3l' }]);
+    expect(r[4].signals).toEqual([{ type: 'turnEnd' }]);
+    expect(r[5].signals).toEqual([{ type: 'turnEnd' }]);
+  });
+
+  it('lançamento cujo tool_use ficou antes da janela lida ainda sinaliza (pelo backgroundTaskId)', () => {
+    const s = createTranscriptState();
+    const r = feed(s, [L.bgLaunched('toolu_antes', 'bantes1')]);
+    expect(r[0].signals).toEqual([{ type: 'shellResult', toolUseId: 'toolu_antes', taskId: 'bantes1', error: false }]);
+  });
+
+  it('scanPrefix devolve os sinais de shell do começo do arquivo, com o horário de cada linha', async () => {
+    const tmp = tempDir();
+    try {
+      const file = join(tmp.dir, 's.jsonl');
+      const lines = [
+        L.assistant([L.tool('b1', 'Bash', { command: 'npm run build', run_in_background: true })], { at: T0 }),
+        L.bgLaunched('b1', 'bbuild', { at: T0 + 1_000 }),
+        L.shellNotification('queue', { taskId: 'bbuild', toolUseId: 'b1', status: 'completed' }, { at: T0 + 9_000 }),
+      ];
+      writeFileSync(file, lines.map((l) => `${l}\n`).join(''));
+      const prefix = await scanPrefix(file, Buffer.byteLength(lines.map((l) => `${l}\n`).join('')), new Set());
+      expect(prefix.shellEvents.map((e) => [e.signal.type, e.at])).toEqual([
+        ['shellStart', T0],
+        ['shellResult', T0 + 1_000],
+        ['notification', T0 + 9_000],
+      ]);
+    } finally {
+      tmp.cleanup();
+    }
+  });
+});
+
 describe('janela final + prefixo em segundo plano', () => {
   it('mescla títulos, tarefas e números sem contar duas vezes', async () => {
     const tmp = tempDir();

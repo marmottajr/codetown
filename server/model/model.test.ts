@@ -186,6 +186,73 @@ describe('Office', () => {
     expect(office.commit().feed).toEqual([]);
   });
 
+  it('comando em primeiro plano pendente: o preenchimento "Pensando…" não cobre a espera pelo comando', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addActivity('acc:1', { ...act('fim', now(), 'done'), text: 'Concluiu em 3s' }, true);
+    office.setShells('acc:1', [{ id: 'fg', label: 'Instalar as dependências', startedAt: now(), background: false, kind: 'shell' }]);
+    advance(20_000);
+    office.fillWorkingActivity('acc:1');
+    expect(office.get('acc:1')!.activity!.id).toBe('fim');
+    office.setShells('acc:1', []);
+    expect(office.get('acc:1')!.shells).toBeUndefined();
+    office.fillWorkingActivity('acc:1');
+    expect(office.get('acc:1')!.activity!.text).toBe('Pensando…');
+  });
+
+  it('status shell: balão "Esperando o shell" no lugar do "Concluiu", aviso no máximo a cada 10 min; ShellDone com aviso', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/loja', role: 'x', startedAt: now(), status: 'working' });
+    const name = office.get('acc:1')!.name;
+    office.commit();
+    const job = { id: 'b1', label: 'Build de produção', command: 'npm run build', startedAt: now(), background: true, kind: 'shell' as const };
+    office.setShells('acc:1', [job, { ...job, id: 'b2', label: 'Migração', startedAt: now() + 5 }]);
+    advance(1_000);
+    office.setStatus('acc:1', 'shell');
+    office.fillShellActivity('acc:1');
+    expect(office.get('acc:1')!.activity).toMatchObject({ text: 'Esperando 2 shells: Build de produção', detail: 'npm run build', tool: 'ShellWait' });
+    // O "Concluiu" do transcript chega depois: o balão continua na espera.
+    advance(500);
+    office.addActivity('acc:1', { ...act('fim', now(), 'done'), text: 'Concluiu em 3s' }, true);
+    office.fillShellActivity('acc:1');
+    expect(office.get('acc:1')!.activity!.tool).toBe('ShellWait');
+    let r = office.commit();
+    expect(r.notices.map((n) => n.text)).toEqual([`⏳ ${name} está esperando o shell em loja: Build de produção`]);
+    expect(r.feed.map((f) => f.activity.text)).toEqual(['Esperando 2 shells: Build de produção', 'Concluiu em 3s']);
+    expect(r.notices.some((n) => n.text.includes('concluiu'))).toBe(false);
+    // Volta a trabalhar e a esperar dentro de 10 min: sem aviso repetido.
+    office.setStatus('acc:1', 'working');
+    advance(60_000);
+    office.setStatus('acc:1', 'shell');
+    expect(office.commit().notices).toEqual([]);
+    // Fim de um dos shells.
+    office.shellDone('acc:1', job, 'ok', now() + 1_000);
+    r = office.commit();
+    expect(r.snapshot.agents[0].activity).toMatchObject({ tool: 'ShellDone', text: 'Shell terminou: Build de produção (1min 3s)' });
+    expect(r.notices.map((n) => [n.level, n.text])).toEqual([['success', `✅ ${name}: shell terminou em loja — Build de produção`]]);
+    // Releitura não duplica; outro shell no mesmo segundo ainda avisa.
+    office.shellDone('acc:1', job, 'ok', now() + 1_000);
+    office.shellDone('acc:1', { ...job, id: 'b2', label: 'Migração' }, 'failed', now() + 1_000);
+    r = office.commit();
+    expect(r.notices.map((n) => [n.level, n.text])).toEqual([['warn', `❌ ${name}: shell falhou em loja — Migração`]]);
+    expect(office.detail('acc:1')!.history.filter((a) => a.tool === 'ShellDone')).toHaveLength(2);
+  });
+
+  it('subagente: concluir ou fechar a sessão limpa os shells', () => {
+    const { office, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    const job = { id: 'fg', label: 'x', startedAt: now(), background: false, kind: 'shell' as const };
+    office.setShells('acc:1', [job]);
+    office.setShells('s1:x', [job]);
+    office.completeSub('s1:x');
+    expect(office.get('s1:x')!.shells).toBeUndefined();
+    office.setShells('s1:x', [job]);
+    expect(office.get('s1:x')!.shells).toBeUndefined();
+    office.closeMain('acc:1');
+    expect(office.get('acc:1')!.shells).toBeUndefined();
+  });
+
   it('subagente concluído fica 25 s; principal offline fica 20 s e leva a sala junto', () => {
     const { office, advance, now } = makeOffice();
     office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });

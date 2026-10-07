@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { describeCommand, describePrompt, describeTool, describeWaitingFor, looksPortuguese, maskSecrets, shellWords, SPECIAL, splitShell } from './activity';
+import {
+  describeCommand,
+  describePrompt,
+  describeShellJob,
+  describeTool,
+  describeWaitingFor,
+  looksPortuguese,
+  maskSecrets,
+  shellWords,
+  SPECIAL,
+  splitShell,
+} from './activity';
 
 describe('describeCommand', () => {
   it('só a primeira linha decide (heredoc não confunde)', () => {
@@ -107,5 +118,40 @@ describe('atividades', () => {
     expect(SPECIAL.cleared().kind).toBe('compact');
     expect(describeWaitingFor('worker request')).toBe('aprovar o pedido de um worker');
     expect(describeWaitingFor(undefined)).toBe('responder no terminal');
+  });
+});
+
+describe('shells', () => {
+  it('rótulo do job: description (mascarada) ou resumo do comando; comando mascarado no detalhe', () => {
+    expect(describeShellJob('Bash', { command: 'vendor/bin/phpunit', description: 'Rodar a suíte completa em grupos com phpunit' })).toEqual({
+      label: 'Rodar a suíte completa em grupos com phpunit',
+      command: 'vendor/bin/phpunit',
+      kind: 'shell',
+    });
+    expect(describeShellJob('Bash', { command: 'GITHUB_TOKEN=ghp_0123456789abcdefghij npm run build' })).toEqual({
+      label: 'Compilando o projeto',
+      command: 'GITHUB_TOKEN=*** npm run build',
+      kind: 'shell',
+    });
+    expect(describeShellJob('Bash', { command: 'x', description: 'Deploy com --token abc123def456 em produção de um serviço muito importante' }).label).toBe(
+      'Deploy com --token *** em produção de um serv…',
+    );
+    expect(describeShellJob('Monitor', { description: 'erros no deploy.log', command: 'tail -f deploy.log' })).toMatchObject({ label: 'erros no deploy.log', kind: 'monitor' });
+    expect(describeShellJob('Monitor', { ws: { url: 'wss://events.example.com/stream' } })).toEqual({
+      label: 'Escutando events.example.com',
+      command: 'wss://events.example.com/stream',
+      kind: 'monitor',
+    });
+  });
+
+  it('balão de espera e fim do shell (marcadores para o mundo), sempre em até 46 caracteres com a duração inteira', () => {
+    expect(SPECIAL.waitingShell('Rodar a suíte')).toMatchObject({ kind: 'wait', icon: '⏳', text: 'Esperando o shell: Rodar a suíte', tool: 'ShellWait' });
+    expect(SPECIAL.waitingShell('Build', 3).text).toBe('Esperando 3 shells: Build');
+    expect(SPECIAL.waitingShell(undefined).text).toBe('Esperando o shell');
+    const ok = SPECIAL.shellDone('Rodar a suíte completa em grupos com phpunit', 'ok', 482_000, 'vendor/bin/phpunit');
+    expect(ok).toEqual({ kind: 'run', icon: '✅', text: 'Shell terminou: Rodar a suíte compl… (8min 2s)', detail: 'vendor/bin/phpunit', tool: 'ShellDone' });
+    expect(ok.text.length).toBeLessThanOrEqual(46);
+    expect(SPECIAL.shellDone('Migração', 'failed')).toEqual({ kind: 'run', icon: '❌', text: 'Shell falhou: Migração', tool: 'ShellDone', error: true });
+    expect(SPECIAL.shellDone('Migração', 'killed')).toMatchObject({ icon: '🛑', text: 'Shell interrompido: Migração', error: true });
   });
 });

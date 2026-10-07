@@ -1,8 +1,16 @@
 // Dica flutuante do personagem sob o cursor: acompanha o personagem quadro a quadro.
 import type { UiComponent, UiContext } from './context';
-import { h, setText, setVariant } from './dom';
-import { statusLabel } from './model';
-import { createAccountChip, createActivityLine, createStatusDot, updateAccountChip, updateActivityLine, updateStatusDot } from './widgets';
+import { h, setHidden, setText, setVariant } from './dom';
+import { shellStage, shellWaitIn, statusLabel } from './model';
+import {
+  createAccountChip,
+  createActivityLine,
+  createStatusDot,
+  updateAccountChip,
+  updateActivityLine,
+  updateShellActivityLine,
+  updateStatusDot,
+} from './widgets';
 
 export class HoverTip implements UiComponent {
   readonly el: HTMLElement;
@@ -13,6 +21,7 @@ export class HoverTip implements UiComponent {
   private dot: HTMLElement;
   private status: HTMLElement;
   private activity: HTMLElement;
+  private mood: HTMLElement;
 
   constructor(private ctx: UiContext) {
     this.name = h('strong', { class: 'ui-tip__name' });
@@ -20,12 +29,14 @@ export class HoverTip implements UiComponent {
     this.dot = createStatusDot();
     this.status = h('span', { class: 'ui-tip__status' });
     this.activity = createActivityLine();
+    this.mood = h('div', { class: 'ui-tip__mood', hidden: true });
     this.el = h(
       'div',
       { class: 'ui-tip', attrs: { 'aria-hidden': 'true' } },
       h('div', { class: 'ui-tip__top' }, this.name, this.chip),
       h('div', { class: 'ui-tip__line' }, this.dot, this.status),
       this.activity,
+      this.mood,
     );
     ctx.world.onHover((id) => this.setTarget(id));
   }
@@ -68,9 +79,19 @@ export class HoverTip implements UiComponent {
     }
     setText(this.name, a.name);
     updateAccountChip(this.chip, this.ctx.account(a.account), a.account);
-    updateStatusDot(this.dot, a.status);
-    setText(this.status, a.status === 'waiting' && a.waitingFor ? `${statusLabel(a.status)}: ${a.waitingFor}` : `${statusLabel(a.status)}${a.kind === 'sub' ? ` · ${a.role}` : ''}`);
-    setVariant(this.el, 'is-', a.status);
-    updateActivityLine(this.activity, a.activity);
+    // Esperando um shell: o que ele espera (com o tempo correndo) e o que anda fazendo enquanto isso.
+    const now = this.ctx.now();
+    const wait = shellWaitIn(a, this.ctx.store.snapshot?.agents ?? [], now);
+    const status = wait ? 'shell' : a.status;
+    updateStatusDot(this.dot, status);
+    setText(this.status, a.status === 'waiting' && a.waitingFor ? `${statusLabel(a.status)}: ${a.waitingFor}` : `${statusLabel(status)}${a.kind === 'sub' ? ` · ${a.role}` : ''}`);
+    setVariant(this.el, 'is-', status);
+    if (wait) updateShellActivityLine(this.activity, wait, now);
+    else updateActivityLine(this.activity, a.activity);
+    setHidden(this.mood, !wait);
+    if (wait) {
+      const stage = shellStage(now - wait.since);
+      setText(this.mood, `${stage.emoji} ${stage.text}`);
+    }
   }
 }

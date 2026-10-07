@@ -1,9 +1,9 @@
 // Integração da simulação sem DOM: snapshots -> personagens andando, sentando, apagando a luz e indo embora.
 import { describe, expect, it } from 'vitest';
-import type { AgentInfo, OfficeSnapshot, RoomInfo } from '../../../../shared/types';
+import type { AgentInfo, OfficeSnapshot, RoomInfo, ShellJob } from '../../../../shared/types';
 import type { Appearance, ArtModule, RoomTheme } from '../../art/api';
 import { DEFAULT_WORLD_OPTIONS } from '../api';
-import { Sim } from './sim';
+import { SHELL_DONE_TOOL, Sim } from './sim';
 
 const theme: RoomTheme = {
   carpet: '#4f6d8f',
@@ -354,5 +354,179 @@ describe('simulação do escritório', () => {
     }
     expect(new Set(chars.map((c) => c.speedK.toFixed(3))).size).toBeGreaterThan(1);
     expect(new Set(chars.map((c) => c.lane)).size).toBeGreaterThan(1);
+  });
+});
+
+describe('espera de shell', () => {
+  const MIN = 60_000;
+  const shell = (ageMs: number, extra: Partial<ShellJob> = {}): ShellJob => ({
+    id: `b-${ageMs}`,
+    label: 'Rodar a suíte completa',
+    startedAt: T0 - ageMs,
+    background: true,
+    kind: 'shell',
+    ...extra,
+  });
+  const done = (id: string, error = false): AgentInfo['activity'] => ({ id, kind: 'run', icon: error ? '❌' : '✅', text: 'Shell concluído', tool: SHELL_DONE_TOOL, error, at: T0 });
+
+  it('status shell: fica na mesa com o balde de pipoca e não sai para passear', () => {
+    const sim = newSim();
+    const clock = { now: T0 };
+    sim.applySnapshot(snap([room('/a', 0)], [agent('ana', '/a', 'shell', { shells: [shell(20_000)] })]), clock.now);
+    const ana = sim.chars.get('ana')!;
+    expect(ana.mode).toBe('shell');
+    expect(ana.shellCount).toBe(1);
+    expect(ana.shellLabel).toBe('Rodar a suíte completa');
+    ana.nextOutingAt = 1;
+    run(sim, clock, 60, () => ana.atSpot !== ana.homeSpot);
+    expect(ana.atSpot).toBe(ana.homeSpot);
+    expect(ana.pose).toBe('wait');
+    expect(ana.held).toBe('popcorn');
+    expect(ana.shellStage).toBe('popcorn');
+  });
+
+  it('a escalada segue a idade do shell mais antigo: giros, teia/bocejo e cochilo', () => {
+    const sim = newSim();
+    const clock = { now: T0 };
+    const rooms = [room('/a', 0)];
+    sim.applySnapshot(snap(rooms, [agent('ana', '/a', 'shell', { shells: [shell(4 * MIN), shell(30_000)] })]), clock.now);
+    const ana = sim.chars.get('ana')!;
+    expect(ana.shellCount).toBe(2);
+    run(sim, clock, 0.2);
+    expect(ana.shellStage).toBe('restless');
+    expect(ana.held).toBe('none');
+    const home = sim.spots.get(ana.homeSpot)!;
+    const dirs = new Set<string>();
+    run(sim, clock, 30, () => {
+      dirs.add(ana.dir);
+      return false;
+    });
+    // pelo menos um giro completo na cadeira
+    expect(dirs.size).toBe(4);
+    expect(ana.dir).toBe(home.dir);
+    sim.applySnapshot(snap(rooms, [agent('ana', '/a', 'shell', { shells: [shell(12 * MIN + (clock.now - T0))] })], 2), clock.now);
+    run(sim, clock, 0.1);
+    expect(ana.shellStage).toBe('cobweb');
+    let yawned = false;
+    run(sim, clock, 40, () => {
+      if (ana.chatEmoji === '🥱' && ana.pose === 'sleep') yawned = true;
+      return yawned;
+    });
+    expect(yawned).toBe(true);
+    sim.applySnapshot(snap(rooms, [agent('ana', '/a', 'shell', { shells: [shell(26 * MIN + (clock.now - T0))] })], 3), clock.now);
+    run(sim, clock, 0.1);
+    expect(ana.shellStage).toBe('nap');
+    expect(ana.pose).toBe('sleep');
+  });
+
+  it('passeando quando o shell começa: volta para a mesa (sai da cabine normalmente)', () => {
+    const sim = newSim();
+    const clock = { now: T0 };
+    const rooms = [room('/a', 0)];
+    sim.applySnapshot(snap(rooms, [agent('ana', '/a', 'idle')]), clock.now);
+    const ana = sim.chars.get('ana')!;
+    ana.nextOutingAt = 1;
+    run(sim, clock, 60, () => ana.atSpot !== ana.homeSpot && !!ana.step && ana.step.t !== 'exit');
+    expect(ana.atSpot === ana.homeSpot).toBe(false);
+    sim.applySnapshot(snap(rooms, [agent('ana', '/a', 'shell', { shells: [shell(1000)] })], 2), clock.now);
+    expect(ana.mode).toBe('shell');
+    let ran = false;
+    run(sim, clock, 60, () => {
+      if (ana.pose === 'run') ran = true;
+      return ana.atSpot === ana.homeSpot && !ana.step && !ana.queue.length;
+    });
+    expect(ana.atSpot).toBe(ana.homeSpot);
+    expect(ran).toBe(false);
+    run(sim, clock, 0.1);
+    expect(ana.pose).toBe('wait');
+  });
+
+  it('comando longo em primeiro plano: digitando nos primeiros 10 s, depois a mesma espera', () => {
+    const sim = newSim();
+    const clock = { now: T0 };
+    const rooms = [room('/a', 0)];
+    const fg = shell(0, { id: 'toolu_1', background: false });
+    sim.applySnapshot(snap(rooms, [agent('ana', '/a', 'working', { shells: [fg] })]), clock.now);
+    const ana = sim.chars.get('ana')!;
+    run(sim, clock, 5);
+    expect(ana.mode).toBe('work');
+    expect(ana.pose).toBe('type');
+    run(sim, clock, 7);
+    expect(ana.mode).toBe('shell');
+    expect(ana.pose).toBe('wait');
+    expect(ana.atSpot).toBe(ana.homeSpot);
+    // o comando terminou (tool_result): volta a digitar
+    sim.applySnapshot(snap(rooms, [agent('ana', '/a', 'working', { shells: [] })], 2), clock.now);
+    run(sim, clock, 0.2);
+    expect(ana.mode).toBe('work');
+    expect(ana.pose).toBe('type');
+  });
+
+  it('shell concluído: levanta, comemora com ⭐ e confete e volta a trabalhar', () => {
+    const sim = newSim();
+    const clock = { now: T0 };
+    const rooms = [room('/a', 0)];
+    const base = agent('ana', '/a', 'shell', { shells: [shell(2 * MIN)], activity: { id: 'a0', kind: 'run', icon: '💻', text: 'Rodando', at: T0 } });
+    sim.applySnapshot(snap(rooms, [base]), clock.now);
+    run(sim, clock, 0.5);
+    const ana = sim.chars.get('ana')!;
+    // a notificação chega e o agente já volta a trabalhar no mesmo snapshot
+    sim.applySnapshot(snap(rooms, [{ ...base, status: 'working', shells: [], activity: done('a1') }], 2), clock.now);
+    expect(ana.icon).toBe('star');
+    expect(sim.effects.some((e) => e.kind === 'confetti' && e.charId === 'ana')).toBe(true);
+    const poses = new Set<string>();
+    run(sim, clock, 3, () => {
+      poses.add(ana.pose);
+      return false;
+    });
+    expect(poses.has('stretch')).toBe(true);
+    run(sim, clock, 5, () => ana.atSpot === ana.homeSpot && ana.pose === 'type');
+    expect(ana.atSpot).toBe(ana.homeSpot);
+    expect(ana.mode).toBe('work');
+    expect(ana.pose).toBe('type');
+  });
+
+  it('fim de shell antigo não comemora na carga; um novo atrás de outra atividade comemora', () => {
+    const sim = newSim();
+    const clock = { now: T0 };
+    const rooms = [room('/a', 0)];
+    const old = done('old')!;
+    const base = agent('ana', '/a', 'working', { recent: [old], activity: { id: 'a0', kind: 'edit', icon: '✏️', text: 'Editando', at: T0 } });
+    sim.applySnapshot(snap(rooms, [base]), clock.now);
+    run(sim, clock, 0.5);
+    const ana = sim.chars.get('ana')!;
+    expect(ana.icon).toBeNull();
+    expect(sim.effects.length).toBe(0);
+    const fresh = { ...done('new')!, at: T0 + 400 };
+    const later = { id: 'a2', kind: 'read' as const, icon: '📖', text: 'Lendo a saída', at: T0 + 450 };
+    sim.applySnapshot(snap(rooms, [{ ...base, recent: [old, fresh, later], activity: later }], 2), clock.now);
+    expect(ana.icon).toBe('star');
+    expect(sim.effects.length).toBe(1);
+    // o mesmo snapshot de novo não comemora outra vez
+    sim.applySnapshot(snap(rooms, [{ ...base, recent: [old, fresh, later], activity: later }], 3), clock.now);
+    expect(sim.effects.length).toBe(1);
+  });
+
+  it('shell falhou: nuvenzinha de chuva, cabeça baixa por ~4 s, sem confete', () => {
+    const sim = newSim();
+    const clock = { now: T0 };
+    const rooms = [room('/a', 0)];
+    const base = agent('ana', '/a', 'shell', { shells: [shell(2 * MIN), shell(MIN)], activity: { id: 'a0', kind: 'run', icon: '💻', text: 'Rodando', at: T0 } });
+    sim.applySnapshot(snap(rooms, [base]), clock.now);
+    run(sim, clock, 0.5);
+    const ana = sim.chars.get('ana')!;
+    sim.effects.length = 0;
+    // um dos dois falhou; o outro continua rodando
+    sim.applySnapshot(snap(rooms, [{ ...base, shells: [shell(MIN)], activity: done('a1', true) }], 2), clock.now);
+    expect(ana.icon).toBe('storm');
+    expect(sim.effects.length).toBe(0);
+    run(sim, clock, 1);
+    expect(ana.pose).toBe('sleep');
+    expect(ana.atSpot).toBe(ana.homeSpot);
+    run(sim, clock, 4);
+    expect(ana.icon).toBeNull();
+    expect(ana.mode).toBe('shell');
+    expect(ana.shellCount).toBe(1);
+    expect(ana.pose).toBe('wait');
   });
 });

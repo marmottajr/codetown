@@ -223,6 +223,22 @@ export const ICONS = {
     '..######..',
     '..........',
   ]),
+  // Ampulheta (esperando o shell): moldura na cor do texto e areia âmbar caindo.
+  hourglass: pixelIcon(
+    [
+      '#########',
+      '.#sssss#.',
+      '.#sssss#.',
+      '..#sss#..',
+      '...#s#...',
+      '...#s#...',
+      '..#.s.#..',
+      '.#..s..#.',
+      '.#.sss.#.',
+      '#########',
+    ],
+    { '#': 'currentColor', s: '#f7c76b' },
+  ),
   chevronDown: pixelIcon(['#......#', '##....##', '.##..##.', '..####..', '...##...']),
   chevronUp: pixelIcon(['...##...', '..####..', '.##..##.', '##....##', '#......#']),
   arrowDown: pixelIcon(['...##...', '...##...', '...##...', '#######.', '.#####..', '..###...', '...#....'].map((r) => r.padEnd(8, '.'))),

@@ -1,6 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import type { AccountInfo, AgentInfo, RoomInfo } from '../../../shared/types';
-import { accountsOf, activityFallback, aggregateTasks, computeCounters, groupRooms, matchesQuery, mergeHistory, roleLabel, shortcutHint, sortByUrgency, waitingAgents } from './model';
+import type { AccountInfo, AgentInfo, RoomInfo, ShellJob } from '../../../shared/types';
+import {
+  accountsOf,
+  activityFallback,
+  aggregateTasks,
+  computeCounters,
+  displayStatus,
+  FOREGROUND_WAIT_MS,
+  groupRooms,
+  hasRunningShells,
+  matchesQuery,
+  mergeHistory,
+  roleLabel,
+  SHELL_STAGES,
+  shellBoxText,
+  shellDoneKind,
+  shellKindLabel,
+  shellLine,
+  shellStage,
+  shellWait,
+  shellWaitIn,
+  shellWaitingAgents,
+  shortcutHint,
+  sortByUrgency,
+  statusLabel,
+  visibleShells,
+  waitingAgents,
+} from './model';
 
 function agent(p: Partial<AgentInfo> & Pick<AgentInfo, 'id' | 'roomId'>): AgentInfo {
   return {
@@ -45,8 +71,8 @@ const snap = { rooms, agents, accounts };
 
 describe('computeCounters', () => {
   it('conta salas, agentes presentes, trabalhando, subagentes ativos e esperando', () => {
-    expect(computeCounters(snap)).toEqual({ rooms: 3, agents: 6, working: 3, subagents: 2, waiting: 2 });
-    expect(computeCounters(null)).toEqual({ rooms: 0, agents: 0, working: 0, subagents: 0, waiting: 0 });
+    expect(computeCounters(snap)).toEqual({ rooms: 3, agents: 6, working: 3, subagents: 2, waiting: 2, shells: 0 });
+    expect(computeCounters(null)).toEqual({ rooms: 0, agents: 0, working: 0, subagents: 0, waiting: 0, shells: 0 });
   });
   it('waitingAgents ordena por quem espera há mais tempo', () => {
     expect(waitingAgents(agents).map((a) => a.id)).toEqual(['ana', 'marina']);
@@ -142,7 +168,172 @@ describe('activityFallback', () => {
     expect(activityFallback({ status: 'working' })).toBe('Trabalhando…');
     expect(activityFallback({ status: 'waiting', waitingFor: 'aprovar uma permissão' })).toBe('Precisa de você: aprovar uma permissão');
     expect(activityFallback({ status: 'waiting' })).toBe('Precisa de você');
+    expect(activityFallback({ status: 'shell' })).toBe('Esperando o shell terminar');
     expect(activityFallback({ status: 'done' })).toBe('Concluiu a tarefa');
     expect(activityFallback({ status: 'offline' })).toBe('Saindo do escritório');
+  });
+});
+
+// ---------------------------------------------------------------- esperando o shell
+
+const S = 1_000;
+const MIN = 60 * S;
+const NOW = 1_800_000_000_000;
+
+function job(p: Partial<ShellJob> & Pick<ShellJob, 'id'>): ShellJob {
+  return { label: `Comando ${p.id}`, startedAt: NOW - MIN, background: true, kind: 'shell', ...p };
+}
+
+describe('shellWait', () => {
+  it("status 'shell': todos os comandos, o tempo é o do shell mais antigo", () => {
+    const w = shellWait(
+      {
+        status: 'shell',
+        statusSince: NOW - 5 * S,
+        shells: [job({ id: 'b2', startedAt: NOW - 2 * MIN }), job({ id: 'b1', label: 'Rodar a suíte', startedAt: NOW - 12 * MIN })],
+      },
+      NOW,
+    )!;
+    expect(w.jobs.map((j) => j.id)).toEqual(['b1', 'b2']);
+    expect(w.main?.label).toBe('Rodar a suíte');
+    expect(w.since).toBe(NOW - 12 * MIN);
+    expect(w.foreground).toBe(false);
+  });
+  it('monitor mais antigo não dirige o tempo quando há um shell', () => {
+    const w = shellWait(
+      { status: 'shell', statusSince: NOW, shells: [job({ id: 'm', kind: 'monitor', startedAt: NOW - 60 * MIN }), job({ id: 'b', startedAt: NOW - MIN })] },
+      NOW,
+    )!;
+    expect(w.main?.id).toBe('b');
+    expect(w.since).toBe(NOW - MIN);
+    expect(w.jobs).toHaveLength(2);
+  });
+  it("status 'shell' sem comandos conhecidos usa statusSince", () => {
+    const w = shellWait({ status: 'shell', statusSince: NOW - 30 * S }, NOW)!;
+    expect(w.jobs).toEqual([]);
+    expect(w.main).toBeUndefined();
+    expect(w.since).toBe(NOW - 30 * S);
+  });
+  it('trabalhando: só comandos em primeiro plano rodando há mais de 10 s', () => {
+    const fresh = job({ id: 'f', background: false, startedAt: NOW - 3 * S });
+    const long = job({ id: 'l', background: false, startedAt: NOW - FOREGROUND_WAIT_MS });
+    const bg = job({ id: 'bg', startedAt: NOW - 20 * MIN });
+    expect(shellWait({ status: 'working', statusSince: 0, shells: [fresh, bg] }, NOW)).toBeNull();
+    const w = shellWait({ status: 'working', statusSince: 0, shells: [fresh, long, bg] }, NOW)!;
+    expect(w.jobs.map((j) => j.id)).toEqual(['l']);
+    expect(w.foreground).toBe(true);
+  });
+  it('outros status nunca esperam shell; início no futuro (relógio adiantado) não passa de agora', () => {
+    expect(shellWait({ status: 'idle', statusSince: 0, shells: [job({ id: 'x' })] }, NOW)).toBeNull();
+    expect(shellWait({ status: 'waiting', statusSince: 0, shells: [job({ id: 'x' })] }, NOW)).toBeNull();
+    expect(shellWait({ status: 'shell', statusSince: 0, shells: [job({ id: 'x', startedAt: NOW + 5 * S })] }, NOW)!.since).toBe(NOW);
+  });
+  it('displayStatus mostra o comando longo em primeiro plano como "Esperando o shell"', () => {
+    const long = job({ id: 'l', background: false, startedAt: NOW - 15 * S });
+    expect(displayStatus({ status: 'working', statusSince: 0, shells: [long] }, NOW)).toBe('shell');
+    expect(displayStatus({ status: 'working', statusSince: 0, shells: [] }, NOW)).toBe('working');
+    expect(displayStatus({ status: 'shell', statusSince: 0 }, NOW)).toBe('shell');
+    expect(statusLabel('shell')).toBe('Esperando o shell');
+  });
+});
+
+describe('contagem e ordem com shells', () => {
+  const shellRoom = [room('mega', 0)];
+  const list: AgentInfo[] = [
+    agent({ id: 'beatriz', roomId: 'mega', status: 'shell', statusSince: NOW - MIN, shells: [job({ id: 'b1', startedAt: NOW - 8 * MIN }), job({ id: 'b2' })] }),
+    agent({ id: 'caio', roomId: 'mega', status: 'working', startedAt: 2, shells: [job({ id: 'fg', background: false, startedAt: NOW - 30 * S })] }),
+    agent({ id: 'dani', roomId: 'mega', status: 'working', startedAt: 3, shells: [job({ id: 'fg2', background: false, startedAt: NOW - 2 * S })] }),
+    agent({ id: 'eva', roomId: 'mega', status: 'shell', startedAt: 4, statusSince: NOW - 3 * S }),
+    agent({ id: 'fora', roomId: 'mega', status: 'offline', shells: [job({ id: 'z' })] }),
+    agent({ id: 'gabi', roomId: 'mega', status: 'waiting', startedAt: 5 }),
+  ];
+  it('computeCounters conta os shells esperados e tira do "trabalhando" quem está parado num comando longo', () => {
+    expect(computeCounters({ rooms: shellRoom, agents: list }, NOW)).toEqual({ rooms: 1, agents: 5, working: 1, subagents: 0, waiting: 1, shells: 4 });
+  });
+  it('shellWaitingAgents: de quem espera há mais tempo para o mais recente', () => {
+    expect(shellWaitingAgents(list, NOW).map((a) => a.id)).toEqual(['beatriz', 'caio', 'eva']);
+  });
+  it('sortByUrgency: "precisa de você" > "esperando o shell" > "trabalhando"', () => {
+    expect(sortByUrgency(list).map((a) => a.id)).toEqual(['gabi', 'beatriz', 'eva', 'caio', 'dani', 'fora']);
+  });
+  it('hasRunningShells liga o cronômetro só com shells rodando', () => {
+    expect(hasRunningShells({ agents: list })).toBe(true);
+    expect(hasRunningShells({ agents: [agent({ id: 'x', roomId: 'mega', status: 'idle' })] })).toBe(false);
+    expect(hasRunningShells({ agents: [agent({ id: 'x', roomId: 'mega', status: 'offline', shells: [job({ id: 'z' })] })] })).toBe(false);
+    expect(hasRunningShells(null)).toBe(false);
+  });
+  it('visibleShells esconde comandos em primeiro plano recém-iniciados', () => {
+    const a = { shells: [job({ id: 'novo', background: false, startedAt: NOW - 500 }), job({ id: 'mon', kind: 'monitor', startedAt: NOW - 100 }), job({ id: 'bg', startedAt: NOW - 5 * MIN })] };
+    expect(visibleShells(a, NOW).map((j) => j.id)).toEqual(['bg', 'mon']);
+    expect(visibleShells({}, NOW)).toEqual([]);
+  });
+  it('a busca encontra o agente pelo shell que ele espera', () => {
+    const a = agent({ id: 'b', roomId: 'mega', status: 'shell', shells: [job({ id: 'b1', label: 'Rodar a suíte completa com phpunit' })] });
+    expect(matchesQuery(a, shellRoom[0], undefined, 'phpunit')).toBe(true);
+    expect(matchesQuery(a, shellRoom[0], undefined, 'esperando shell')).toBe(true);
+    expect(matchesQuery(agent({ id: 'x', roomId: 'mega', status: 'idle' }), shellRoom[0], undefined, 'shell')).toBe(false);
+  });
+});
+
+describe('shellWaitIn', () => {
+  const main = agent({ id: 'm', roomId: 'mega', status: 'shell', statusSince: NOW - 10 * S });
+  const sub = agent({ id: 's', kind: 'sub', parentId: 'm', roomId: 'mega', status: 'done', shells: [job({ id: 'b1', label: 'Build do sub', startedAt: NOW - 4 * MIN })] });
+  const neto = agent({ id: 'n', kind: 'sub', parentId: 's', roomId: 'mega', status: 'working', shells: [job({ id: 'b2', startedAt: NOW - MIN }), job({ id: 'fg', background: false, startedAt: NOW - 2 * S })] });
+  it('sem shells próprios, usa os de segundo plano dos subagentes (em qualquer nível)', () => {
+    const w = shellWaitIn(main, [main, sub, neto], NOW)!;
+    expect(w.jobs.map((j) => j.id)).toEqual(['b1', 'b2']);
+    expect(w.main?.label).toBe('Build do sub');
+    expect(w.since).toBe(NOW - 4 * MIN);
+  });
+  it('com shells próprios (ou fora do status shell), ignora os subagentes', () => {
+    const own = { ...main, shells: [job({ id: 'meu' })] };
+    expect(shellWaitIn(own, [own, sub], NOW)!.jobs.map((j) => j.id)).toEqual(['meu']);
+    expect(shellWaitIn({ ...main, status: 'idle' }, [main, sub], NOW)).toBeNull();
+    expect(shellWaitIn(main, [main], NOW)!.jobs).toEqual([]);
+  });
+  it('computeCounters conta os shells herdados', () => {
+    expect(computeCounters({ rooms: [room('mega', 0)], agents: [main, sub] }, NOW).shells).toBe(1);
+    expect(computeCounters({ rooms: [room('mega', 0)], agents: [main, sub, neto] }, NOW).shells).toBe(2);
+  });
+});
+
+describe('textos da espera', () => {
+  it('shellLine: "⏳ <label> · <tempo>" e "×N" com vários', () => {
+    const one = shellLine({ jobs: [job({ id: 'a', label: 'Rodar testes' })], main: job({ id: 'a', label: 'Rodar testes' }), since: NOW - 75 * S, foreground: false }, NOW);
+    expect(one).toEqual({ label: 'Rodar testes', time: '1:15', count: '', text: '⏳ Rodar testes · 1:15' });
+    const two = shellLine({ jobs: [job({ id: 'a' }), job({ id: 'b' })], main: job({ id: 'a', label: 'Build' }), since: NOW - 62 * MIN, foreground: false }, NOW);
+    expect(two.count).toBe('×2');
+    expect(two.time).toBe('1:02:00');
+    expect(two.text).toBe('⏳ Build · 1:02:00 (2 shells)');
+  });
+  it('shellLine sem comandos conhecidos usa um texto genérico', () => {
+    expect(shellLine({ jobs: [], since: NOW, foreground: false }, NOW).label).toBe('Esperando o shell terminar');
+    expect(shellLine({ jobs: [], since: NOW, foreground: true }, NOW).label).toBe('Esperando o comando terminar');
+  });
+  it('shellBoxText explica o que está acontecendo', () => {
+    expect(shellBoxText({ foreground: false, jobs: [job({ id: 'a' })] })).toMatch(/^Terminou o turno e está esperando o shell terminar\./);
+    expect(shellBoxText({ foreground: false, jobs: [job({ id: 'a' }), job({ id: 'b' })] })).toMatch(/esperando 2 shells terminarem/);
+    expect(shellBoxText({ foreground: true, jobs: [] })).toMatch(/parado num comando/);
+  });
+  it('shellKindLabel', () => {
+    expect(shellKindLabel({ kind: 'shell', background: true })).toBe('segundo plano');
+    expect(shellKindLabel({ kind: 'shell', background: false })).toBe('primeiro plano');
+    expect(shellKindLabel({ kind: 'monitor', background: true })).toBe('monitor');
+  });
+  it('shellStage segue a escalada: pipoca, giro na cadeira, teia, cochilo', () => {
+    expect(SHELL_STAGES.map((s) => s.stage)).toEqual(['popcorn', 'spin', 'cobweb', 'nap']);
+    expect(shellStage(0)).toMatchObject({ stage: 'popcorn', nextIn: 3 * MIN });
+    expect(shellStage(3 * MIN - 1).stage).toBe('popcorn');
+    expect(shellStage(3 * MIN)).toMatchObject({ stage: 'spin', nextIn: 7 * MIN });
+    expect(shellStage(10 * MIN).stage).toBe('cobweb');
+    expect(shellStage(24 * MIN + 59 * S)).toMatchObject({ stage: 'cobweb', nextIn: S });
+    expect(shellStage(25 * MIN)).toMatchObject({ stage: 'nap', nextIn: null });
+    expect(shellStage(-5 * S).stage).toBe('popcorn');
+  });
+  it('shellDoneKind reconhece o marcador ShellDone do servidor', () => {
+    expect(shellDoneKind({ tool: 'ShellDone' })).toBe('ok');
+    expect(shellDoneKind({ tool: 'ShellDone', error: true })).toBe('fail');
+    expect(shellDoneKind({ tool: 'Bash', error: true })).toBeNull();
+    expect(shellDoneKind(undefined)).toBeNull();
   });
 });

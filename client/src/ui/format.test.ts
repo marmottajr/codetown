@@ -6,6 +6,7 @@ import {
   FIVE_HOURS_MS,
   formatCountdown,
   formatDuration,
+  formatElapsed,
   formatInt,
   formatResetAt,
   formatTokens,
@@ -176,5 +177,26 @@ describe('reinício das janelas de uso', () => {
     expect(usageWindowView({ utilization: 10 }, now - 6 * H, now, FIVE_HOURS_MS)!.renewed).toBe(true);
     expect(usageWindowView({ utilization: 10 }, now - 6 * H, now, WEEK_MS)!.pct).toBe(10);
     expect(usageWindowView(undefined, now, now, WEEK_MS)).toBeNull();
+  });
+});
+
+describe('formatElapsed', () => {
+  it('cronômetro m:ss abaixo de 1 hora', () => {
+    expect(formatElapsed(0)).toBe('0:00');
+    expect(formatElapsed(7 * S + 999)).toBe('0:07');
+    expect(formatElapsed(59 * S)).toBe('0:59');
+    expect(formatElapsed(M)).toBe('1:00');
+    expect(formatElapsed(12 * M + 31 * S)).toBe('12:31');
+    expect(formatElapsed(H - S)).toBe('59:59');
+  });
+  it('h:mm:ss a partir de 1 hora e duração legível a partir de 1 dia', () => {
+    expect(formatElapsed(H)).toBe('1:00:00');
+    expect(formatElapsed(H + 2 * M + 10 * S)).toBe('1:02:10');
+    expect(formatElapsed(23 * H + 59 * M + 59 * S)).toBe('23:59:59');
+    expect(formatElapsed(D + 2 * H)).toBe('1 d 2 h');
+  });
+  it('valores negativos ou inválidos viram 0:00', () => {
+    expect(formatElapsed(-5 * S)).toBe('0:00');
+    expect(formatElapsed(Number.NaN)).toBe('0:00');
   });
 });

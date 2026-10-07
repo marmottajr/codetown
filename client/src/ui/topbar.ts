@@ -1,9 +1,9 @@
 // Barra superior: marca, conexão, contadores, uso por conta e botões de controle.
 import type { UiComponent, UiContext } from './context';
 import { h, iconButton, setAttr, setHidden, setText, setTitle, setVariant } from './dom';
-import { formatInt } from './format';
+import { formatDuration, formatInt } from './format';
 import { FALLBACK_MARK, ICONS } from './icons';
-import { computeCounters, waitingAgents, type Counters } from './model';
+import { computeCounters, shellLine, shellWaitIn, shellWaitingAgents, waitingAgents, type Counters } from './model';
 import { UsageCards } from './usage';
 import { wordmark } from './widgets';
 
@@ -13,7 +13,8 @@ interface CounterRefs {
   label: HTMLElement;
 }
 
-const COUNTERS: { key: keyof Counters; singular: string; plural: string; hint: string }[] = [
+/** Contadores fixos (o de shells é à parte: só aparece quando há shells rodando). */
+const COUNTERS: { key: Exclude<keyof Counters, 'shells'>; singular: string; plural: string; hint: string }[] = [
   { key: 'rooms', singular: 'sala', plural: 'salas', hint: 'Salas abertas (uma por projeto)' },
   { key: 'agents', singular: 'agente', plural: 'agentes', hint: 'Agentes no escritório (principais e subagentes)' },
   { key: 'working', singular: 'trabalhando', plural: 'trabalhando', hint: 'Agentes processando um pedido agora' },
@@ -27,6 +28,9 @@ export class TopBar implements UiComponent {
   private pillText: HTMLElement;
   private demoBadge: HTMLElement;
   private counters = new Map<keyof Counters, CounterRefs>();
+  private shellsBtn: HTMLButtonElement;
+  /** Próximo agente do botão de shells (cliques seguidos passam por todos, do que espera há mais tempo). */
+  private shellCursor = 0;
   private usage: UsageCards;
   private hadOpen = false;
   private sidebarBtn: HTMLButtonElement;
@@ -61,6 +65,22 @@ export class TopBar implements UiComponent {
       }
       this.counters.set(c.key, { el, value, label });
       counterWrap.append(el);
+    }
+
+    // "⏳ N shells": entre os subagentes e o "precisa de você"; some quando não há shells rodando.
+    {
+      const icon = h('span', { class: 'ui-counter__icon ui-hourglass', attrs: { 'aria-hidden': 'true' } });
+      icon.innerHTML = ICONS.hourglass;
+      const value = h('span', { class: 'ui-counter__value', text: '0' });
+      const label = h('span', { class: 'ui-counter__label', text: 'shells' });
+      this.shellsBtn = h(
+        'button',
+        { class: 'ui-counter ui-counter--shells', type: 'button', hidden: true, on: { click: () => this.focusNextShell() } },
+        icon,
+        h('span', { class: 'ui-counter__stack' }, value, label),
+      );
+      this.counters.set('shells', { el: this.shellsBtn, value, label });
+      counterWrap.insertBefore(this.shellsBtn, this.counters.get('waiting')!.el);
     }
 
     this.usage = new UsageCards(ctx);
@@ -126,7 +146,8 @@ export class TopBar implements UiComponent {
     setHidden(this.demoBadge, !(conn === 'open' && snap?.meta.demo));
 
     // Contadores.
-    const c = computeCounters(snap);
+    const now = this.ctx.now();
+    const c = computeCounters(snap, now);
     for (const def of COUNTERS) {
       const refs = this.counters.get(def.key)!;
       const n = c[def.key];
@@ -137,11 +158,45 @@ export class TopBar implements UiComponent {
     const waiting = this.counters.get('waiting')!.el as HTMLButtonElement;
     waiting.classList.toggle('is-active', c.waiting > 0);
     waiting.disabled = c.waiting === 0;
+    this.renderShells(c.shells, now);
 
     this.usage.render();
 
     this.sidebarBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('sidebar')));
     this.feedBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('feed')));
+  }
+
+  private renderShells(n: number, now: number): void {
+    const refs = this.counters.get('shells')!;
+    setHidden(this.shellsBtn, n === 0);
+    if (n === 0) {
+      this.shellCursor = 0;
+      return;
+    }
+    const all = this.ctx.store.snapshot?.agents ?? [];
+    const agents = shellWaitingAgents(all, now);
+    setText(refs.value, formatInt(n));
+    setText(refs.label, n === 1 ? 'shell' : 'shells');
+    const who = agents.length === 1 ? agents[0].name : `${formatInt(agents.length)} agentes`;
+    setAttr(refs.el, 'aria-label', `${formatInt(n)} ${n === 1 ? 'shell rodando' : 'shells rodando'}; ${who} esperando. Ir até o próximo.`);
+    // Dica: quem espera o quê, do que espera há mais tempo.
+    const lines = agents.slice(0, 6).map((a) => {
+      const w = shellWaitIn(a, all, now)!;
+      return `${a.name}: ${shellLine(w, now).label} (${formatDuration(now - w.since)})`;
+    });
+    if (agents.length > 6) lines.push(`… e mais ${agents.length - 6}`);
+    setTitle(refs.el, `Shells rodando: ${agents.length === 1 ? 'o agente espera' : 'os agentes esperam'} terminar.\n${lines.join('\n')}\nClique para ir até ${agents.length > 1 ? 'cada um' : 'ele'}.`);
+  }
+
+  private focusNextShell(): void {
+    const agents = shellWaitingAgents(this.ctx.store.snapshot?.agents ?? [], this.ctx.now());
+    if (!agents.length) return;
+    // Se o atual já está selecionado, passa para o próximo da fila.
+    const sel = this.ctx.selection();
+    let i = this.shellCursor % agents.length;
+    if (sel?.type === 'agent' && agents[i].id === sel.id) i = (i + 1) % agents.length;
+    this.shellCursor = i + 1;
+    this.ctx.select({ type: 'agent', id: agents[i].id }, { focus: true });
   }
 
   private focusFirstWaiting(): void {

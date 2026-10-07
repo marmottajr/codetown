@@ -222,6 +222,57 @@ export function drawScreen(ctx: Ctx, r: Rect, mode: ScreenMode, t: number, seed:
       }
       break;
     }
+    case 'progress': {
+      // Esperando um comando: terminal escuro com o comando no topo, barra de progresso que enche e
+      // recomeça (com um brilho correndo na ponta), spinner girando e cursor piscando. Tudo O(1)
+      // por quadro (só depende do tamanho da tela), como os demais modos.
+      fill(ctx, x, y, w, h, '#0b1210');
+      fill(ctx, x, y + h - 1, w, 1, '#0f1916');
+      const tiny = h < 9;
+      // Linha do comando: prompt + texto apagado (comprimento varia por semente).
+      fill(ctx, x + 1, y + 1, 1, 1, '#5cff7a');
+      fill(ctx, x + 3, y + 1, Math.max(1, Math.min(w - 5, 4 + (h32(s, 1) % Math.max(1, w - 7)))), 1, '#3c8f57');
+      // Saída anterior (só em telas maiores, ex.: TV).
+      if (h >= 13) {
+        fill(ctx, x + 3, y + 3, Math.max(1, Math.min(w - 5, 3 + (h32(s, 2) % Math.max(1, w - 6)))), 1, '#2a5c3c');
+        fill(ctx, x + 3, y + 5, Math.max(1, Math.min(w - 5, 2 + (h32(s, 3) % Math.max(1, w - 6)))), 1, '#2a5c3c');
+      }
+      // Barra: colchetes nas pontas, trilho escuro, enchimento verde com topo claro e ponta brilhante.
+      const by = tiny ? y + 3 : h >= 13 ? y + h - 7 : y + 3;
+      const bh = tiny ? 1 : 2;
+      const inner = Math.max(1, w - 4);
+      fill(ctx, x + 1, by, 1, bh, '#7d8ea0');
+      fill(ctx, x + w - 2, by, 1, bh, '#7d8ea0');
+      fill(ctx, x + 2, by, inner, bh, '#163322');
+      const period = 3400 + (s % 5) * 300; // ciclo de cada monitor um pouco diferente
+      const cycle = (t + (s % 997) * 37) / period;
+      const p = frac(cycle);
+      // Enche em 85% do ciclo e segura cheia no resto (pisca antes de recomeçar).
+      const filled = p < 0.85 ? Math.floor((p / 0.85) * (inner + 1)) : inner;
+      const done = p >= 0.85;
+      if (filled > 0) {
+        const blink = done && Math.floor(t / 160) % 2 === 0;
+        fill(ctx, x + 2, by, filled, bh, blink ? '#b9ffca' : '#3ccf63');
+        if (bh > 1) fill(ctx, x + 2, by, filled, 1, blink ? '#e4ffe9' : '#7cf09a');
+        if (!done) fill(ctx, x + 1 + filled, by, 1, bh, '#d8ffe2');
+      }
+      // Spinner (anel 3x3 com cabeça brilhante e rastro) + cursor piscando ao lado.
+      const sy = tiny ? y + h - 3 : h >= 13 ? y + h - 4 : y + h - 4;
+      if (sy + 2 < y + h) {
+        const RING = [[1, 0], [2, 0], [2, 1], [2, 2], [1, 2], [0, 2], [0, 1], [0, 0]] as const;
+        const head = Math.floor(t / 110 + (s % 8)) % 8;
+        for (let k = 0; k < 8; k++) {
+          const age = (head - k + 8) % 8;
+          const c = age === 0 ? '#9ff3ff' : age === 1 ? '#4fb8d6' : age === 2 ? '#2b6f86' : '#173a45';
+          fill(ctx, x + 1 + RING[k][0], sy + RING[k][1], 1, 1, c);
+        }
+        // Pontinhos "..." que vão aparecendo e o cursor de bloco.
+        const dots = Math.floor(t / 420 + (s % 3)) % 4;
+        for (let k = 0; k < dots && 5 + k * 2 < w - 2; k++) fill(ctx, x + 5 + k * 2, sy + 2, 1, 1, '#3c8f57');
+        if (Math.floor(t / 500) % 2 === 0 && x + 11 < x + w) fill(ctx, x + 11, sy + 1, 1, 2, '#d6ffe0');
+      }
+      break;
+    }
     case 'alert': {
       const on = Math.floor(t / 380) % 2 === 0;
       fill(ctx, x, y, w, h, on ? '#f2b33d' : '#8a5a12');

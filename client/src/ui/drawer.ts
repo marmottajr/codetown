@@ -1,5 +1,5 @@
 // Gaveta de detalhes (direita): agente ou sala selecionados.
-import type { Activity, AgentInfo, FeedItem, RoomInfo, TaskItem } from '../../../shared/types';
+import type { Activity, AgentInfo, FeedItem, RoomInfo, ShellJob, TaskItem } from '../../../shared/types';
 import { roomTheme } from '../art';
 import { createAvatarPlaceholder, updateAvatar } from './avatar';
 import type { UiComponent, UiContext } from './context';
@@ -8,6 +8,7 @@ import {
   formatClock,
   formatDateTime,
   formatDuration,
+  formatElapsed,
   formatInt,
   formatTokens,
   formatUSD,
@@ -18,7 +19,22 @@ import {
   shortPath,
 } from './format';
 import { ICONS } from './icons';
-import { accountsOf, activityFallback, aggregateTasks, mergeHistory, roleLabel, sortByUrgency, statusLabel, taskProgress } from './model';
+import {
+  accountsOf,
+  activityFallback,
+  aggregateTasks,
+  mergeHistory,
+  roleLabel,
+  shellBoxText,
+  shellDoneKind,
+  shellKindLabel,
+  shellStage,
+  shellWaitIn,
+  sortByUrgency,
+  statusLabel,
+  taskProgress,
+  visibleShells,
+} from './model';
 import { createAgentRow, updateAgentRow } from './rows';
 import { createAccountChip, createProgress, createStatusDot, updateAccountChip, updateProgress, updateStatusDot } from './widgets';
 
@@ -84,7 +100,63 @@ function updateTimelineItem(li: HTMLElement, a: Activity, now: number, who?: str
   setAttr(time, 'datetime', new Date(a.at).toISOString());
   setTitle(li, `${formatClock(a.at)} · ${a.text}${a.detail ? `\n${a.detail}` : ''}`);
   li.classList.toggle('is-error', !!a.error);
+  const done = shellDoneKind(a);
+  li.classList.toggle('is-shell-ok', done === 'ok');
+  li.classList.toggle('is-shell-fail', done === 'fail');
 }
+
+// ---------------------------------------------------------------- shells rodando
+
+interface ShellRefs {
+  icon: HTMLElement;
+  label: HTMLElement;
+  time: HTMLElement;
+  badge: HTMLElement;
+  since: HTMLElement;
+  details: HTMLDetailsElement;
+  command: HTMLElement;
+}
+
+const shellRefs = new WeakMap<HTMLElement, ShellRefs>();
+
+const SHELL_KIND_VARIANT = (j: ShellJob): string => (j.kind === 'monitor' ? 'monitor' : j.background ? 'bg' : 'fg');
+
+function createShellItem(): HTMLElement {
+  const icon = h('span', { class: 'ui-shell__icon', attrs: { 'aria-hidden': 'true' } });
+  const label = h('span', { class: 'ui-shell__label' });
+  const time = h('time', { class: 'ui-shell__time' });
+  const badge = h('span', { class: 'ui-shell__badge' });
+  const since = h('span', { class: 'ui-shell__since' });
+  const command = h('pre', { class: 'ui-mono' });
+  const details = h(
+    'details',
+    { class: 'ui-shell__cmd' },
+    h('summary', { text: 'Comando' }),
+    h('div', { class: 'ui-shell__cmd-body' }, command, copyButton(() => command.textContent ?? '', 'Copiar comando')),
+  );
+  const li = h('li', { class: 'ui-shell' }, h('div', { class: 'ui-shell__head' }, icon, label, time), h('div', { class: 'ui-shell__meta' }, badge, since), details);
+  shellRefs.set(li, { icon, label, time, badge, since, details, command });
+  return li;
+}
+
+function updateShellItem(li: HTMLElement, j: ShellJob, now: number): void {
+  const r = shellRefs.get(li)!;
+  setText(r.icon, j.kind === 'monitor' ? '📡' : '💻');
+  setText(r.label, j.label);
+  setTitle(r.label, j.label);
+  const elapsed = Math.max(0, now - j.startedAt);
+  setText(r.time, formatElapsed(elapsed));
+  setAttr(r.time, 'datetime', new Date(j.startedAt).toISOString());
+  setTitle(r.time, `Rodando há ${formatDuration(elapsed)} (desde ${formatClock(j.startedAt)})`);
+  setText(r.badge, shellKindLabel(j));
+  setVariant(r.badge, 'ui-shell__badge--', SHELL_KIND_VARIANT(j));
+  setText(r.since, `desde ${formatClock(j.startedAt, false)}`);
+  setTitle(r.since, `Iniciado em ${formatDateTime(j.startedAt)} · id ${j.id}`);
+  setHidden(r.details, !j.command);
+  setText(r.command, j.command ?? '');
+  setAttr(li, 'aria-label', `${j.label}, ${shellKindLabel(j)}, rodando há ${formatDuration(elapsed)}`);
+}
+
 
 // ---------------------------------------------------------------- visão do agente
 
@@ -111,6 +183,12 @@ class AgentView {
   private followBtn: HTMLButtonElement;
   private alert: HTMLElement;
   private alertText: HTMLElement;
+  private shellBox: HTMLElement;
+  private shellText: HTMLElement;
+  private shellMood: HTMLElement;
+  private shellNext: HTMLElement;
+  private shellsSec: ReturnType<typeof section>;
+  private shells: KeyedList<ShellJob>;
   private actIcon: HTMLElement;
   private actText: HTMLElement;
   private actTime: HTMLElement;
@@ -174,6 +252,22 @@ class AgentView {
       h('div', {}, h('strong', { class: 'ui-alert__title', text: 'Precisa de você' }), this.alertText),
     );
 
+    // Esperando o shell: caixa de status (com a fase da espera no escritório) e a lista de comandos rodando.
+    this.shellText = h('p', { class: 'ui-alert__text' });
+    this.shellMood = h('span', { class: 'ui-shell-mood__text' });
+    this.shellNext = h('span', { class: 'ui-shell-mood__next' });
+    const shellIcon = h('span', { class: 'ui-alert__icon ui-hourglass', attrs: { 'aria-hidden': 'true' } });
+    shellIcon.innerHTML = ICONS.hourglass;
+    this.shellBox = h(
+      'div',
+      { class: 'ui-alert ui-alert--shell', hidden: true },
+      shellIcon,
+      h('div', {}, h('strong', { class: 'ui-alert__title', text: 'Esperando o shell' }), this.shellText, h('p', { class: 'ui-shell-mood' }, this.shellMood, this.shellNext)),
+    );
+    const shellList = h('ul', { class: 'ui-shells' });
+    this.shellsSec = section('Shells rodando', shellList);
+    this.shells = new KeyedList<ShellJob>(shellList, { key: (j) => j.id, create: createShellItem, update: (li, j) => updateShellItem(li, j, ctx.now()) });
+
     this.actIcon = h('span', { class: 'ui-now__icon', attrs: { 'aria-hidden': 'true' } });
     this.actText = h('span', { class: 'ui-now__text' });
     this.actTime = h('span', { class: 'ui-now__time' });
@@ -192,7 +286,7 @@ class AgentView {
     this.team = new KeyedList<AgentInfo>(teamList, {
       key: (a) => a.id,
       create: (a) => createAgentRow(a, (id) => ctx.select({ type: 'agent', id }, { focus: true }), 'sm'),
-      update: (row, a) => updateAgentRow(row, a, ctx.account(a.account), false),
+      update: (row, a) => updateAgentRow(row, a, ctx.account(a.account), false, ctx.now(), ctx.store.snapshot?.agents),
     });
 
     const tl = h('ol', { class: 'ui-timeline' });
@@ -227,6 +321,8 @@ class AgentView {
       this.gone,
       statusRow,
       this.alert,
+      this.shellBox,
+      this.shellsSec.el,
       nowSec.el,
       this.tasksSec.el,
       this.teamSec.el,
@@ -247,6 +343,7 @@ class AgentView {
     this.timeline.clear();
     this.tasks.clear();
     this.team.clear();
+    this.shells.clear();
     this.actDetails.open = false;
     const req = ++this.historyReq;
     this.ctx.store
@@ -295,11 +392,15 @@ class AgentView {
     setHidden(this.gone, !!live);
     this.el.classList.toggle('is-gone', !live);
 
-    // Status.
-    updateStatusDot(this.dot, a.status);
-    setText(this.statusText, statusLabel(a.status));
-    setText(this.statusSince, relativeTime(a.statusSince, now));
-    setTitle(this.statusSince, `Desde ${formatClock(a.statusSince)}`);
+    // Status (quem está parado num comando longo aparece como "Esperando o shell", como no escritório).
+    const wait = live ? shellWaitIn(a, this.ctx.store.snapshot?.agents ?? [], now) : null;
+    const status = wait ? 'shell' : a.status;
+    updateStatusDot(this.dot, status);
+    setText(this.statusText, statusLabel(status));
+    // Parado num comando longo: o "desde" é o início do comando (o status do servidor continua 'working').
+    const since = wait?.foreground ? wait.since : a.statusSince;
+    setText(this.statusSince, relativeTime(since, now));
+    setTitle(this.statusSince, `Desde ${formatClock(since)}`);
     const following = this.ctx.world.getOptions().followSelected;
     setAttr(this.followBtn, 'aria-pressed', String(following));
     this.followBtn.classList.toggle('is-on', following);
@@ -313,6 +414,23 @@ class AgentView {
         `Vá ao terminal da ${account?.name ?? a.account} em ${room?.name ?? 'seu projeto'} para responder${a.waitingFor ? `: ${a.waitingFor}` : '.'}`,
       );
     }
+
+    // Esperando o shell.
+    setHidden(this.shellBox, !wait);
+    if (wait) {
+      setText(this.shellText, shellBoxText(wait));
+      const stage = shellStage(now - wait.since);
+      setText(this.shellMood, `${stage.emoji} ${stage.text}`);
+      setText(this.shellNext, stage.nextIn !== null ? `Próxima fase em ${formatDuration(Math.max(1_000, stage.nextIn))}` : '');
+      setHidden(this.shellNext, stage.nextIn === null);
+      setTitle(this.shellNext, 'Quanto falta para o personagem mudar o que faz enquanto espera (veja a Ajuda)');
+    }
+    // Sem shells próprios, mostra os que ele espera de um subagente.
+    const own = live ? visibleShells(a, now) : [];
+    const jobs = own.length || !wait ? own : wait.jobs;
+    setHidden(this.shellsSec.el, jobs.length === 0);
+    setText(this.shellsSec.extra, jobs.length > 1 ? String(jobs.length) : '');
+    this.shells.sync(jobs);
 
     // Atividade atual.
     const act = a.activity;
@@ -461,7 +579,7 @@ class RoomView {
     this.agents = new KeyedList<AgentInfo>(agentsList, {
       key: (a) => a.id,
       create: (a) => createAgentRow(a, (id) => ctx.select({ type: 'agent', id }, { focus: true }), 'sm'),
-      update: (row, a) => updateAgentRow(row, a, ctx.account(a.account), false),
+      update: (row, a) => updateAgentRow(row, a, ctx.account(a.account), false, ctx.now(), ctx.store.snapshot?.agents),
     });
 
     this.tasksBar = createProgress('Progresso das tarefas da sala');

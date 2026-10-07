@@ -44,9 +44,10 @@ export type Pose =
   | 'talk' // em pé conversando, gesticulando (2)
   | 'stretch' // em pé se espreguiçando, braços para cima (2)
   | 'read' // em pé ou sentado segurando livro/papéis à frente (2)
-  | 'play'; // ping-pong: raquete na mão, alternando braço (2)
+  | 'play' // ping-pong: raquete na mão, alternando braço (2)
+  | 'wait'; // sentado esperando algo terminar (ex.: um shell), recostado (2). Com held 'popcorn': mão do balde à boca, comendo pipoca; sem item: braços cruzados, dedos/pé batendo
 
-export type HeldItem = 'none' | 'coffee' | 'water' | 'papers' | 'laptop' | 'book' | 'box' | 'paddle';
+export type HeldItem = 'none' | 'coffee' | 'water' | 'papers' | 'laptop' | 'book' | 'box' | 'paddle' | 'popcorn';
 
 export type HairStyle =
   | 'short' | 'buzz' | 'spiky' | 'side_part' | 'curly' | 'afro' | 'bob' | 'long' | 'ponytail' | 'bun' | 'pigtails'
@@ -285,7 +286,8 @@ export type ScreenMode =
   | 'chat' // conversa (balões alternados)
   | 'docs' // documento de texto
   | 'tasks' // lista de checkboxes
-  | 'alert'; // tela piscando em âmbar (precisa de atenção)
+  | 'alert' // tela piscando em âmbar (precisa de atenção)
+  | 'progress'; // terminal escuro com uma barra de progresso/spinner andando (esperando um comando terminar)
 
 export interface RoomTheme {
   carpet: string;
@@ -297,7 +299,11 @@ export interface RoomTheme {
 }
 
 /** Ícones pixel art pequenos (~8–12px) para estados acima da cabeça. */
-export type IconName = 'alert' | 'question' | 'zzz' | 'check' | 'heart' | 'coffee' | 'music' | 'idea' | 'sweat' | 'star' | 'lightning' | 'chat' | 'box' | 'wave';
+export type IconName = 'alert' | 'question' | 'zzz' | 'check' | 'heart' | 'coffee' | 'music' | 'idea' | 'sweat' | 'star' | 'lightning' | 'chat' | 'box' | 'wave'
+  | 'hourglass' // ampulheta (esperando um shell)
+  | 'hourglass_flip' // a mesma ampulheta virando (alterne com 'hourglass' para animar)
+  | 'cobweb' // teia de aranha (~12px) para o canto da cadeira/personagem quando a espera fica longa
+  | 'storm'; // nuvenzinha de chuva com raio (algo falhou)
 
 /** Assinatura que art/index.ts deve exportar (o mundo e a UI dependem disto). */
 export interface ArtModule {

@@ -5,6 +5,7 @@ import type { UiComponent, UiContext } from './context';
 import { h, KeyedList, setAttr, setHidden, setText, setTitle } from './dom';
 import { formatClock } from './format';
 import { ICONS } from './icons';
+import { shellDoneKind } from './model';
 import { officeIsEmpty } from './overlays';
 import { createAccountChip, updateAccountChip } from './widgets';
 
@@ -182,6 +183,10 @@ export class FeedPanel implements UiComponent {
     setText(icon, f.activity.icon);
     setText(text, f.activity.text);
     li.classList.toggle('is-error', !!f.activity.error);
+    // Fim de um shell (✅ terminou / ❌ falhou ou foi interrompido): linha com destaque próprio.
+    const done = shellDoneKind(f.activity);
+    li.classList.toggle('is-shell-ok', done === 'ok');
+    li.classList.toggle('is-shell-fail', done === 'fail');
     const present = !!this.ctx.agent(f.agentId);
     li.classList.toggle('is-gone', !present);
     setTitle(btn, `${formatClock(f.activity.at)} · ${f.agentName} em ${f.roomName}\n${f.activity.text}${f.activity.detail ? `\n${f.activity.detail}` : ''}`);

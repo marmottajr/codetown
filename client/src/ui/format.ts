@@ -40,6 +40,20 @@ export function formatDuration(ms: number): string {
   return h ? `${d} d ${h} h` : `${d} d`;
 }
 
+/**
+ * Cronômetro de algo que ainda está rodando: "0:07", "12:31", "1:02:10"; a partir de 1 dia, "1 d 2 h".
+ * Muda a cada segundo (bom para "tempo correndo"); valores negativos (relógios fora de sincronia) viram "0:00".
+ */
+export function formatElapsed(ms: number): string {
+  const v = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  if (v >= DAY) return formatDuration(v);
+  const total = Math.floor(v / SECOND);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
 /** Contagem regressiva: "em 2 h 10 min", "em 5 min", "em menos de 1 min", "agora". */
 export function formatCountdown(target: number, now: number): string {
   const diff = target - now;

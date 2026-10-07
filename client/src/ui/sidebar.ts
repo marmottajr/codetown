@@ -276,7 +276,7 @@ export class Sidebar implements UiComponent {
 
   private updateRow(row: HTMLElement, a: AgentInfo): void {
     const sel = this.ctx.selection();
-    updateAgentRow(row, a, this.ctx.account(a.account), sel?.type === 'agent' && sel.id === a.id);
+    updateAgentRow(row, a, this.ctx.account(a.account), sel?.type === 'agent' && sel.id === a.id, this.ctx.now(), this.ctx.store.snapshot?.agents);
   }
 
   private pick(id: string): void {

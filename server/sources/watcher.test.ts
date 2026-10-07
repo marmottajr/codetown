@@ -382,3 +382,260 @@ describe('ClaudeWatcher com transcript maior que a janela do boot', () => {
     }
   });
 });
+
+describe('ClaudeWatcher — esperando o shell', () => {
+  let c: Ctx;
+  beforeEach(() => {
+    c = setup();
+  });
+  afterEach(() => {
+    c.watcher.stop();
+    c.tmp.cleanup();
+  });
+
+  const SUITE = { command: 'vendor/bin/phpunit --group cms', description: 'Rodar a suíte completa', run_in_background: true };
+
+  /** Turno que deixa um Bash em segundo plano rodando e termina. */
+  function backgroundTurn(at: number, id = 'toolu_bg', taskId = 'bo0ov3q3l', input: Record<string, unknown> = SUITE): string[] {
+    return [
+      L.prompt('Roda a suíte inteira', { at: at - 2_000 }),
+      L.assistant([L.tool(id, 'Bash', input)], { at, stop: 'tool_use' }),
+      L.bgLaunched(id, taskId, { at: at + 500 }),
+      L.assistant([L.text('Deixei a suíte rodando; aviso quando terminar.')], { at: at + 1_000, stop: 'end_turn' }),
+      L.system('turn_duration', { durationMs: 3_000 }, { at: at + 1_100 }),
+    ];
+  }
+
+  it('registro "shell": fica esperando com o job, balão e aviso; a fila encerra com ShellDone e a entrega não tira o ShellDone do balão', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-s'), backgroundTurn(t0 - 10_000));
+    c.openSession(700, 'sess-s', { status: 'busy' });
+    c.watcher.boot();
+    const id = '.claude:700';
+    expect(c.agent(id)!.shells).toEqual([
+      { id: 'bo0ov3q3l', label: 'Rodar a suíte completa', command: 'vendor/bin/phpunit --group cms', startedAt: t0 - 9_500, background: true, kind: 'shell' },
+    ]);
+
+    c.openSession(700, 'sess-s', { status: 'shell' });
+    c.poll();
+    let a = c.agent(id)!;
+    expect(a.status).toBe('shell');
+    expect(a.activity).toMatchObject({ kind: 'wait', icon: '⏳', text: 'Esperando o shell: Rodar a suíte completa', tool: 'ShellWait' });
+    expect(c.notices.map((n) => n.text)).toEqual([`⏳ ${a.name} está esperando o shell em loja: Rodar a suíte completa`]);
+    expect(c.office.recentFeed(1)[0].activity.tool).toBe('ShellWait');
+
+    // Passa o tempo; nada muda (sem novos avisos, sem novo balão).
+    c.advance(60_000);
+    c.poll();
+    expect(c.notices).toHaveLength(1);
+
+    // O shell termina: a fila grava a notificação; o agente acorda e recebe a mensagem.
+    appendLines(c.transcript('sess-s'), [
+      L.shellNotification('queue', { taskId: 'bo0ov3q3l', toolUseId: 'toolu_bg', status: 'completed', summary: 'Background command "Rodar a suíte completa" completed (exit code 0)' }, { at: c.now() }),
+      L.shellNotification('message', { taskId: 'bo0ov3q3l', toolUseId: 'toolu_bg', status: 'completed' }, { at: c.now() + 10 }),
+    ]);
+    c.openSession(700, 'sess-s', { status: 'busy' });
+    c.poll();
+    a = c.agent(id)!;
+    expect(a.status).toBe('working');
+    expect(a.shells).toBeUndefined();
+    expect(a.activity).toMatchObject({ tool: 'ShellDone', icon: '✅', text: 'Shell terminou: Rodar a suíte comp… (1min 10s)', durationMs: 69_500 });
+    expect(a.activity!.error).toBeUndefined();
+    expect(c.notices.at(-1)).toMatchObject({ level: 'success', text: `✅ ${a.name}: shell terminou em loja — Rodar a suíte completa` });
+    expect(c.office.recentFeed(2).map((f) => f.activity.text)).toEqual(['Shell terminou: Rodar a suíte comp… (1min 10s)', 'Recebeu resultado em segundo plano']);
+    // Nenhum "concluiu" no caminho: o fim do turno virou espera pelo shell.
+    expect(c.notices.some((n) => n.text.includes('concluiu'))).toBe(false);
+  });
+
+  it('boot em "shell": balão sem aviso; só a mensagem (sem fila) encerra; falha => error e aviso de alerta amarelo', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-f'), backgroundTurn(t0 - 30_000, 'toolu_m', 'bmig1', { command: 'php artisan migrate', description: 'Migração do banco', run_in_background: true }));
+    c.openSession(710, 'sess-f', { status: 'shell' });
+    c.watcher.boot();
+    c.notices.push(...c.office.commit().notices);
+    const id = '.claude:710';
+    expect(c.agent(id)).toMatchObject({ status: 'shell', activity: { text: 'Esperando o shell: Migração do banco' } });
+    expect(c.notices).toEqual([]);
+    appendLines(c.transcript('sess-f'), [
+      L.shellNotification('message', { taskId: 'bmig1', status: 'failed', summary: 'Background command "Migração do banco" failed with exit code 1' }, { at: c.now() }),
+    ]);
+    c.openSession(710, 'sess-f', { status: 'busy' });
+    c.poll();
+    const a = c.agent(id)!;
+    expect(a.activity).toMatchObject({ tool: 'ShellDone', icon: '❌', text: 'Shell falhou: Migração do banco', error: true });
+    expect(a.activity!.detail).toBe('Código de saída 1 — php artisan migrate');
+    expect(c.notices.at(-1)).toMatchObject({ level: 'warn', text: `❌ ${a.name}: shell falhou em loja — Migração do banco` });
+  });
+
+  it('CLI antiga: registro "idle" + Bash em segundo plano sem notificação = shell; KillShell encerra como interrompido (sem aviso)', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-o'), backgroundTurn(t0 - 5_000, 'toolu_o', 'bold1'));
+    c.openSession(720, 'sess-o', { status: 'idle' });
+    c.watcher.boot();
+    const id = '.claude:720';
+    expect(c.agent(id)).toMatchObject({ status: 'shell', activity: { tool: 'ShellWait' } });
+    appendLines(c.transcript('sess-o'), [
+      L.prompt('Para esse teste', { at: c.now() }),
+      L.assistant([L.tool('k1', 'KillShell', { shell_id: 'bold1' })], { at: c.now() + 1_000 }),
+      L.result('k1', 'Shell bold1 killed', { at: c.now() + 1_200 }),
+    ]);
+    c.poll();
+    const a = c.agent(id)!;
+    expect(a.status).toBe('idle');
+    expect(a.shells).toBeUndefined();
+    expect(a.recent.find((x) => x.tool === 'ShellDone')).toMatchObject({ icon: '🛑', text: 'Shell interrompido: Rodar a suíte completa', error: true });
+    expect(c.notices.filter((n) => n.text.includes('shell'))).toEqual([]);
+  });
+
+  it('versão que grava "shell": "idle" é a palavra final (sem fallback) e, depois de 30 s, limpa o job que perdeu o término', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-v'), backgroundTurn(t0 - 5_000, 'toolu_v', 'bperdido'));
+    c.openSession(725, 'sess-v', { status: 'idle', version: '2.1.292' });
+    c.watcher.boot();
+    const id = '.claude:725';
+    expect(c.agent(id)!.status).toBe('idle');
+    expect(c.agent(id)!.shells).toHaveLength(1);
+    c.advance(31_000);
+    c.poll();
+    expect(c.agent(id)!.shells).toBeUndefined();
+    expect(c.agent(id)!.recent.some((x) => x.tool === 'ShellDone')).toBe(false);
+  });
+
+  it('aprende a versão: uma sessão mais antiga gravando "shell" passa a valer como referência', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-w1'), backgroundTurn(t0 - 5_000, 'w1', 'bw1'));
+    writeLines(c.transcript('sess-w2'), backgroundTurn(t0 - 5_000, 'w2', 'bw2'));
+    c.openSession(726, 'sess-w1', { status: 'shell', version: '2.1.250' });
+    c.openSession(727, 'sess-w2', { status: 'idle', version: '2.1.260' });
+    c.watcher.boot();
+    expect(c.agent('.claude:726')!.status).toBe('shell');
+    // 2.1.260 >= 2.1.250 (que grava "shell"): "idle" sem fallback.
+    expect(c.agent('.claude:727')!.status).toBe('idle');
+  });
+
+  it('o fallback ignora shell antigo (> 12 h) e shell de antes do processo atual (sessão retomada)', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-r'), [...backgroundTurn(t0 - 13 * 3_600_000, 'velho', 'bvelho'), ...backgroundTurn(t0 - 120_000, 'anterior', 'bant')]);
+    // O processo começou há 60 s (fixture): o shell de 2 min atrás morreu com o processo anterior.
+    c.openSession(730, 'sess-r', { status: 'idle', startedAt: t0 - 60_000 });
+    c.watcher.boot();
+    expect(c.agent('.claude:730')).toMatchObject({ status: 'idle' });
+    expect(c.agent('.claude:730')!.shells).toBeUndefined();
+  });
+
+  it('primeiro plano: entra em shells (background false) e sai no resultado; aprovação pendente esconde o comando', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-p'), [
+      L.prompt('Instala tudo', { at: t0 - 40_000 }),
+      L.assistant([L.tool('fg1', 'Bash', { command: 'npm ci', description: 'Instalar as dependências' })], { at: t0 - 30_000, stop: 'tool_use' }),
+    ]);
+    c.openSession(740, 'sess-p', { status: 'waiting', waitingFor: 'permission' });
+    c.watcher.boot();
+    const id = '.claude:740';
+    expect(c.agent(id)!.shells).toBeUndefined();
+    c.advance(5_000);
+    c.openSession(740, 'sess-p', { status: 'busy' });
+    c.poll();
+    // O relógio do comando começa quando a aprovação termina.
+    expect(c.agent(id)!.shells).toEqual([{ id: 'fg1', label: 'Instalar as dependências', command: 'npm ci', startedAt: t0, background: false, kind: 'shell' }]);
+    c.advance(30_000);
+    c.poll();
+    // 30 s sem nada novo no transcript: continua mostrando o comando (não "Pensando…").
+    expect(c.agent(id)).toMatchObject({ status: 'working', activity: { kind: 'run', text: 'Instalando dependências' } });
+    appendLines(c.transcript('sess-p'), [L.result('fg1', 'added 812 packages', { at: c.now() })]);
+    c.poll();
+    expect(c.agent(id)!.shells).toBeUndefined();
+    // Comando em primeiro plano não gera ShellDone.
+    expect(c.agent(id)!.recent.some((x) => x.tool === 'ShellDone')).toBe(false);
+  });
+
+  it('boot: o fim do arquivo reconstrói o que roda e mostra o que já terminou (no feed, sem aviso)', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-b'), [
+      ...backgroundTurn(t0 - 40_000, 'b1', 'bfeito'),
+      L.shellNotification('queue', { taskId: 'bfeito', toolUseId: 'b1', status: 'completed', summary: 'x (exit code 0)' }, { at: t0 - 20_000 }),
+      L.shellNotification('message', { taskId: 'bfeito', toolUseId: 'b1', status: 'completed' }, { at: t0 - 20_000 }),
+      ...backgroundTurn(t0 - 15_000, 'b2', 'brodando', { command: 'npm run build', description: 'Build de produção', run_in_background: true }),
+    ]);
+    c.openSession(750, 'sess-b', { status: 'shell' });
+    c.watcher.boot();
+    c.notices.push(...c.office.commit().notices);
+    const a = c.agent('.claude:750')!;
+    expect(a.shells?.map((j) => [j.id, j.label])).toEqual([['brodando', 'Build de produção']]);
+    expect(a.activity?.text).toBe('Esperando o shell: Build de produção');
+    expect(c.office.recentFeed(50).filter((f) => f.activity.tool === 'ShellDone').map((f) => f.activity.text)).toEqual(['Shell terminou: Rodar a suíte completa (20s)']);
+    expect(c.notices).toEqual([]);
+  });
+
+  it('subagente: Bash dele em segundo plano, notificado no transcript do principal', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-u'), [L.prompt('Delegando', { at: t0 - 5_000 })]);
+    c.openSession(760, 'sess-u', { status: 'busy' });
+    c.watcher.boot();
+    c.subFile('sess-u', 'sub1', { agentType: 'general-purpose', toolUseId: 'toolu_sub' }, [
+      L.prompt('Roda os testes', { agentId: 'sub1', at: t0 - 1_000 }),
+      L.assistant([L.tool('toolu_sb', 'Bash', { command: 'pytest -q', description: 'Rodar os testes', run_in_background: true })], { agentId: 'sub1', at: t0 }),
+      L.bgLaunched('toolu_sb', 'bsub1', { agentId: 'sub1', at: t0 + 100 }),
+    ]);
+    c.poll();
+    expect(c.agent('sess-u:sub1')!.shells?.map((j) => j.id)).toEqual(['bsub1']);
+    expect(c.agent('.claude:760')!.shells).toBeUndefined();
+    appendLines(c.transcript('sess-u'), [L.shellNotification('queue', { taskId: 'bsub1', toolUseId: 'toolu_sb', status: 'completed' }, { at: c.now() + 5_000 })]);
+    c.poll();
+    const sub = c.agent('sess-u:sub1')!;
+    expect(sub.shells).toBeUndefined();
+    expect(sub.activity).toMatchObject({ tool: 'ShellDone', text: 'Shell terminou: Rodar os testes (5s)' });
+  });
+
+  it('/clear e sessão encerrada limpam os shells', () => {
+    const t0 = c.now();
+    writeLines(c.transcript('sess-c1'), backgroundTurn(t0 - 5_000));
+    c.openSession(770, 'sess-c1', { status: 'shell' });
+    c.watcher.boot();
+    expect(c.agent('.claude:770')!.shells).toHaveLength(1);
+    writeLines(c.transcript('sess-c2'), [L.prompt('Começando de novo')]);
+    c.openSession(770, 'sess-c2', { status: 'idle' });
+    c.poll();
+    expect(c.agent('.claude:770')!.shells).toBeUndefined();
+    writeLines(c.transcript('sess-c3'), backgroundTurn(c.now() - 1_000, 'b3', 'b3x'));
+    c.openSession(770, 'sess-c3', { status: 'shell' });
+    c.poll();
+    expect(c.agent('.claude:770')!.shells).toHaveLength(1);
+    c.closeSession(770);
+    c.poll();
+    c.advance(2_000);
+    c.poll();
+    expect(c.agent('.claude:770')).toMatchObject({ status: 'offline' });
+    expect(c.agent('.claude:770')!.shells).toBeUndefined();
+  });
+});
+
+describe('ClaudeWatcher — shell lançado no começo de um transcript maior que a janela do boot', () => {
+  it('entra quando o começo do arquivo é lido; o que terminou dentro da janela não volta', async () => {
+    const c = setup({ tailBytes: 3_000 });
+    try {
+      const t0 = c.now() - 600_000;
+      const lines = [
+        L.assistant([L.tool('cedo', 'Bash', { command: 'npm run e2e', description: 'Testes de ponta a ponta', run_in_background: true })], { at: t0 }),
+        L.bgLaunched('cedo', 'bcedo', { at: t0 + 100 }),
+        L.assistant([L.tool('fim', 'Bash', { command: 'npm run build', description: 'Build', run_in_background: true })], { at: t0 + 200 }),
+        L.bgLaunched('fim', 'bfim', { at: t0 + 300 }),
+        ...Array.from({ length: 30 }, (_, i) => L.assistant([L.tool(`r${i}`, 'Read', { file_path: `${CWD}/src/arquivo${i}.ts` })], { at: t0 + 1_000 + i * 1_000 })),
+        L.shellNotification('queue', { taskId: 'bfim', toolUseId: 'fim', status: 'completed' }, { at: t0 + 50_000 }),
+        L.assistant([L.text('Pronto.')], { at: t0 + 51_000, stop: 'end_turn' }),
+      ];
+      writeLines(c.transcript('sess-g'), lines);
+      c.openSession(800, 'sess-g', { status: 'shell', startedAt: t0 - 60_000 });
+      c.watcher.boot();
+      expect(c.agent('.claude:800')!.shells).toBeUndefined();
+      await c.watcher.idle();
+      c.poll();
+      const a = c.agent('.claude:800')!;
+      expect(a.shells?.map((j) => [j.id, j.label, j.startedAt])).toEqual([['bcedo', 'Testes de ponta a ponta', t0 + 100]]);
+      expect(a.activity?.text).toBe('Esperando o shell: Testes de ponta a ponta');
+    } finally {
+      c.watcher.stop();
+      c.tmp.cleanup();
+    }
+  });
+});

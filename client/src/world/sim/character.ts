@@ -4,6 +4,7 @@ import type { Appearance, Dir, HeldItem, IconName, Pose } from '../../art/api';
 import { mulberry32 } from '../../../../shared/hash';
 import { FOOT_DX, FOOT_DY, TILE } from '../constants';
 import type { Mode } from './behavior';
+import type { ShellStage } from './shell';
 import type { Meeting, Step } from './steps';
 
 export class Character {
@@ -85,6 +86,29 @@ export class Character {
   chatUntil = 0;
   lastActivityId: string | null = null;
   activityChangedAt = 0;
+
+  // espera de shell (modo 'shell'; regras em sim/shell.ts)
+  /** Início (epoch ms) da espera atual: o shell mais antigo. 0 = não está esperando. */
+  shellSince = 0;
+  /** Quantos shells espera (o "×N" da ampulheta). */
+  shellCount = 0;
+  shellLabel = '';
+  /** Estágio da gag (recalculado a cada frame pela idade da espera). */
+  shellStage: ShellStage | null = null;
+  /** Quando entrou no modo 'shell' (relógio do mundo): ritmo do balão no modo 'important'. */
+  shellEnteredAt = 0;
+  /** Texto do balão em cache: refeito só quando o tempo exibido muda (sem string nova por frame). */
+  shellText = '';
+  shellTextKey = -1;
+  /**
+   * Reação ao fim de um shell (comemoração/lamento) em andamento até este instante: uma mudança de
+   * modo não a interrompe (a fila termina de volta na mesa e o planejador segue o status atual).
+   */
+  reactUntil = 0;
+  /** `at` da última Activity 'ShellDone' já tratada (as anteriores à chegada não comemoram). */
+  shellDoneAt = 0;
+  /** Render: próxima pipoca que pula do balde (epoch ms). */
+  popcornAt = 0;
 
   constructor(info: AgentInfo, appearance: Appearance) {
     this.id = info.id;

@@ -2,7 +2,8 @@
 import type { AccountInfo, AgentInfo } from '../../../shared/types';
 import { createAvatar, updateAvatar, type AvatarSize } from './avatar';
 import { h, setAttr, setStyleVar, setText, setVariant } from './dom';
-import { activityFallback, statusLabel } from './model';
+import { formatDuration } from './format';
+import { activityFallback, shellLine, shellWaitIn, statusLabel } from './model';
 import {
   createAccountChip,
   createActivityLine,
@@ -11,6 +12,7 @@ import {
   updateAccountChip,
   updateActivityLine,
   updateRoleBadge,
+  updateShellActivityLine,
   updateStatusDot,
 } from './widgets';
 
@@ -46,7 +48,18 @@ export function createAgentRow(agent: AgentInfo, onPick: (id: string) => void, s
   return row;
 }
 
-export function updateAgentRow(row: HTMLElement, agent: AgentInfo, account: AccountInfo | undefined, selected: boolean): void {
+/**
+ * `now` = relógio do servidor (cronômetro do shell e limiar dos comandos longos em primeiro plano);
+ * `agents` = agentes do escritório (shells que um subagente deixou rodando contam para o principal).
+ */
+export function updateAgentRow(
+  row: HTMLElement,
+  agent: AgentInfo,
+  account: AccountInfo | undefined,
+  selected: boolean,
+  now: number,
+  agents: readonly AgentInfo[] = [],
+): void {
   const r = refs.get(row);
   if (!r) return;
   row.dataset.id = agent.id;
@@ -55,16 +68,20 @@ export function updateAgentRow(row: HTMLElement, agent: AgentInfo, account: Acco
   setText(r.name, agent.name);
   updateAccountChip(r.chip, account, agent.account);
   updateRoleBadge(r.role, agent);
-  updateStatusDot(r.dot, agent.status);
-  updateActivityLine(r.activity, agent.activity, activityFallback(agent));
-  setVariant(row, 'is-', agent.status);
+  // Esperando um shell (ou parado num comando longo): ampulheta no ponto e o cronômetro na linha de atividade.
+  const wait = shellWaitIn(agent, agents, now);
+  const status = wait ? 'shell' : agent.status;
+  updateStatusDot(r.dot, status);
+  if (wait) updateShellActivityLine(r.activity, wait, now);
+  else updateActivityLine(r.activity, agent.activity, activityFallback(agent));
+  setVariant(row, 'is-', status);
   row.classList.toggle('is-selected', selected);
   setAttr(row, 'aria-current', selected ? 'true' : null);
+  // Para leitores de tela, o tempo em minutos (o cronômetro mudaria o rótulo a cada segundo).
+  const doing = wait ? `${shellLine(wait, now).label}, há ${formatDuration(now - wait.since)}` : agent.activity?.text;
   setAttr(
     row,
     'aria-label',
-    `${agent.name}, ${agent.kind === 'main' ? 'agente principal' : `subagente ${agent.role}`}, ${account?.name ?? agent.account}, ${statusLabel(agent.status)}${
-      agent.activity ? `: ${agent.activity.text}` : ''
-    }`,
+    `${agent.name}, ${agent.kind === 'main' ? 'agente principal' : `subagente ${agent.role}`}, ${account?.name ?? agent.account}, ${statusLabel(status)}${doing ? `: ${doing}` : ''}`,
   );
 }

@@ -27,8 +27,22 @@ import {
 import { Character, dirOf, facing } from './character';
 import { Elevator } from './elevator';
 import { RoomState } from './room-state';
+import { countShells, latestShellDone, shellLabel, shellStage, shellWaitSince, spinDir, spinPhase, yawnPhase } from './shell';
 import { SpotRegistry } from './spots';
 import type { Meeting, Step } from './steps';
+
+/** Efeito visual pontual pedido pela simulação ao render (drenado a cada frame). */
+export interface WorldEffect {
+  kind: 'confetti';
+  charId: string;
+  at: number;
+}
+
+export { SHELL_DONE_TOOL } from './shell';
+/** Comemoração (shell concluído) e lamento (falhou/morto). */
+const CHEER_MS = 2_200;
+const SULK_MS = 4_000;
+const MAX_EFFECTS = 32;
 
 const FALLBACK_THEME: RoomTheme = {
   carpet: '#5b7fa6',
@@ -77,6 +91,10 @@ export class Sim {
   accounts = new Map<string, { short: string; color: string; name: string }>();
   /** Depuração: salas/agentes extras mesclados a cada snapshot (sessões simuladas). */
   injected: { rooms: RoomInfo[]; agents: AgentInfo[] } = { rooms: [], agents: [] };
+  /** Depuração: campos sobrepostos a agentes reais do snapshot (ex.: shells forçados). */
+  readonly agentPatches = new Map<string, Partial<AgentInfo>>();
+  /** Efeitos pontuais (confete) para o render desenhar; o render esvazia a lista. */
+  readonly effects: WorldEffect[] = [];
   private lastSnapshot: OfficeSnapshot | null = null;
   private shrinkPending = false;
   private nextHousekeeping = 0;
@@ -94,7 +112,11 @@ export class Sim {
   // =================================================================== snapshot
 
   applySnapshot(input: OfficeSnapshot, now: number): void {
-    const snap = this.injected.rooms.length || this.injected.agents.length ? { ...input, rooms: [...input.rooms, ...this.injected.rooms], agents: [...input.agents, ...this.injected.agents] } : input;
+    let snap = this.injected.rooms.length || this.injected.agents.length ? { ...input, rooms: [...input.rooms, ...this.injected.rooms], agents: [...input.agents, ...this.injected.agents] } : input;
+    if (this.agentPatches.size) {
+      const patches = this.agentPatches;
+      snap = { ...snap, agents: snap.agents.map((a) => (patches.has(a.id) ? { ...a, ...patches.get(a.id) } : a)) };
+    }
     this.lastSnapshot = input;
     this.now = now;
     const first = !this.initialized;
@@ -161,7 +183,10 @@ export class Sim {
       if (!seen.has(ch.id) && !ch.leaving && ch.missingSince === null) ch.missingSince = now;
     }
     // modos (depois de todos existirem, para subagentes acharem o pai)
-    for (const ch of fresh) ch.mode = this.modeOf(ch);
+    for (const ch of fresh) {
+      ch.mode = this.modeOf(ch);
+      this.refreshShell(ch, now);
+    }
     if (first) {
       // quem trabalha/espera senta primeiro; ociosos depois (assim nenhuma sala fica vazia)
       const seated = new Set<string>();
@@ -193,6 +218,7 @@ export class Sim {
 
   private updateAgent(ch: Character, a: AgentInfo, now: number): void {
     const prevStatus = ch.info.status;
+    const hadShells = !!ch.info.shells?.length;
     ch.info = a;
     ch.missingSince = null;
     if (a.roomId !== ch.roomId && !ch.leaving) {
@@ -212,7 +238,15 @@ export class Sim {
         if (act.kind === 'delegate' && ch.info.kind === 'main' && a.status === 'working') this.planDelegate(ch, now);
       }
     }
-    if (prevStatus !== a.status || this.forcedOffline.has(ch.id)) this.refreshMode(ch);
+    // fim de um shell: comemora ou lamenta (uma vez por notificação)
+    const sd = latestShellDone(a);
+    if (sd && sd.at > ch.shellDoneAt) {
+      ch.shellDoneAt = sd.at;
+      this.reactShellDone(ch, !sd.error, now);
+    }
+    // shells mudam sem mudar o status (ex.: comando em primeiro plano começou/terminou)
+    if (prevStatus !== a.status || hadShells || !!a.shells?.length || ch.mode === 'shell' || this.forcedOffline.has(ch.id)) this.refreshMode(ch);
+    this.refreshShell(ch, now);
   }
 
   /** Recalcula o modo e interrompe o plano se mudou. */
@@ -224,6 +258,11 @@ export class Sim {
     ch.mode = mode;
     if (prev === 'idle' && mode !== 'idle') ch.nextOutingAt = 0;
     if (ch.icon === 'zzz') ch.setIcon(null, 0, this.now);
+    this.refreshShell(ch, this.now);
+    // comemoração/lamento do fim de um shell em andamento: termina (curta, volta à mesa) e o
+    // planejador segue o modo novo; ir embora não espera
+    if (this.now < ch.reactUntil && mode !== 'leave' && mode !== 'deliver') return;
+    ch.reactUntil = 0;
     this.interrupt(ch);
   }
 
@@ -235,9 +274,59 @@ export class Sim {
     const missing = ch.missingSince !== null && this.now - ch.missingSince >= MISSING_DEBOUNCE_MS;
     const offline = this.forcedOffline.has(ch.id);
     if (a.kind === 'sub' && a.status === 'done' && !ch.delivered && !offline && !parentGone) return 'deliver';
-    const m = modeFor(offline ? 'offline' : a.status, { kind: a.kind, missing, parentGone });
+    const m = modeFor(offline ? 'offline' : a.status, { kind: a.kind, missing, parentGone, shells: a.shells, now: this.now });
     if (m === 'deliver' && ch.delivered) return 'leave';
     return m;
+  }
+
+  // =================================================================== espera de shell
+
+  /** Atualiza início/quantidade/rótulo da espera de shell (no snapshot e quando o modo muda). */
+  private refreshShell(ch: Character, now: number): void {
+    if (ch.mode !== 'shell') {
+      ch.shellSince = 0;
+      ch.shellCount = 0;
+      ch.shellStage = null;
+      ch.shellEnteredAt = 0;
+      return;
+    }
+    const a = ch.info;
+    if (!ch.shellEnteredAt) ch.shellEnteredAt = now;
+    // relógios do servidor e do navegador podem divergir um pouco: nunca "no futuro"
+    ch.shellSince = Math.min(now, shellWaitSince(a));
+    ch.shellCount = Math.max(1, countShells(a.shells, a.status !== 'shell'));
+    const label = shellLabel(a);
+    if (label !== ch.shellLabel) {
+      ch.shellLabel = label;
+      ch.shellTextKey = -1;
+    }
+    ch.shellStage = shellStage(now - ch.shellSince);
+  }
+
+  /**
+   * Um shell terminou (Activity 'ShellDone'): sucesso -> levanta e comemora com confete e ⭐;
+   * falha/morto -> nuvenzinha de chuva ('storm') e ombros caídos. Depois segue o status atual.
+   */
+  private reactShellDone(ch: Character, ok: boolean, now: number): void {
+    if (ch.leaving || ch.mode === 'leave' || ch.mode === 'deliver') return;
+    ch.setIcon(ok ? 'star' : 'storm', ok ? CHEER_MS : SULK_MS, now);
+    if (ok) {
+      if (this.effects.length >= MAX_EFFECTS) this.effects.shift();
+      this.effects.push({ kind: 'confetti', charId: ch.id, at: now });
+    }
+    // só encena na própria mesa e parado; andando/passeando fica só o ícone (e o confete)
+    const home = this.spots.get(ch.homeSpot);
+    if (!home || ch.atSpot !== home.id || ch.step || ch.queue.length || ch.meeting) return;
+    if (ok) {
+      ch.reactUntil = now + CHEER_MS + 2 * ENTER_MS + 200;
+      if (home.seated) ch.queue.push({ t: 'exit' });
+      ch.queue.push({ t: 'act', pose: 'stretch', ms: CHEER_MS * 0.55 }, { t: 'act', pose: 'raise_hand', ms: CHEER_MS * 0.45 });
+      if (home.seated) ch.queue.push({ t: 'enter', spot: home.id });
+    } else {
+      // cabeça baixa, desanimado, sem sair da cadeira
+      ch.reactUntil = now + SULK_MS;
+      ch.queue.push({ t: 'act', pose: home.seated ? 'sleep' : 'stand', ms: SULK_MS });
+    }
   }
 
   // =================================================================== nascimento e posicionamento
@@ -251,6 +340,7 @@ export class Sim {
     }
     const ch = new Character(a, appearance);
     ch.lastActivityId = a.activity?.id ?? null;
+    ch.shellDoneAt = latestShellDone(a)?.at ?? 0;
     this.chars.set(a.id, ch);
     if (first) return ch;
     // chegada pelo elevador
@@ -414,6 +504,8 @@ export class Sim {
   private housekeeping(now: number): void {
     for (const ch of this.chars.values()) {
       if (ch.info.kind === 'sub' && !ch.leaving) this.refreshMode(ch);
+      // comando em primeiro plano passou dos 10 s (ou a espera acabou): muda de modo sem snapshot novo
+      else if (!ch.leaving && (ch.mode === 'shell' || (ch.info.status === 'working' && ch.info.shells?.length))) this.refreshMode(ch);
       if (ch.mode === 'idle' && isLongIdle(ch.info.status, ch.info.statusSince, now) && ch.atSpot === ch.homeSpot && ch.icon !== 'zzz') {
         ch.setIcon('zzz', 1e12, now);
       }
@@ -507,6 +599,7 @@ export class Sim {
     ch.animT += dt * 1000;
     ch.updateLane(dt);
     if (ch.icon && now >= ch.iconUntil) ch.icon = null;
+    if (ch.mode === 'shell' && ch.shellSince) ch.shellStage = shellStage(now - ch.shellSince);
     if (!ch.step) {
       if (ch.replan) {
         ch.replan = false;
@@ -1025,6 +1118,7 @@ export class Sim {
       const dist = Math.abs(t.x - ch.tx) + Math.abs(t.y - ch.ty);
       steps.push({ t: 'go', tx: t.x, ty: t.y, dir, run: shouldRun(dist, ch.mode) });
     }
+    // esperando um shell em pé: só a ampulheta (a pose de espera é sentada)
     const pose = ch.mode === 'wait' ? 'raise_hand' : ch.mode === 'work' ? 'read' : 'stand';
     const held = ch.mode === 'work' ? 'laptop' : 'none';
     steps.push({ t: 'until', cond: () => this.hasFreeSeat(room, ch), minMs: 1500, maxMs: 12_000, pose, held, dir });
@@ -1464,8 +1558,43 @@ export class Sim {
     const laptop = spot.kind === 'stool' || spot.kind === 'nook';
     if (atHome && ch.mode === 'work') ch.setPose('type', laptop ? 'laptop' : 'none');
     else if (atHome && ch.mode === 'wait') ch.setPose('raise_hand');
+    else if (atHome && ch.mode === 'shell') this.shellPose(ch, spot, now);
     else if (ch.mode === 'idle' && isLongIdle(ch.info.status, ch.info.statusSince, now)) ch.setPose('sleep');
     else ch.setPose('sit');
+  }
+
+  /**
+   * Pose da espera de shell sentado na mesa, pela escalada (sim/shell.ts): pipoca, braços cruzados
+   * com giros na cadeira, bocejos sob a teia e, por fim, o cochilo. Sem alocação (roda por frame).
+   */
+  private shellPose(ch: Character, spot: SpotDef, now: number): void {
+    const age = now - ch.shellSince;
+    switch (ch.shellStage ?? shellStage(age)) {
+      case 'popcorn':
+        ch.setPose('wait', 'popcorn');
+        return;
+      case 'restless': {
+        // giro completo na cadeira (direções em sequência rápida), de braços cruzados
+        ch.dir = spinDir(spinPhase(age, ch.info.seed), spot.dir);
+        ch.setPose('wait');
+        return;
+      }
+      case 'cobweb': {
+        const yawn = yawnPhase(age, ch.info.seed);
+        if (yawn >= 0) {
+          // bocejo: a cabeça pende e um 🥱 escapa
+          if (now > ch.chatUntil) {
+            ch.chatEmoji = '🥱';
+            ch.chatUntil = now + 1300;
+          }
+          ch.setPose('sleep');
+        } else ch.setPose('wait');
+        return;
+      }
+      case 'nap':
+        ch.setPose('sleep');
+        return;
+    }
   }
 
   // =================================================================== aba oculta
@@ -1502,7 +1631,8 @@ export class Sim {
       ch.arriving = false;
       ch.hiddenUntil = 0;
       ch.stepT = 0;
-      if (ch.mode === 'work' || ch.mode === 'wait' || ch.mode === 'idle') {
+      if (ch.mode === 'work' || ch.mode === 'wait' || ch.mode === 'idle' || ch.mode === 'shell') {
+        ch.reactUntil = 0;
         this.assignHome(ch);
         const home = this.spots.get(ch.homeSpot);
         if (home) {

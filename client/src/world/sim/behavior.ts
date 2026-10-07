@@ -1,18 +1,27 @@
 // Decisões de comportamento — funções PURAS (testáveis sem DOM).
-import type { ActivityKind, AgentKind, AgentStatus } from '../../../../shared/types';
+import type { ActivityKind, AgentKind, AgentStatus, ShellJob } from '../../../../shared/types';
 import type { ScreenMode } from '../../art/api';
 import type { WorldOptions } from '../api';
 import type { SpotDef } from '../layout/types';
+import { foregroundWaiting } from './shell';
 
-/** Modo de alto nível do personagem (deriva do status do agente). */
-export type Mode = 'work' | 'wait' | 'idle' | 'deliver' | 'leave';
+/**
+ * Modo de alto nível do personagem (deriva do status do agente).
+ * 'shell' = esperando um shell terminar: fica na mesa (sem passear) com a gag da espera (sim/shell.ts).
+ */
+export type Mode = 'work' | 'wait' | 'idle' | 'shell' | 'deliver' | 'leave';
 
-export function modeFor(status: AgentStatus, opts: { kind: AgentKind; missing?: boolean; parentGone?: boolean }): Mode {
+export function modeFor(
+  status: AgentStatus,
+  opts: { kind: AgentKind; missing?: boolean; parentGone?: boolean; shells?: readonly ShellJob[]; now?: number },
+): Mode {
   if (opts.missing || status === 'offline') return 'leave';
   if (status === 'done') return opts.kind === 'sub' ? 'deliver' : 'idle';
   if (opts.kind === 'sub' && opts.parentGone) return 'leave';
   if (status === 'waiting') return 'wait';
-  if (status === 'working') return 'work';
+  if (status === 'shell') return 'shell';
+  // trabalhando, mas parado esperando um comando longo em primeiro plano
+  if (status === 'working') return opts.now !== undefined && foregroundWaiting(opts.shells, opts.now) ? 'shell' : 'work';
   return 'idle';
 }
 
@@ -119,10 +128,11 @@ export function chooseSeat(spots: readonly SpotDef[], isFree: (id: string) => bo
   return null;
 }
 
-/** Corre para a mesa se estiver longe (ou sempre que precisa do usuário). */
+/** Corre para a mesa se estiver longe (ou sempre que precisa do usuário). Esperando um shell: só se estiver muito longe. */
 export function shouldRun(pathTiles: number, mode: Mode): boolean {
   if (mode === 'wait') return pathTiles > 2;
   if (mode === 'work') return pathTiles > 12;
+  if (mode === 'shell') return pathTiles > 20;
   return false;
 }
 

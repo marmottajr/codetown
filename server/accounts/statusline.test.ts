@@ -153,7 +153,7 @@ describe('organização da conta', () => {
     expect(meaningfulOrganization("fulano@x.com's Organization", 'fulano@x.com')).toBeUndefined();
     expect(meaningfulOrganization("FULANO@X.COM’s organization", 'fulano@x.com')).toBeUndefined();
     expect(meaningfulOrganization("outra@x.com's Organization", undefined)).toBeUndefined();
-    expect(meaningfulOrganization('Monetizze', 'fulano@x.com')).toBe('Monetizze');
+    expect(meaningfulOrganization('Empresa Exemplo', 'fulano@x.com')).toBe('Empresa Exemplo');
     expect(meaningfulOrganization("Maria's Organization", 'fulano@x.com')).toBe("Maria's Organization");
   });
 

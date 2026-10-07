@@ -19,6 +19,8 @@
 
   --st-working: #4fd18b;
   --st-waiting: #ffb547;
+  /* Esperando o shell: turquesa (distinto do verde de "trabalhando" e do azul de "concluído"). */
+  --st-shell: #3cd8d2;
   --st-idle: #8b98b3;
   --st-done: #6aa8ff;
   --st-offline: #6b7280;
@@ -3084,6 +3086,402 @@
   transition:
     opacity 0.25s,
     visibility 0s linear 0.25s;
+}
+
+/* ------------------------------------------------------------------ esperando o shell */
+
+/* Ponto de status em ampulheta: a areia (::before em cima, ::after embaixo) escorre em 4 passos de pixel
+   e o ponto vira; o fim de um ciclo é idêntico ao começo do próximo (sem salto). */
+.ui-status-dot.is-shell {
+  --st: var(--st-shell);
+  position: relative;
+  overflow: hidden;
+  height: 10px;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--st) 40%, #223038);
+  /* Silhueta de ampulheta (o recorte some com o brilho; a forma já distingue o estado). */
+  clip-path: polygon(0 0, 100% 0, 100% 16%, 62% 50%, 100% 84%, 100% 100%, 0 100%, 0 84%, 38% 50%, 0 16%);
+  animation: ui-dot-flip 2.4s cubic-bezier(0.6, 0, 0.3, 1) infinite;
+}
+
+.ui-status-dot.is-shell::before,
+.ui-status-dot.is-shell::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 50%;
+  background: var(--st);
+  transform-origin: 50% 100%;
+}
+
+.ui-status-dot.is-shell::before {
+  top: 0;
+  animation: ui-sand-top 2.4s steps(4, end) infinite;
+}
+
+.ui-status-dot.is-shell::after {
+  bottom: 0;
+  animation: ui-sand-bottom 2.4s steps(4, end) infinite;
+}
+
+@keyframes ui-dot-flip {
+  0%,
+  85% {
+    rotate: 0deg;
+  }
+  100% {
+    rotate: 180deg;
+  }
+}
+
+@keyframes ui-sand-top {
+  0% {
+    transform: scaleY(1);
+  }
+  85%,
+  100% {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes ui-sand-bottom {
+  0% {
+    transform: scaleY(0);
+  }
+  85%,
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+/* Ampulheta (ícone em pixels ou ⏳) virando a cada 1,2 s, como a do escritório. */
+.ui-hourglass .ui-px-icon,
+.ui-activity.is-shell .ui-activity__icon {
+  animation: ui-hourglass-turn 2.4s cubic-bezier(0.5, 0, 0.3, 1.3) infinite;
+}
+
+@keyframes ui-hourglass-turn {
+  0%,
+  40% {
+    rotate: 0deg;
+  }
+  50%,
+  90% {
+    rotate: 180deg;
+  }
+  100% {
+    rotate: 360deg;
+  }
+}
+
+/* Linha de atividade "⏳ <label> · 12:31 ×2": o cronômetro e o contador nunca entram nas reticências. */
+.ui-activity__time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--st-shell);
+}
+
+.ui-activity__time::before {
+  content: '· ';
+  font-weight: 400;
+  color: var(--ui-faint);
+}
+
+.ui-activity__count {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  font: 700 10.5px/15px var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  color: #0c1a1c;
+  background: var(--st-shell);
+}
+
+.ui-activity.is-shell .ui-activity__text {
+  color: #bdeeea;
+}
+
+/* Fim de um shell (atividade ShellDone do servidor). */
+.ui-activity.is-shell-ok .ui-activity__text {
+  color: #9fe8c0;
+}
+
+.ui-activity.is-shell-fail .ui-activity__text {
+  color: #ff9b8f;
+}
+
+.ui-agent.is-shell {
+  background: color-mix(in srgb, var(--st-shell) 6%, transparent);
+}
+
+.ui-agent.is-shell.is-selected {
+  background: color-mix(in srgb, var(--st-shell) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--st-shell);
+}
+
+/* Contador "⏳ N shells" na barra superior (só aparece com shells rodando). */
+.ui-counter.ui-counter--shells {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  color: var(--st-shell);
+  background: color-mix(in srgb, var(--st-shell) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--st-shell) 40%, transparent);
+  transition: background-color 0.2s;
+  animation: ui-counter-in 0.3s var(--ease);
+}
+
+.ui-counter.ui-counter--shells:hover {
+  background: color-mix(in srgb, var(--st-shell) 20%, transparent);
+}
+
+.ui-counter.ui-counter--shells + .ui-counter {
+  margin-left: 3px;
+}
+
+.ui-counter--shells .ui-counter__icon {
+  display: block;
+  align-self: center;
+}
+
+.ui-counter__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.ui-counter--shells .ui-counter__value,
+.ui-counter--shells .ui-counter__label {
+  color: var(--st-shell);
+}
+
+@keyframes ui-counter-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+/* Caixa de status da gaveta. */
+.ui-alert--shell {
+  background: color-mix(in srgb, var(--st-shell) 10%, transparent);
+  border-color: color-mix(in srgb, var(--st-shell) 42%, transparent);
+  color: #c9f1ee;
+}
+
+.ui-alert--shell .ui-alert__icon,
+.ui-alert--shell .ui-alert__title {
+  color: var(--st-shell);
+}
+
+.ui-alert--shell .ui-alert__icon {
+  padding-top: 0;
+}
+
+.ui-shell-mood {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e6faf8;
+}
+
+.ui-shell-mood__text,
+.ui-shell-mood__next {
+  display: block;
+}
+
+.ui-shell-mood__next {
+  margin-top: 1px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--st-shell) 45%, var(--ui-muted));
+}
+
+/* Seção "Shells rodando". */
+.ui-shells {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-shell {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--ui-bg-soft);
+  border: 1px solid var(--ui-line);
+}
+
+.ui-shell__head {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 7px;
+}
+
+.ui-shell__icon {
+  text-align: center;
+  font-size: 13px;
+}
+
+.ui-shell__label {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.ui-shell__time {
+  font: 700 13px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--st-shell);
+}
+
+.ui-shell__meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 5px 0 0 25px;
+  font-size: 11px;
+  color: var(--ui-faint);
+}
+
+.ui-shell__badge {
+  padding: 0 6px;
+  border-radius: 4px;
+  font: 600 10.5px/17px var(--font-ui);
+  white-space: nowrap;
+}
+
+.ui-shell__badge--bg {
+  color: #a9eeea;
+  background: color-mix(in srgb, var(--st-shell) 16%, transparent);
+}
+
+.ui-shell__badge--fg {
+  color: #ffd9a3;
+  background: rgba(255, 181, 71, 0.15);
+}
+
+.ui-shell__badge--monitor {
+  color: #d3c2ff;
+  background: rgba(170, 140, 255, 0.16);
+}
+
+.ui-shell__cmd {
+  margin: 6px 0 0 25px;
+}
+
+.ui-shell__cmd summary {
+  width: max-content;
+  font-size: 11.5px;
+  color: var(--ui-accent);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.ui-shell__cmd-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.ui-shell__cmd pre {
+  margin: 0;
+  padding: 7px 9px;
+  max-height: 140px;
+  overflow: auto;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--ui-line);
+  color: #cfd7e8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Linha do tempo e feed: fim de um shell. */
+.ui-tl.is-shell-ok .ui-tl__text,
+.ui-feed__item.is-shell-ok .ui-feed__text {
+  color: #9fe8c0;
+  font-weight: 600;
+}
+
+.ui-tl.is-shell-fail .ui-tl__text,
+.ui-feed__item.is-shell-fail .ui-feed__text {
+  font-weight: 600;
+}
+
+.ui-feed__item.is-shell-ok .ui-feed__row {
+  background: linear-gradient(90deg, rgba(79, 209, 139, 0.1), transparent 60%);
+}
+
+.ui-feed__item.is-shell-fail .ui-feed__row {
+  background: linear-gradient(90deg, rgba(255, 107, 107, 0.12), transparent 60%);
+}
+
+.ui-feed__item.is-shell-ok .ui-feed__row:hover,
+.ui-feed__item.is-shell-fail .ui-feed__row:hover {
+  background-color: var(--ui-bg-hover);
+}
+
+/* Dica do personagem. */
+.ui-tip.is-shell {
+  border-color: color-mix(in srgb, var(--st-shell) 55%, transparent);
+}
+
+.ui-tip__mood {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--st-shell) 55%, #fff);
+}
+
+/* Ajuda: legenda da espera. */
+.ui-help__shell {
+  grid-column: 1 / -1;
+}
+
+.ui-shell-legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 18px;
+  font-size: 12.5px;
+}
+
+.ui-shell-legend li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  color: #c9d1e2;
+}
+
+.ui-shell-legend .ui-icon-legend__icon {
+  font-size: 14px;
+}
+
+@media (max-width: 1040px) {
+  .ui-counter--shells .ui-counter__label {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .ui-counter--shells {
+    padding: 4px 8px;
+  }
+
+  .ui-shell-legend {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ------------------------------------------------------------------ responsivo */

@@ -1,18 +1,19 @@
 // Modelo de apresentação da UI: agrupamento salas -> agentes -> subagentes, filtros, contadores e rótulos.
 // Funções puras (sem DOM), testadas em ui/model.test.ts.
-import type { AccountInfo, AgentInfo, AgentStatus, OfficeSnapshot, RoomInfo, TaskItem } from '../../../shared/types';
-import { normalizeSearch } from './format';
+import type { AccountInfo, Activity, AgentInfo, AgentStatus, OfficeSnapshot, RoomInfo, ShellJob, TaskItem } from '../../../shared/types';
+import { formatElapsed, normalizeSearch } from './format';
 
 export const STATUS_LABEL: Record<AgentStatus, string> = {
   working: 'Trabalhando',
   waiting: 'Precisa de você',
+  shell: 'Esperando o shell',
   idle: 'Ocioso',
   done: 'Concluído',
   offline: 'Saindo',
 };
 
 /** Ordem de urgência (menor = mais urgente), usada para destacar quem precisa de atenção. */
-const STATUS_URGENCY: Record<AgentStatus, number> = { waiting: 0, working: 1, idle: 2, done: 3, offline: 4 };
+const STATUS_URGENCY: Record<AgentStatus, number> = { waiting: 0, shell: 1, working: 2, idle: 3, done: 4, offline: 5 };
 
 export function statusLabel(status: AgentStatus): string {
   return STATUS_LABEL[status];
@@ -25,6 +26,8 @@ export function activityFallback(agent: Pick<AgentInfo, 'status' | 'waitingFor'>
       return 'Trabalhando…';
     case 'waiting':
       return agent.waitingFor ? `Precisa de você: ${agent.waitingFor}` : 'Precisa de você';
+    case 'shell':
+      return 'Esperando o shell terminar';
     case 'done':
       return 'Concluiu a tarefa';
     case 'offline':
@@ -49,20 +52,26 @@ export interface Counters {
   rooms: number;
   /** Agentes presentes (principais + subagentes, exceto os que estão saindo). */
   agents: number;
+  /** Agentes processando um pedido (sem contar quem está parado esperando um comando longo). */
   working: number;
   /** Subagentes ativos (não concluídos nem saindo). */
   subagents: number;
   waiting: number;
+  /** Shells que algum agente está esperando terminar (segundo plano e comandos longos em primeiro plano). */
+  shells: number;
 }
 
-export function computeCounters(snap: Pick<OfficeSnapshot, 'rooms' | 'agents'> | null): Counters {
-  const c: Counters = { rooms: 0, agents: 0, working: 0, subagents: 0, waiting: 0 };
+/** `now` (relógio do servidor) decide quando um comando em primeiro plano já conta como espera. */
+export function computeCounters(snap: Pick<OfficeSnapshot, 'rooms' | 'agents'> | null, now = Date.now()): Counters {
+  const c: Counters = { rooms: 0, agents: 0, working: 0, subagents: 0, waiting: 0, shells: 0 };
   if (!snap) return c;
   c.rooms = snap.rooms.length;
   for (const a of snap.agents) {
     if (!isPresent(a)) continue;
     c.agents++;
-    if (a.status === 'working') c.working++;
+    const wait = shellWaitIn(a, snap.agents, now);
+    if (wait) c.shells += Math.max(1, wait.jobs.length);
+    else if (a.status === 'working') c.working++;
     if (a.status === 'waiting') c.waiting++;
     if (a.kind === 'sub' && a.status !== 'done') c.subagents++;
   }
@@ -72,6 +81,193 @@ export function computeCounters(snap: Pick<OfficeSnapshot, 'rooms' | 'agents'> |
 /** Agentes esperando o usuário, do que espera há mais tempo para o mais recente. */
 export function waitingAgents(agents: readonly AgentInfo[]): AgentInfo[] {
   return agents.filter((a) => a.status === 'waiting').sort((a, b) => a.statusSince - b.statusSince);
+}
+
+// ---------------------------------------------------------------- esperando o shell
+
+/** Um comando em primeiro plano só conta como "esperando o shell" depois deste tempo (o mesmo limiar do mundo). */
+export const FOREGROUND_WAIT_MS = 10_000;
+/** Na gaveta, comandos em primeiro plano só aparecem depois deste tempo (comandos rápidos não fazem a lista piscar). */
+export const FOREGROUND_SHOW_MS = 2_000;
+
+export interface ShellWait {
+  /** Comandos que o agente está esperando, do mais antigo para o mais recente. */
+  jobs: ShellJob[];
+  /** Comando que dirige o tempo e a fase da espera (o shell mais antigo); ausente se o servidor ainda não conhece os comandos. */
+  main?: ShellJob;
+  /** Desde quando espera (epoch ms). */
+  since: number;
+  /** true = parado num comando longo em primeiro plano (status 'working'); false = terminou o turno (status 'shell'). */
+  foreground: boolean;
+}
+
+const byStart = (a: ShellJob, b: ShellJob) => a.startedAt - b.startedAt || a.id.localeCompare(b.id);
+
+/**
+ * O agente está esperando algum shell terminar? Vale para o status 'shell' (terminou o turno com shells em segundo plano)
+ * e para 'working' parado num comando em primeiro plano há mais de FOREGROUND_WAIT_MS. Devolve null caso contrário.
+ * O tempo é o do shell (Bash) mais antigo; monitores só contam se não houver nenhum shell.
+ */
+export function shellWait(agent: Pick<AgentInfo, 'status' | 'shells' | 'statusSince'>, now: number): ShellWait | null {
+  const all = agent.shells ?? [];
+  let jobs: ShellJob[];
+  if (agent.status === 'shell') jobs = all.slice().sort(byStart);
+  else if (agent.status === 'working') jobs = all.filter((j) => !j.background && now - j.startedAt >= FOREGROUND_WAIT_MS).sort(byStart);
+  else return null;
+  if (agent.status === 'working' && jobs.length === 0) return null;
+  const main = jobs.find((j) => j.kind === 'shell') ?? jobs[0];
+  return { jobs, main, since: Math.min(main?.startedAt ?? agent.statusSince, now), foreground: agent.status === 'working' };
+}
+
+/** Shells em segundo plano disparados pelos subagentes (e subagentes deles) de um agente. */
+function descendantShells(id: string, agents: readonly AgentInfo[]): ShellJob[] {
+  const out: ShellJob[] = [];
+  const seen = new Set([id]);
+  const queue = [id];
+  while (queue.length) {
+    const parent = queue.shift()!;
+    for (const a of agents) {
+      if (a.parentId !== parent || seen.has(a.id)) continue;
+      seen.add(a.id);
+      queue.push(a.id);
+      for (const j of a.shells ?? []) if (j.background) out.push(j);
+    }
+  }
+  return out;
+}
+
+/**
+ * Como `shellWait`, olhando o escritório todo: um agente em 'shell' sem shells próprios conhecidos pode estar
+ * esperando um comando que um subagente dele deixou rodando em segundo plano (o servidor faz o mesmo no balão).
+ */
+export function shellWaitIn(agent: AgentInfo, agents: readonly AgentInfo[], now: number): ShellWait | null {
+  if (agent.status === 'shell' && !agent.shells?.length) {
+    const inherited = descendantShells(agent.id, agents);
+    if (inherited.length) return shellWait({ status: agent.status, statusSince: agent.statusSince, shells: inherited }, now);
+  }
+  return shellWait(agent, now);
+}
+
+/** Status mostrado na interface: quem está parado esperando um comando longo aparece como "Esperando o shell". */
+export function displayStatus(agent: Pick<AgentInfo, 'status' | 'shells' | 'statusSince'>, now: number): AgentStatus {
+  return shellWait(agent, now) ? 'shell' : agent.status;
+}
+
+/** Comandos listados na gaveta ("Shells rodando"): todos, menos os em primeiro plano recém-iniciados. */
+export function visibleShells(agent: Pick<AgentInfo, 'shells'>, now: number): ShellJob[] {
+  return (agent.shells ?? []).filter((j) => j.background || j.kind === 'monitor' || now - j.startedAt >= FOREGROUND_SHOW_MS).sort(byStart);
+}
+
+/** Agentes esperando shells, de quem espera há mais tempo para o mais recente (botão "⏳ N shells"). */
+export function shellWaitingAgents(agents: readonly AgentInfo[], now: number): AgentInfo[] {
+  return agents
+    .filter((a) => isPresent(a))
+    .map((a) => ({ a, w: shellWaitIn(a, agents, now) }))
+    .filter((x): x is { a: AgentInfo; w: ShellWait } => !!x.w)
+    .sort((x, y) => x.w.since - y.w.since || byArrival(x.a, y.a))
+    .map((x) => x.a);
+}
+
+/** Há algum shell rodando? (A interface passa a atualizar o cronômetro a cada segundo.) */
+export function hasRunningShells(snap: Pick<OfficeSnapshot, 'agents'> | null): boolean {
+  return !!snap?.agents.some((a) => isPresent(a) && (a.status === 'shell' || (a.shells?.length ?? 0) > 0));
+}
+
+/** Selo do tipo de comando. */
+export function shellKindLabel(job: Pick<ShellJob, 'kind' | 'background'>): string {
+  if (job.kind === 'monitor') return 'monitor';
+  return job.background ? 'segundo plano' : 'primeiro plano';
+}
+
+export interface ShellLine {
+  /** Rótulo do shell principal (ou um texto genérico). */
+  label: string;
+  /** Cronômetro: "0:42", "12:31", "1:02:10". */
+  time: string;
+  /** "×2" quando espera mais de um comando; "" com um só. */
+  count: string;
+  /** Frase completa para dicas e leitores de tela: "⏳ Rodar a suíte · 12:31 (2 shells)". */
+  text: string;
+}
+
+/** Linha de atividade de quem espera um shell: "⏳ <label> · <tempo>" (e "×N" se vários). */
+export function shellLine(wait: ShellWait, now: number): ShellLine {
+  const label = wait.main?.label?.trim() || (wait.foreground ? 'Esperando o comando terminar' : 'Esperando o shell terminar');
+  const time = formatElapsed(now - wait.since);
+  const n = wait.jobs.length;
+  const count = n > 1 ? `×${n}` : '';
+  return { label, time, count, text: `⏳ ${label} · ${time}${n > 1 ? ` (${n} shells)` : ''}` };
+}
+
+/** Texto da caixa "Esperando o shell". */
+export function shellBoxText(wait: Pick<ShellWait, 'foreground' | 'jobs'>): string {
+  if (wait.foreground) return 'Está parado num comando no terminal, esperando ele terminar para continuar o turno.';
+  const n = wait.jobs.length;
+  return n > 1
+    ? `Terminou o turno e está esperando ${n} shells terminarem. A cada um que termina, o agente recebe o resultado.`
+    : 'Terminou o turno e está esperando o shell terminar. Quando ele terminar, o agente recebe o resultado.';
+}
+
+export type ShellStage = 'popcorn' | 'spin' | 'cobweb' | 'nap';
+
+export interface ShellStageInfo {
+  stage: ShellStage;
+  /** A partir de quanto tempo de espera a fase começa (ms). */
+  from: number;
+  emoji: string;
+  /** Frase curta do que o personagem está fazendo. */
+  text: string;
+  /** Explicação para a ajuda. */
+  help: string;
+}
+
+const MIN = 60_000;
+
+/** As fases da espera no escritório (a "escalada cômica"), pela idade do shell mais antigo. */
+export const SHELL_STAGES: readonly ShellStageInfo[] = [
+  {
+    stage: 'popcorn',
+    from: 0,
+    emoji: '🍿',
+    text: 'Comendo pipoca e assistindo ao terminal',
+    help: 'Até 3 min: recosta na cadeira com um balde de pipoca e assiste ao terminal como se fosse um filme.',
+  },
+  {
+    stage: 'spin',
+    from: 3 * MIN,
+    emoji: '🪑',
+    text: 'A pipoca acabou: girando na cadeira',
+    help: 'De 3 a 10 min: a pipoca acaba; braços cruzados, dedos batendo e, de vez em quando, um giro completo na cadeira.',
+  },
+  {
+    stage: 'cobweb',
+    from: 10 * MIN,
+    emoji: '🕸️',
+    text: 'Já tem teia de aranha na cadeira',
+    help: 'Depois de 10 min: aparece uma teia de aranha na cadeira (ela cresce depois de 20 min) e escapa um bocejo.',
+  },
+  {
+    stage: 'nap',
+    from: 25 * MIN,
+    emoji: '😴',
+    text: 'Cochilou esperando o shell',
+    help: 'Depois de 25 min: cochila na mesa, coberto de teia.',
+  },
+];
+
+/** Fase da espera para um shell rodando há `ms`, e quanto falta para a próxima (null na última). */
+export function shellStage(ms: number): ShellStageInfo & { nextIn: number | null } {
+  const v = Math.max(0, ms);
+  let i = 0;
+  while (i + 1 < SHELL_STAGES.length && v >= SHELL_STAGES[i + 1].from) i++;
+  const next = SHELL_STAGES[i + 1];
+  return { ...SHELL_STAGES[i], nextIn: next ? next.from - v : null };
+}
+
+/** Marcador do servidor para o fim de um shell (Activity com tool 'ShellDone'; error = falhou ou foi interrompido). */
+export function shellDoneKind(activity: Pick<Activity, 'tool' | 'error'> | undefined): 'ok' | 'fail' | null {
+  if (activity?.tool !== 'ShellDone') return null;
+  return activity.error ? 'fail' : 'ok';
 }
 
 export interface TaskProgress {
@@ -133,7 +329,18 @@ export function matchesQuery(agent: AgentInfo, room: RoomInfo | undefined, accou
   const q = normalizeSearch(query);
   if (!q) return true;
   const hay = normalizeSearch(
-    [agent.name, roleLabel(agent), agent.title ?? '', room?.name ?? '', room?.path ?? '', accountText(account), agent.activity?.text ?? ''].join(' \u0001 '),
+    [
+      agent.name,
+      roleLabel(agent),
+      agent.title ?? '',
+      room?.name ?? '',
+      room?.path ?? '',
+      accountText(account),
+      agent.activity?.text ?? '',
+      // Quem espera um shell também aparece ao buscar "shell" (ou pelo rótulo do comando).
+      agent.status === 'shell' ? STATUS_LABEL.shell : '',
+      ...(agent.shells ?? []).map((j) => `shell ${j.label}`),
+    ].join(' \u0001 '),
   );
   return q.split(/\s+/).every((term) => hay.includes(term));
 }

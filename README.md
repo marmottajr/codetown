@@ -76,6 +76,20 @@ agentes; embaixo, o feed de atividade.
   </tr>
 </table>
 
+<table>
+  <tr>
+    <td width="58%">
+      <b>Esperando o shell.</b> Quando o agente termina o turno mas deixa um comando rodando (testes, build,
+      deploy…), ele não sai para passear: fica na mesa com uma ampulheta virando sobre a cabeça, o terminal mostrando
+      o progresso e um balão com o comando e o tempo. E a espera vira comédia: primeiro ele come pipoca assistindo ao
+      terminal; depois de 3 min cruza os braços e gira na cadeira; depois de 10 min junta teia de aranha; depois de
+      25 min cochila. Quando o comando termina, levanta e comemora com confete — ou ganha uma nuvem de chuva, se
+      falhou. Na lista lateral e nos detalhes, um cronômetro mostra há quanto tempo cada comando está rodando.
+    </td>
+    <td width="42%"><img src="docs/screenshots/shell-wait.png" alt="Agente comendo pipoca na mesa, com uma ampulheta sobre a cabeça e o balão 'Rodar a suíte de testes · 1 min'; na fileira da frente, uma colega espera há mais tempo, com teia de aranha na cadeira e o terminal mostrando o progresso" /></td>
+  </tr>
+</table>
+
 **A luz apaga.** Quando você fecha a última sessão de um projeto, o último personagem vai até o interruptor,
 apaga a luz, sai pelo elevador — e a sala é desmontada, virando jardim até um novo projeto chegar.
 
@@ -197,6 +211,7 @@ dar erro. O `usage:uninstall` deixa cópias `settings.json.codetown-backup-<data
 | --- | --- |
 | **Trabalhando** | Na mesa, digitando. O monitor e um balão mostram a atividade: 📖 lendo, ✏️ editando, 💻 terminal, 🧪 testes, 🌐 pesquisando… |
 | **Precisa de você** | Corre para a mesa e levanta a mão, com alerta piscando: está esperando uma permissão ou resposta no terminal. |
+| **Esperando o shell** | Terminou o turno mas deixou um comando rodando (testes, build, deploy…), então fica na mesa com uma ampulheta virando sobre a cabeça e o terminal em progresso: come pipoca assistindo, depois de 3 min cruza os braços e gira na cadeira, depois de 10 min junta teia de aranha e depois de 25 min cochila; quando o comando termina, levanta e comemora com confete (ou ganha uma nuvem de chuva, se falhou). |
 | **Ocioso** | Terminou o turno e passeia: café na copa, bebedouro, banheiro, sofá do lounge, ping-pong, conversa com colegas. Depois de 10 min parado, cochila. |
 | **Subagente concluído** | Vai até o agente que o chamou, entrega o resultado e sai pelo elevador. |
 | **Sessão encerrada** | Vai embora; se era o último da sala, apaga a luz antes de sair. |
@@ -206,7 +221,8 @@ um **chip colorido com a letra da conta** (C, D…).
 
 ### Interface
 
-- **Topo:** contadores (salas, agentes, trabalhando, subagentes, precisam de você) e um cartão de **uso por conta**.
+- **Topo:** contadores (salas, agentes, trabalhando, subagentes, shells rodando, precisam de você) e um cartão de
+  **uso por conta**. O de shells só aparece enquanto algum comando está rodando; clique nele para ir até quem espera.
 - **Painel lateral:** busca, filtro por conta e a lista de salas com seus agentes e subagentes.
 - **Gaveta de detalhes:** clique num personagem (no prédio ou na lista) para ver atividade, tarefas, subagentes,
   linha do tempo e estatísticas (ferramentas, tokens, custo, linhas alteradas, modelo, branch).
@@ -303,7 +319,10 @@ demais ficam fixas dentro do container. Opções: `npm run docker:up -- --no-bui
 ```
 
 - **Quem está no escritório:** enquanto uma sessão está aberta, o Claude Code mantém `sessions/<pid>.json` com o
-  projeto e o status (ocupado, ocioso ou esperando você). É isso que decide quem aparece e o que cada um faz.
+  projeto e o status (ocupado, ocioso, esperando você ou esperando um shell em segundo plano). É isso que decide
+  quem aparece e o que cada um faz.
+- **Shells rodando:** nos transcripts, cada `Bash` em segundo plano (ou comando longo em primeiro plano) vira um
+  "shell" com rótulo e cronômetro, até chegar a notificação de que terminou, falhou ou foi interrompido.
 - **O que cada um está fazendo:** o servidor acompanha o fim dos transcripts (`.jsonl`) das sessões abertas e traduz
   cada chamada de ferramenta numa atividade em português, com ícone. Dali também saem tarefas, título, modelo e
   estatísticas.

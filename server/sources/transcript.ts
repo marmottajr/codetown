@@ -4,7 +4,8 @@
 // Tipos de linha desconhecidos são ignorados; uma linha inválida nunca derruba a leitura.
 import { createReadStream } from 'node:fs';
 import type { Activity, AgentStats, TaskItem, TaskStatus } from '../../shared/types';
-import { describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../shared/activity';
+import { describePrompt, describeShellJob, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../shared/activity';
+import type { ShellStart } from './shells';
 
 // ------------------------------------------------------------------ tarefas
 
@@ -73,13 +74,25 @@ export interface SpawnInfo {
   at: number;
 }
 
-/** Sinais para o ciclo de vida dos subagentes (extraídos do transcript de quem os disparou). */
+/**
+ * Sinais para o ciclo de vida dos subagentes (extraídos do transcript de quem os disparou) e dos
+ * shells que o agente espera (Bash/Monitor; ver shells.ts).
+ */
 export type TranscriptSignal =
   | { type: 'spawn'; spawn: SpawnInfo }
   | { type: 'launched'; toolUseId: string; agentId?: string; runId?: string; taskId?: string }
   | { type: 'finished'; toolUseId: string; agentId?: string; runId?: string; error: boolean }
   | { type: 'notification'; toolUseId?: string; taskId?: string; status?: string; summary?: string }
-  | { type: 'stopped'; taskId: string };
+  | { type: 'stopped'; taskId: string }
+  /** Bash (primeiro ou segundo plano) ou Monitor chamado. */
+  | { type: 'shellStart'; shell: ShellStart }
+  /** tool_result de um Bash/Monitor: `taskId` = id da tarefa em segundo plano, quando houver. */
+  | { type: 'shellResult'; toolUseId: string; taskId?: string; error: boolean }
+  /** Fim de turno ou interrupção: nenhum comando em primeiro plano segue rodando. */
+  | { type: 'turnEnd' };
+
+/** Sinais que interessam ao rastreador de shells (inclusive no começo do arquivo, lido em segundo plano). */
+const SHELL_SIGNALS = new Set<TranscriptSignal['type']>(['shellStart', 'shellResult', 'notification', 'stopped', 'turnEnd']);
 
 export interface ParsedActivity {
   activity: Activity;
@@ -160,6 +173,8 @@ export interface LineResult {
   signals: TranscriptSignal[];
   /** Título, tarefas, estatísticas ou metadados mudaram. */
   changed: boolean;
+  /** Epoch ms da linha (o `timestamp` dela ou, sem ele, o `now` do contexto). */
+  at: number;
 }
 
 // ------------------------------------------------------------------ utilidades
@@ -208,6 +223,30 @@ export function parseTaskNotification(text: string): { taskId?: string; toolUseI
   return { taskId: tag('task-id'), toolUseId: tag('tool-use-id'), status: tag('status'), summary: tag('summary') };
 }
 
+/**
+ * Id da tarefa em segundo plano no tool_result de um Bash/Monitor: `toolUseResult.backgroundTaskId`
+ * ("Command running in background with ID: bo0ov3q3l..." no texto) ou campos equivalentes.
+ */
+export function backgroundIdOf(tur: Record<string, unknown>, content: unknown, tool?: string): string | undefined {
+  for (const k of ['backgroundTaskId', 'backgroundId', 'shellId', 'bash_id', 'monitorId']) {
+    const v = str(tur[k]);
+    if (v) return v.trim();
+  }
+  if (tool === 'Monitor') {
+    const v = str(tur.taskId) ?? str(tur.task_id);
+    if (v) return v.trim();
+  }
+  if (tool !== 'Bash' && tool !== 'Monitor') return undefined;
+  // Só o começo do texto, na forma do próprio Claude Code ("Command running in background with ID: x"):
+  // a saída de um comando em primeiro plano pode conter qualquer coisa (inclusive essa frase).
+  const head = textOf(content).trimStart().split('\n', 1)[0].slice(0, 300);
+  const re =
+    tool === 'Monitor'
+      ? /^(?:Monitor|Started|Watching|Task)\b[^"]{0,80}?\b(?:task|monitor)?\s*id\b[':\s]*([A-Za-z0-9_-]{4,})/i
+      : /^Command\b[^"]{0,60}?\bbackground\w*\b[^"]{0,60}?\bID:\s*([A-Za-z0-9_-]{4,})/i;
+  return re.exec(head)?.[1];
+}
+
 const INTERRUPTED = /^\[Request interrupted by user/;
 const REJECTED = /doesn't want to proceed|tool use was rejected|user rejected/i;
 // Mensagens "de sistema" gravadas como user (comandos locais, lembretes, saída de bash...).
@@ -222,7 +261,7 @@ const LOCAL_COMMANDS = new Set([
 // ------------------------------------------------------------------ parser
 
 class LineParser {
-  readonly out: LineResult = { activities: [], signals: [], changed: false };
+  readonly out: LineResult;
   private readonly withActivities: boolean;
 
   constructor(
@@ -232,6 +271,7 @@ class LineParser {
     private readonly at: number,
   ) {
     this.withActivities = ctx.activities !== false;
+    this.out = { activities: [], signals: [], changed: false, at };
   }
 
   private nextId(suffix: string): string {
@@ -433,8 +473,23 @@ class LineParser {
       case 'TaskStop':
       case 'KillShell':
       case 'KillBash': {
-        const tid = str(input.task_id) ?? str(input.taskId) ?? str(input.shell_id) ?? str(input.bash_id);
+        const tid = str(input.task_id) ?? str(input.taskId) ?? str(input.shell_id) ?? str(input.bash_id) ?? str(input.id);
         if (tid) remember(s.stopRequests, id, tid, 64);
+        break;
+      }
+      case 'Bash':
+      case 'Monitor': {
+        const job = describeShellJob(name, input);
+        const shell: ShellStart = {
+          toolUseId: id,
+          label: job.label,
+          background: name === 'Monitor' || truthy(input.run_in_background),
+          kind: job.kind,
+          at: this.at,
+        };
+        if (job.command) shell.command = job.command;
+        if (name === 'Monitor' && typeof input.timeout_ms === 'number' && Number.isFinite(input.timeout_ms)) shell.timeoutMs = input.timeout_ms;
+        this.out.signals.push({ type: 'shellStart', shell });
         break;
       }
       default:
@@ -465,6 +520,7 @@ class LineParser {
   private interrupted(): void {
     this.s.ended = true;
     this.s.pendingTools.clear();
+    this.out.signals.push({ type: 'turnEnd' });
     this.push(SPECIAL.interrupted(), { suffix: ':int' });
   }
 
@@ -551,6 +607,14 @@ class LineParser {
       s.stopRequests.delete(id);
       if (!isError) this.out.signals.push({ type: 'stopped', taskId: stopped });
     }
+
+    // Bash/Monitor: em segundo plano o resultado traz o id da tarefa; em primeiro plano, é o fim do comando.
+    const bgId = backgroundIdOf(tur, b.content, name);
+    if (name === 'Bash' || name === 'Monitor' || (name === undefined && bgId)) {
+      const sig: TranscriptSignal = { type: 'shellResult', toolUseId: id, error: isError };
+      if (bgId && !isError) sig.taskId = bgId;
+      this.out.signals.push(sig);
+    }
   }
 
   private system(): void {
@@ -559,6 +623,7 @@ class LineParser {
       case 'turn_duration': {
         const ms = typeof j.durationMs === 'number' ? j.durationMs : undefined;
         this.s.ended = true;
+        this.out.signals.push({ type: 'turnEnd' });
         this.push(SPECIAL.turnDone(ms), ms !== undefined ? { durationMs: ms } : {});
         return;
       }
@@ -581,9 +646,9 @@ export function parseLine(state: TranscriptState, raw: string, ctx: ParseContext
   try {
     j = JSON.parse(raw);
   } catch {
-    return { activities: [], signals: [], changed: false };
+    return { activities: [], signals: [], changed: false, at: ctx.now };
   }
-  if (!j || typeof j !== 'object' || Array.isArray(j)) return { activities: [], signals: [], changed: false };
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return { activities: [], signals: [], changed: false, at: ctx.now };
   const rec = j as Record<string, unknown>;
   const at = toMs(rec.timestamp);
   if (at !== undefined) {
@@ -614,20 +679,31 @@ const PREFIX_MARKERS = [
   '"type":"permission-mode"',
   // Lançamentos em segundo plano (para casar a notificação de término com o subagente/workflow).
   '"async_launched"',
+  // Shells em segundo plano: lançamento e término (para saber quais ainda rodam).
+  '"backgroundTaskId"',
+  '<task-notification>',
 ];
 
 function prefixRelevant(state: TranscriptState, line: string): boolean {
   if (PREFIX_MARKERS.some((m) => line.includes(m))) return true;
-  if (state.pendingTaskCreates.size && line.includes('"tool_result"')) {
+  if ((state.pendingTaskCreates.size || state.stopRequests.size) && line.includes('"tool_result"')) {
     for (const id of state.pendingTaskCreates.keys()) if (line.includes(id)) return true;
+    for (const id of state.stopRequests.keys()) if (line.includes(id)) return true;
   }
   return false;
+}
+
+/** Sinal de shell com o horário da linha que o gerou. */
+export interface ShellEvent {
+  signal: TranscriptSignal;
+  at: number;
 }
 
 /**
  * Lê em stream (sem bloquear o event loop) os bytes [0, end) de um transcript, só para
  * recuperar títulos, tarefas e estatísticas anteriores à janela lida no boot — e os
- * lançamentos em segundo plano ('launched'), que casam notificações futuras com subagentes.
+ * lançamentos em segundo plano ('launched'), que casam notificações futuras com subagentes,
+ * e os sinais de shells (`shellEvents`), para achar shells em segundo plano ainda abertos.
  * Com `keepActivities`, também devolve as últimas N atividades desse trecho (ids com `idPrefix`),
  * para a linha do tempo longa não começar só no fim do arquivo.
  */
@@ -636,18 +712,22 @@ export async function scanPrefix(
   end: number,
   skipUsage: ReadonlySet<string>,
   opts: { idPrefix?: string; keepActivities?: number } = {},
-): Promise<{ state: TranscriptState; signals: TranscriptSignal[]; activities: Activity[] }> {
+): Promise<{ state: TranscriptState; signals: TranscriptSignal[]; activities: Activity[]; shellEvents: ShellEvent[] }> {
   const state = createTranscriptState();
   const signals: TranscriptSignal[] = [];
+  const shellEvents: ShellEvent[] = [];
   let activities: Activity[] = [];
   state.skipUsage = skipUsage;
-  if (end <= 0) return { state, signals, activities };
+  if (end <= 0) return { state, signals, activities, shellEvents };
   const keep = Math.max(0, opts.keepActivities ?? 0);
   const ctx: ParseContext = { idPrefix: opts.idPrefix ?? '', now: Date.now(), activities: keep > 0 };
   const take = (line: string) => {
     if (!keep && !prefixRelevant(state, line)) return;
     const r = parseLine(state, line, ctx);
-    for (const sig of r.signals) if (sig.type === 'launched') signals.push(sig);
+    for (const sig of r.signals) {
+      if (sig.type === 'launched') signals.push(sig);
+      if (SHELL_SIGNALS.has(sig.type)) shellEvents.push({ signal: sig, at: r.at });
+    }
     if (keep && r.activities.length) {
       for (const a of r.activities) activities.push(a.activity);
       if (activities.length > keep * 2) activities = activities.slice(-keep);
@@ -667,7 +747,7 @@ export async function scanPrefix(
   }
   if (partial?.length) take(partial.toString('utf8'));
   state.skipUsage = undefined;
-  return { state, signals, activities: activities.slice(-keep) };
+  return { state, signals, activities: activities.slice(-keep), shellEvents };
 }
 
 /** Mescla o que veio do prefixo do arquivo no estado montado a partir da janela final. */
