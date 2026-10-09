@@ -9,15 +9,20 @@
 // wait {cell_id: N} cuja saída já não diz "Script running" diz como ela acabou ("Script failed", "Script terminated"
 // ou o resto). Um exec_command que termina na própria saída rodou em primeiro plano: não é shell.
 //
+// O processo é identificado pelo call_id do início (único), nunca pelo número da sessão ou da célula, que se repete
+// entre threads e pode voltar depois que o processo morre. Só sai o fim de um processo que este scan viu começar: quase
+// todo comando tem um CommandExecution com `process_id`, inclusive os de primeiro plano.
+//
 // As linhas herdadas de um fork (ordinal < subagent_history_start_ordinal) não contam: o processo é do pai.
 import { describeShellJob } from '../../../shared/activity';
 import { commandText, contentText, parseArguments } from './rollout';
 
 export type CodexShellStatus = 'completed' | 'failed' | 'killed';
 
+/** `callId` = o call_id da chamada que deixou o processo rodando; `taskId` = "proc:N" (sessão) ou "cell:N" (célula). */
 export type CodexShellEvent =
   | { type: 'start'; callId: string; taskId: string; label: string; command?: string }
-  | { type: 'end'; taskId: string; status: CodexShellStatus; summary?: string };
+  | { type: 'end'; callId: string; taskId: string; status: CodexShellStatus; summary?: string };
 
 interface ShellCall {
   name: 'exec_command' | 'write_stdin' | 'wait' | 'exec';
@@ -30,6 +35,8 @@ interface ShellCall {
 export interface CodexShellScan {
   /** Chamadas de shell ainda sem saída, por call_id (no máximo CALLS_MAX; a mais velha sai). */
   calls: Map<string, ShellCall>;
+  /** Processos que este scan viu começar e ainda não viu acabar: "proc:N"/"cell:N" → call_id do início. */
+  open: Map<string, string>;
 }
 
 const CALLS_MAX = 256;
@@ -46,7 +53,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : und
 const idOf = (v: unknown): string | undefined => (typeof v === 'number' && Number.isFinite(v) ? String(v) : str(v)?.trim() || undefined);
 
 export function createShellScan(): CodexShellScan {
-  return { calls: new Map() };
+  return { calls: new Map(), open: new Map() };
 }
 
 /** Texto da saída de uma ferramenta: string, lista de blocos ({type: 'input_text', text}) ou objeto com content/output/body. */
@@ -63,10 +70,33 @@ function header(text: string): string {
   return (cut >= 0 ? text.slice(0, cut) : text).slice(0, 2_000);
 }
 
+/** Mapa com teto: a entrada nova (ou renovada) vai para o fim e a mais velha sai. */
+function capped<T>(map: Map<string, T>, key: string, value: T): void {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > CALLS_MAX) map.delete(map.keys().next().value as string);
+}
+
 function remember(scan: CodexShellScan, callId: string, call: ShellCall): void {
-  scan.calls.delete(callId);
-  scan.calls.set(callId, call);
-  if (scan.calls.size > CALLS_MAX) scan.calls.delete(scan.calls.keys().next().value as string);
+  capped(scan.calls, callId, call);
+}
+
+/** Processo que começou a rodar sozinho. A mesma sessão de novo é outro processo (o anterior morreu sem aviso). */
+function started(scan: CodexShellScan, callId: string, taskId: string, label: string, command?: string): CodexShellEvent[] {
+  capped(scan.open, taskId, callId);
+  const ev: CodexShellEvent = { type: 'start', callId, taskId, label };
+  if (command) ev.command = command;
+  return [ev];
+}
+
+/** Fim de um processo: só o de um que este scan viu começar. */
+function ended(scan: CodexShellScan, taskId: string, status: CodexShellStatus, summary?: string): CodexShellEvent[] {
+  const callId = scan.open.get(taskId);
+  if (!callId) return [];
+  scan.open.delete(taskId);
+  const ev: CodexShellEvent = { type: 'end', callId, taskId, status };
+  if (summary) ev.summary = summary;
+  return [ev];
 }
 
 function onCall(scan: CodexShellScan, p: Rec): void {
@@ -100,38 +130,34 @@ function onOutput(scan: CodexShellScan, p: Rec): CodexShellEvent[] {
       const session = PROC_RUNNING.exec(header(text))?.[1];
       if (!session) return [];
       const job = describeShellJob('Bash', { command: call.command ?? '' });
-      const ev: CodexShellEvent = { type: 'start', callId, taskId: `proc:${session}`, label: job.label };
-      if (job.command) ev.command = job.command;
-      return [ev];
+      return started(scan, callId, `proc:${session}`, job.label, job.command);
     }
     case 'write_stdin': {
       const code = PROC_EXITED.exec(header(text))?.[1];
       if (code === undefined) return [];
-      return [{ type: 'end', taskId: `proc:${call.ref}`, status: Number(code) === 0 ? 'completed' : 'failed', summary: `exit code ${Number(code)}` }];
+      return ended(scan, `proc:${call.ref}`, Number(code) === 0 ? 'completed' : 'failed', `exit code ${Number(code)}`);
     }
     case 'exec': {
       const cell = CELL_RUNNING.exec(text.trimStart())?.[1];
-      return cell ? [{ type: 'start', callId, taskId: `cell:${cell}`, label: 'Rodando script' }] : [];
+      return cell ? started(scan, callId, `cell:${cell}`, 'Rodando script') : [];
     }
     case 'wait': {
       const head = text.trimStart();
       if (CELL_RUNNING.test(head)) return [];
       const status: CodexShellStatus = head.startsWith('Script terminated') ? 'killed' : head.startsWith('Script failed') ? 'failed' : 'completed';
-      return [{ type: 'end', taskId: `cell:${call.ref}`, status }];
+      return ended(scan, `cell:${call.ref}`, status);
     }
   }
 }
 
 /** item_completed CommandExecution com process_id: o processo da sessão N acabou. */
-function onItem(p: Rec): CodexShellEvent[] {
+function onItem(scan: CodexShellScan, p: Rec): CodexShellEvent[] {
   const item = rec(p.item);
   const session = idOf(item?.process_id);
   if (!item || item.type !== 'CommandExecution' || !session) return [];
   const exit = typeof item.exit_code === 'number' && Number.isFinite(item.exit_code) ? item.exit_code : undefined;
   const failed = item.status === 'failed' || (exit !== undefined && exit !== 0);
-  const ev: CodexShellEvent = { type: 'end', taskId: `proc:${session}`, status: failed ? 'failed' : 'completed' };
-  if (exit !== undefined) ev.summary = `exit code ${exit}`;
-  return [ev];
+  return ended(scan, `proc:${session}`, failed ? 'failed' : 'completed', exit !== undefined ? `exit code ${exit}` : undefined);
 }
 
 /**
@@ -151,7 +177,7 @@ export function scanShellLine(scan: CodexShellScan, raw: string, opts: { history
   if (opts.historyStart !== undefined && ordinal !== undefined && ordinal < opts.historyStart) return [];
   const p = rec(j.payload);
   if (!p) return [];
-  if (j.type === 'event_msg') return p.type === 'item_completed' ? onItem(p) : [];
+  if (j.type === 'event_msg') return p.type === 'item_completed' ? onItem(scan, p) : [];
   if (j.type !== 'response_item') return [];
   if (p.type === 'function_call' || p.type === 'custom_tool_call') {
     onCall(scan, p);

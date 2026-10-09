@@ -30,7 +30,7 @@ describe('scanShellLine: unified exec', () => {
     expect(out[1]).toEqual([{ type: 'start', callId: 'call_dev', taskId: 'proc:7', label: job.label, command: job.command }]);
     expect(JSON.stringify(out[1])).not.toContain(token);
     expect(out.slice(2, 4)).toEqual([[], []]);
-    expect(out[5]).toEqual([{ type: 'end', taskId: 'proc:7', status: 'failed', summary: 'exit code 1' }]);
+    expect(out[5]).toEqual([{ type: 'end', callId: 'call_dev', taskId: 'proc:7', status: 'failed', summary: 'exit code 1' }]);
     expect(out[0]).toEqual([]);
   });
 
@@ -45,7 +45,7 @@ describe('scanShellLine: unified exec', () => {
     const { label, command } = describeShellJob('Bash', { command: 'npm run watch' });
     expect(out[1]).toEqual([{ type: 'start', callId: 'call_ps', taskId: 'proc:8', label, command }]);
     expect(out[3]).toEqual([]);
-    expect(out[4]).toEqual([{ type: 'end', taskId: 'proc:8', status: 'completed', summary: 'exit code 0' }]);
+    expect(out[4]).toEqual([{ type: 'end', callId: 'call_ps', taskId: 'proc:8', status: 'completed', summary: 'exit code 0' }]);
   });
 });
 
@@ -69,9 +69,9 @@ describe('scanShellLine: code mode', () => {
     ]);
     expect(out[1]).toEqual([{ type: 'start', callId: 'call_js', taskId: 'cell:3', label: 'Rodando script' }]);
     expect(out[3]).toEqual([]);
-    expect(out[5]).toEqual([{ type: 'end', taskId: 'cell:3', status: 'failed' }]);
-    expect(out[9]).toEqual([{ type: 'end', taskId: 'cell:4', status: 'killed' }]);
-    expect(out[13]).toEqual([{ type: 'end', taskId: 'cell:5', status: 'completed' }]);
+    expect(out[5]).toEqual([{ type: 'end', callId: 'call_js', taskId: 'cell:3', status: 'failed' }]);
+    expect(out[9]).toEqual([{ type: 'end', callId: 'call_js4', taskId: 'cell:4', status: 'killed' }]);
+    expect(out[13]).toEqual([{ type: 'end', callId: 'call_js5', taskId: 'cell:5', status: 'completed' }]);
   });
 });
 
@@ -82,5 +82,24 @@ describe('scanShellLine: o que não conta', () => {
     const own = feed([withOrdinal(B.exec('call_new', 'npm run dev', AT), 12), withOrdinal(B.running('call_new', 9, AT + 1), 13)], 10);
     expect(own[1]).toHaveLength(1);
     expect(feed(['{"timestamp": "quebrado', B.running('call_x', 5, AT), B.exited('call_y', 0, AT)])).toEqual([[], [], []]);
+  });
+
+  it('fim de processo que o scan não viu começar (CommandExecution de primeiro plano, write_stdin numa sessão de antes) não gera nada; a sessão que volta é outro processo', () => {
+    const out = feed([
+      B.procDone(T, 'turn1', 'call_fg', 7, 0, AT), // primeiro plano também tem process_id, e nunca rodou sozinho
+      B.stdin('call_s', 42, AT + 1_000),
+      B.exited('call_s', 0, AT + 2_000), // a sessão 42 começou antes da janela lida
+      B.exec('call_a', 'npm run dev', AT + 3_000),
+      B.running('call_a', 7, AT + 4_000),
+      B.exec('call_b', 'npm run dev', AT + 5_000),
+      B.running('call_b', 7, AT + 6_000), // a sessão 7 de novo: o processo de call_a morreu sem aviso
+      B.procDone(T, 'turn1', 'call_b', 7, 0, AT + 7_000),
+      B.procDone(T, 'turn1', 'call_b', 7, 0, AT + 8_000), // repetido: já fechou
+    ]);
+    expect(out.slice(0, 3)).toEqual([[], [], []]);
+    expect(out[4]).toMatchObject([{ type: 'start', callId: 'call_a', taskId: 'proc:7' }]);
+    expect(out[6]).toMatchObject([{ type: 'start', callId: 'call_b', taskId: 'proc:7' }]);
+    expect(out[7]).toEqual([{ type: 'end', callId: 'call_b', taskId: 'proc:7', status: 'completed', summary: 'exit code 0' }]);
+    expect(out[8]).toEqual([]);
   });
 });

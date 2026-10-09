@@ -1039,7 +1039,7 @@ describe('fonte do Codex: comandos em segundo plano (P12)', () => {
 
   it('o turno acaba com o dev server rodando: "shell" (aviso de espera, sem "concluiu"); o fim dele depois do turno dá ShellDone e volta a idle', () => {
     const { ctx, path } = devServer();
-    expect(ctx.agent()).toMatchObject({ status: 'working', shells: [{ id: 'proc:7', label: DEV, command: 'npm run dev', background: true, kind: 'shell' }] });
+    expect(ctx.agent()).toMatchObject({ status: 'working', shells: [{ id: 'call_dev', label: DEV, command: 'npm run dev', background: true, kind: 'shell' }] });
     ctx.advance(1_000);
     ctx.home.append(path, [R.agent(T, 'turn1', 'a1', 'Servidor no ar', ctx.now()), R.taskComplete('turn1', ctx.now() + 1)]);
     ctx.poll();
@@ -1090,7 +1090,7 @@ describe('fonte do Codex: comandos em segundo plano (P12)', () => {
       R.taskComplete('turn1', ctx.now() + 20),
     ]);
     ctx.poll();
-    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'cell:3', label: 'Rodando script' }] });
+    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'call_js', label: 'Rodando script' }] });
     ctx.advance(60_000);
     ctx.home.append(path, [R.taskStarted('turn2', ctx.now())]);
     ctx.poll();
@@ -1130,7 +1130,7 @@ describe('fonte do Codex: comandos em segundo plano (P12)', () => {
     ctx.home.lock(T, at);
     ctx.home.lock(C3, old);
     ctx.source.boot();
-    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'proc:7' }] });
+    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'call_dev' }] });
     expect(ctx.agent(`.codex:${C3}`)?.status).toBe('idle');
     expect(ctx.agent(`.codex:${C3}`)?.shells).toBeUndefined();
   });
@@ -1147,14 +1147,14 @@ describe('fonte do Codex: comandos em segundo plano (P12)', () => {
     ctx.advance(1_000);
     ctx.home.append(sub, [B.exec('call_w', 'npm run watch', ctx.now()), B.running('call_w', 11, ctx.now() + 10)]);
     ctx.poll();
-    expect(ctx.agent(SUB)?.shells).toMatchObject([{ id: 'proc:11' }]);
+    expect(ctx.agent(SUB)?.shells).toMatchObject([{ id: 'call_w' }]);
     expect(ctx.agent()).toMatchObject({ status: 'idle' });
     expect(ctx.agent()?.shells).toBeUndefined();
     ctx.advance(1_000);
     ctx.home.append(sub, [R.taskComplete('s1', ctx.now())]);
     ctx.poll();
     expect(ctx.agent(SUB)?.status).toBe('done');
-    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'proc:11' }] });
+    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'call_w' }] });
     // O subagente fecha (lock solto): o processo vai junto.
     ctx.home.unlock(C);
     ctx.poll();
@@ -1162,5 +1162,38 @@ describe('fonte do Codex: comandos em segundo plano (P12)', () => {
     ctx.poll();
     expect(ctx.agent()?.status).toBe('idle');
     expect(ctx.agent()?.shells).toBeUndefined();
+  });
+
+  it('principal e subagente com a mesma sessão 7: o fim do processo do principal não fecha o do subagente', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const main = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at)]);
+    const sub = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    ctx.advance(1_000);
+    ctx.home.append(main, [B.exec('call_m', 'npm run dev', ctx.now()), B.running('call_m', 7, ctx.now() + 10)]);
+    ctx.home.append(sub, [B.exec('call_s', 'npm run watch', ctx.now()), B.running('call_s', 7, ctx.now() + 10)]);
+    ctx.poll();
+    expect(ctx.agent()?.shells).toMatchObject([{ id: 'call_m' }]);
+    expect(ctx.agent(SUB)?.shells).toMatchObject([{ id: 'call_s' }]);
+    ctx.advance(1_000);
+    ctx.home.append(main, [B.stdin('call_me', 7, ctx.now()), B.exited('call_me', 0, ctx.now() + 10)]);
+    ctx.poll();
+    expect(ctx.agent()?.shells).toBeUndefined();
+    expect(ctx.agent(SUB)?.shells).toMatchObject([{ id: 'call_s' }]);
+  });
+
+  it('a sessão de um processo encerrado pelo task_started que volta num exec novo é outro processo, e aparece', () => {
+    const { ctx, path } = devServer();
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.taskComplete('turn1', ctx.now()), R.taskStarted('turn2', ctx.now() + 1_000)]);
+    ctx.poll();
+    expect(ctx.agent()?.shells).toBeUndefined();
+    ctx.advance(2_000);
+    ctx.home.append(path, [B.exec('call_dev2', 'npm run dev', ctx.now()), B.running('call_dev2', 7, ctx.now() + 10)]);
+    ctx.poll();
+    expect(ctx.agent()?.shells).toMatchObject([{ id: 'call_dev2' }]);
   });
 });

@@ -672,13 +672,15 @@ export class CodexSource implements AgentSource, CodexLive {
     let tree = this.shellTrees.get(root);
     if (!tree) this.shellTrees.set(root, (tree = new ShellTracker()));
     const fins: ShellFinish[] = [];
+    // Pelo call_id do início (único), nunca pela sessão ("proc:7" se repete entre threads e volta depois que o processo
+    // morre): um id de tarefa já encerrado faria o ShellTracker descartar o processo novo.
     for (const ev of events) {
       if (ev.type === 'start') {
         tree.start(t.key, { toolUseId: ev.callId, label: ev.label, ...(ev.command ? { command: ev.command } : {}), background: true, kind: 'shell', at: r.at });
-        tree.result(ev.callId, { taskId: ev.taskId, error: false, at: r.at });
+        tree.result(ev.callId, { error: false, at: r.at });
         continue;
       }
-      const fin = tree.notify({ taskId: ev.taskId, status: ev.status, summary: ev.summary, at: r.at });
+      const fin = tree.notify({ toolUseId: ev.callId, status: ev.status, summary: ev.summary, at: r.at });
       if (fin) fins.push(fin);
     }
     return fins;
