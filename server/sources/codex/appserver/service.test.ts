@@ -14,7 +14,7 @@ import { NameStore } from '../../../model/names';
 import { Office } from '../../../model/office';
 import { PermissionRegistry } from '../../../permissions/registry';
 import { FakeAppServer, rpcFail, until } from '../../../test/codex-fixtures-appserver';
-import { BACKOFF_MIN_MS, CodexAppServerService, daemonRunning, DISCOVERY_MS, RESUME_RETRY_MS, spawnCodexProxy, type CodexProxy } from './service';
+import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, CodexAppServerService, daemonRunning, DISCOVERY_MS, RESUME_RETRY_MS, spawnCodexProxy, type CodexProxy } from './service';
 
 setQuiet(true);
 
@@ -210,7 +210,7 @@ describe('CodexAppServerService: daemon e conexão', () => {
     expect(s.logs.join('\n')).toMatch(/HABBLAUD_CODEX_BIN/);
   });
 
-  it('conta que sai da lista e stop: matam o proxy e fecham os pedidos abertos', async () => {
+  it('conta que sai da lista: mata o proxy e fecha os pedidos abertos (e, depois do stop, nada reconecta)', async () => {
     // Arrange
     const s = setup();
     const fake = await connected(s);
@@ -230,6 +230,27 @@ describe('CodexAppServerService: daemon e conexão', () => {
     s.svc.tick();
     await flush();
     expect(s.proxies).toHaveLength(1);
+  });
+
+  it('stop com a conexão viva: mata o proxy, fecha o cartão aberto, owns fica falso e nada reconecta', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+    fake.request(9, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-9', command: 'npm test' });
+    await until(() => pendingOf(s).length === 1);
+
+    // Act
+    s.svc.stop();
+
+    // Assert
+    expect(s.proxies[0].killed).toBe(true);
+    expect(pendingOf(s)).toEqual([]);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    s.clock.advance(BACKOFF_MAX_MS);
+    s.svc.tick();
+    await flush();
+    expect(s.proxies).toHaveLength(1);
+    expect(s.daemon.checks).toHaveLength(1);
   });
 });
 
