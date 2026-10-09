@@ -521,14 +521,15 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
   longo continua "trabalhando"; no macOS e no Docker, onde isso não dá para conferir, a sessão sem nenhuma linha nova
   há 12 horas sai, e um turno sem nenhuma escrita há 30 minutos fica ocioso (e volta a trabalhar quando o arquivo volta
   a crescer). Reiniciado no meio de um turno, o Habblaud lê a conversa de trás para frente até o começo dele.
-- **Quando a sessão sai do escritório:** a CLI do Codex roda as sessões num servidor em segundo plano, que as mantém
-  carregadas até um minuto depois de ficarem ociosas e sem ninguém olhando; por isso o personagem pode demorar um
-  pouco para ir embora depois que você fecha o terminal. O Habblaud não prolonga isso: ele solta a conversa 60
-  segundos depois de o turno fechar, então um terminal fechado sai no tempo normal do Codex (no pior caso, esses 60
-  segundos mais o minuto do Codex). No Windows e no Linux (fora do Docker), a sessão sai segundos depois de o processo
-  que segura a trava dela fechar (o app, a CLI fora do daemon ou o próprio daemon), mesmo que ele tenha caído sem
-  avisar. O subagente que ainda não concluiu espera 2 minutos antes de sair, porque volta com o mesmo id quando o pai
-  manda um novo pedido a ele (`followup_task`).
+- **Quando a sessão sai do escritório:** a CLI do Codex roda as sessões num servidor em segundo plano, que só
+  descarrega a conversa 30 minutos depois de ela ficar ociosa e sem ninguém inscrito (o padrão do Codex,
+  `thread_unload_delay_secs`, 1800 s); até lá a trava continua presa, e o personagem pode continuar no escritório
+  mesmo com o terminal fechado. O Habblaud não prolonga isso: ele solta a conversa 60 segundos depois de o turno
+  fechar, então um terminal fechado sai no tempo normal do Codex (no pior caso, esses 60 segundos mais os 30 minutos).
+  No Windows e no Linux (fora do Docker), a sessão sai segundos depois de o processo que segura a trava dela fechar (o
+  app, a CLI fora do daemon ou o próprio daemon, ao descarregar a conversa), mesmo que ele tenha caído sem avisar. O
+  subagente que ainda não concluiu espera 2 minutos antes de sair, porque volta com o mesmo id quando o pai manda um
+  novo pedido a ele (`followup_task`).
 - **O que aparece:** comandos rodados pelo PowerShell ou pelo cmd aparecem pelo comando de dentro (`npm test`, não
   `pwsh.exe -Command …`), e com eles push e PR do GitHub; uma pergunta do Codex deixa o personagem esperando você, com
   as perguntas; o plano do code mode atualiza as tarefas; subagentes contam e chegam com a tarefa como título; busca

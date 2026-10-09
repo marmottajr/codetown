@@ -409,13 +409,15 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   `acceptForSession`. Numa thread assinada, o hook recebe `{skip: 'parallel'}`. Assinada, a thread fica carregada no
   daemon com a trava de escritor presa, então a fonte avisa o turno de cada uma (`onTurn` → `setTurnOpen`): 60 s depois
   de o turno fechar (`UNSUBSCRIBE_AFTER_MS`) o serviço a desassina (`thread/unsubscribe`; os cartões dela fecham e os
-  pedidos novos voltam ao hook, e o TUI fechado sai do escritório no tempo normal do Codex) e a assina de novo quando um
-  turno abre, se ela ainda estiver carregada. Sem daemon, confere de novo a cada 30 s; um `thread/loaded/list` que falha
-  com a conexão de pé avisa uma vez e lista de novo em 30 s; na queda, os cartões daquela conexão fecham, a thread volta
-  ao hook e a reconexão espera de 1 a 30 s. Liga só fora do Docker (o container não alcança o socket do host), com a
-  trava do terminal e o Codex ligado; `HABBLAUD_CODEX_APPSERVER` com valor falso desliga. Binário: `HABBLAUD_CODEX_BIN`
-  ou o `codex` do PATH, o mesmo das mensagens (no Windows, só um `codex.exe`: com o Codex instalado só pelo npm, que
-  põe um `codex.cmd`, aponte `HABBLAUD_CODEX_BIN` para o executável nativo).
+  pedidos novos voltam ao hook) e a assina de novo quando um turno abre, se ela ainda estiver carregada. O daemon só
+  descarrega a thread `thread_unload_delay_secs` (padrão 1800 s) depois de ela ficar ociosa e sem inscritos, e é aí
+  que a trava some e o TUI fechado sai do escritório: o tempo normal do Codex, no pior caso 60 s mais 30 min. Sem daemon,
+  confere de novo a cada 30 s; um `thread/loaded/list` que falha com a conexão de pé avisa uma vez e lista de novo em
+  30 s; na queda, os cartões daquela conexão fecham, a thread volta ao hook e a reconexão espera de 1 a 30 s. Liga só
+  fora do Docker (o container não alcança o socket do host), com a trava do terminal e o Codex ligado;
+  `HABBLAUD_CODEX_APPSERVER` com valor falso desliga. Binário: `HABBLAUD_CODEX_BIN` ou o `codex` do PATH, o mesmo das
+  mensagens (no Windows, só um `codex.exe`: com o Codex instalado só pelo npm, que põe um `codex.cmd`, aponte
+  `HABBLAUD_CODEX_BIN` para o executável nativo).
 - **Mensagens** (`messages/*`, `messages/codex.ts`): para agentes do Codex, `codex queue --thread=<id> --message=<texto>`
   com `CODEX_HOME` = pasta da conta (no host). Fora do Docker o servidor roda o comando (`HABBLAUD_CODEX_BIN` ou `codex`
   do PATH); no Docker, o auxiliar do host (`npm run codex:bridge`) busca em `POST /api/codex/bridge/poll` e confirma em
