@@ -12,7 +12,8 @@ import { PermissionRegistry } from '../../permissions/registry';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
 import { B, commandParsed, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
-import { readLocks } from './files';
+import { writeLines } from '../../test/fixtures';
+import { readLocks, RolloutIndex } from './files';
 import { CodexSource, LOCK_SETTLE_MS, MAIN_GONE_GRACE_MS, scanPrefix, SHELL_EXPIRE_MS, USAGE_RESCAN_MS } from './source';
 
 setQuiet(true);
@@ -1339,5 +1340,47 @@ describe('fonte do Codex: comandos em segundo plano (status shell)', () => {
     ctx.home.append(path, [B.exec('call_dev2', 'npm run dev', ctx.now()), B.running('call_dev2', 7, ctx.now() + 10)]);
     ctx.poll();
     expect(ctx.agent()?.shells).toMatchObject([{ id: 'call_dev2' }]);
+  });
+});
+
+describe('fonte do Codex: thread revertido com dois rollouts (G7)', () => {
+  /**
+   * Dois rollouts de T: o original, com a última linha há 10 min e o mtime de ontem (no Windows o mtime fica parado), e
+   * o revertido, com a última linha há 2 h e o mtime de agora. `lastAt` dá o horário da última linha do revertido.
+   */
+  function twoRollouts(ctx: ReturnType<typeof setup>, o: { revertedLastAt?: number } = {}) {
+    const now = ctx.now();
+    const born = now - 5 * 3600_000;
+    const original = ctx.home.rollout(T, [R.meta(T, { at: born }), R.taskStarted('t1', now - 11 * 60_000), R.user(T, 't1', 'u1', 'Versão original', now - 10 * 60_000)], { mtime: now - 86_400_000 });
+    const last = o.revertedLastAt ?? now - 2 * 3600_000;
+    const reverted = join(ctx.home.dir, 'sessions', '2026', '10', '09', `rollout-2026-10-09T10-00-00-${T}_${threadId(99)}.jsonl`);
+    writeLines(reverted, [R.meta(T, { at: born }), R.taskStarted('t1', last - 2_000), R.user(T, 't1', 'u1', 'Versão revertida', last - 1_000), R.taskComplete('t1', last)]);
+    ctx.home.touch(reverted, now);
+    return { original, reverted };
+  }
+
+  it('RolloutIndex: vale o de última linha mais nova, não o de mtime mais novo (na busca e na lista dos recentes)', () => {
+    const ctx = setup();
+    const { original } = twoRollouts(ctx);
+    expect(new RolloutIndex(ctx.home.dir, ctx.now).find(T)).toBe(original);
+    // Sem pasta de locks: a lista dos recentes (pelo mtime, só o revertido) também guarda o caminho do thread.
+    const index = new RolloutIndex(ctx.home.dir, ctx.now);
+    expect(index.recentlyModified(30 * 60_000).map((r) => r.threadId)).toEqual([T]);
+    expect(index.find(T)).toBe(original);
+  });
+
+  it('última linha com o mesmo horário: o mtime desempata', () => {
+    const ctx = setup();
+    const { reverted } = twoRollouts(ctx, { revertedLastAt: ctx.now() - 10 * 60_000 });
+    expect(new RolloutIndex(ctx.home.dir, ctx.now).find(T)).toBe(reverted);
+  });
+
+  it('a fonte abre o rollout de última linha mais nova: título e turno aberto dele', () => {
+    const ctx = setup();
+    const { original } = twoRollouts(ctx);
+    ctx.home.lock(T, ctx.now() - 60_000);
+    ctx.source.boot();
+    expect(ctx.source.transcriptPathOf(KEY)).toBe(original);
+    expect(ctx.agent()).toMatchObject({ title: 'Versão original', status: 'working' });
   });
 });

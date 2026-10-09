@@ -18,7 +18,7 @@ import { errMsg, log } from '../../log';
 import { HISTORY_LIMIT, HISTORY_MAX_AGE_MS } from '../history';
 import type { HistoryProvider, HistoryResolveResult } from '../source';
 import { encodeCwd } from '../watcher';
-import { parseRolloutName, rolloutDirs } from './files';
+import { compareRollouts, parseRolloutName, rolloutDirs } from './files';
 import { createCodexState, isThreadId, metaFromLine, parseRolloutLine, type CodexState, type RolloutMeta } from './rollout';
 import { createCodexTerminalParser } from './terminal';
 
@@ -165,7 +165,9 @@ export class CodexHistory implements HistoryProvider {
           if (!real.startsWith(root + sep)) continue;
           const st = statSync(real);
           if (!st.isFile()) continue;
-          if (!best || st.mtimeMs > best.mtimeMs) best = { path: real, mtimeMs: st.mtimeMs };
+          // Thread revertido (mais de um rollout): vale o de última linha mais recente; o mtime só desempata.
+          const found = { path: real, mtimeMs: st.mtimeMs };
+          if (!best || compareRollouts(found, best) > 0) best = found;
         } catch {
           // sumiu entre a listagem e a leitura
         }

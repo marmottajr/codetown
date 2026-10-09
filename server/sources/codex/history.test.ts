@@ -1,6 +1,6 @@
 // Histórico do terminal do Codex: listagem dos rollouts recentes e a sessão resolvida com segurança.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setQuiet } from '../../log';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
@@ -198,6 +198,26 @@ describe('histórico do Codex', () => {
     home.touch(reverted, NOW - DAY);
     const list = await history.list();
     expect(list.map((s) => [s.sessionId, s.title, s.lastAt])).toEqual([[A, 'Versão revertida', NOW - 10 * MIN]]);
+  });
+
+  it('resolve com a mesma thread em dois rollouts (revertida): vale o de última linha mais nova, não o de mtime mais novo; horário igual, o mtime desempata', () => {
+    const { home, history } = setup();
+    const resolved = (id: string) => {
+      const r = history.resolve('.codex', id);
+      return 'path' in r ? basename(r.path) : r;
+    };
+    // A: o original tem a última linha mais nova e o mtime de ontem (no Windows o mtime fica parado).
+    const original = home.rollout(A, [R.meta(A, { at: NOW - 5 * HOUR }), R.user(A, 't', 'u', 'Versão original', NOW - 10 * MIN)], { mtime: NOW - DAY });
+    const reverted = join(home.dir, 'sessions', ...day(NOW).split('/'), `rollout-2026-10-09T10-00-00-${A}_${uuidv7(NOW, 99)}.jsonl`);
+    writeLines(reverted, [R.meta(A, { at: NOW - 5 * HOUR }), R.user(A, 't', 'u', 'Versão revertida', NOW - 2 * HOUR)]);
+    home.touch(reverted, NOW);
+    expect(resolved(A)).toBe(basename(original));
+    // B: as duas últimas linhas com o mesmo horário; vale o mtime mais novo.
+    home.rollout(B, [R.meta(B, { at: NOW - 5 * HOUR }), R.user(B, 't', 'u', 'Original', NOW - 10 * MIN)], { mtime: NOW - DAY });
+    const tie = join(home.dir, 'sessions', ...day(NOW).split('/'), `rollout-2026-10-09T10-00-00-${B}_${uuidv7(NOW, 98)}.jsonl`);
+    writeLines(tie, [R.meta(B, { at: NOW - 5 * HOUR }), R.user(B, 't', 'u', 'Revertida', NOW - 10 * MIN)]);
+    home.touch(tie, NOW);
+    expect(resolved(B)).toBe(basename(tie));
   });
 
   it('resolve: só dentro da pasta da conta, com o parser do Codex; id inválido 400; .zst e desconhecida 404', ({ skip }) => {
