@@ -1,18 +1,25 @@
 // Histórico do terminal do Codex (o HistoryProvider 'codex', ver sources/source.ts): as conversas recentes de cada
-// conta do Codex (abertas ou já encerradas), listadas a partir dos rollouts em sessions/AAAA/MM/DD/ e
-// archived_sessions/ modificados nos últimos 7 dias. De cada arquivo lê só o começo (session_meta: projeto; e a
-// primeira instrução: o título) e o fim (última atividade), com cache enquanto o mtime e o tamanho não mudam.
-// Subagentes e threads internos (guardian, revisão...) ficam de fora, como os subagentes do Claude Code.
+// conta do Codex (abertas ou já encerradas), a partir dos rollouts em sessions/AAAA/MM/DD/ e archived_sessions/.
+// Funil de cada conta, nesta ordem (o corte em `limit` vem por último, só sobre as conversas principais):
+// 1. quais arquivos abrir: pasta do dia ou UUIDv7 do nome dentro da janela, tamanho diferente do da listagem anterior
+//    (conversa antiga retomada), thread aberta no escritório, já lido antes ou, só como pista, o mtime (no Windows ele
+//    às vezes fica parado). O mtime nunca decide quem entra: só faz abrir;
+// 2. a 1ª linha (session_meta) classifica, com cache permanente: subagentes e threads internos (guardian, revisão...)
+//    ficam de fora, como os subagentes do Claude Code;
+// 3. do resto, a primeira instrução e a última atividade (`timestamp` das linhas do fim), com cache pelo TAMANHO;
+// 4. entra quem teve atividade dentro da janela; de cada thread fica o rollout de atividade mais recente.
+// Título: o nome da thread no session_index.jsonl (a última linha de cada id vence), senão a primeira instrução.
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import { maskSecrets, truncate } from '../../../shared/activity';
 import type { RecentSession } from '../../../shared/types';
 import { errMsg, log } from '../../log';
 import { HISTORY_LIMIT, HISTORY_MAX_AGE_MS } from '../history';
 import type { HistoryProvider, HistoryResolveResult } from '../source';
 import { encodeCwd } from '../watcher';
 import { parseRolloutName, rolloutDirs } from './files';
-import { createCodexState, isThreadId, metaFromLine, parseRolloutLine, type RolloutMeta } from './rollout';
+import { createCodexState, isThreadId, metaFromLine, parseRolloutLine, type CodexState, type RolloutMeta } from './rollout';
 import { createCodexTerminalParser } from './terminal';
 
 /** Começo lido de cada rollout (o session_meta costuma caber; senão lê mais, até META_MAX). */
@@ -22,6 +29,15 @@ const META_MAX = 1024 * 1024;
 const PROMPT_BYTES = 128 * 1024;
 const TAIL_BYTES = 64 * 1024;
 const READ_CONCURRENCY = 8;
+/** Nomes das threads: o Codex só acrescenta linhas (a última de cada id vence). Lido do fim, até INDEX_MAX. */
+const SESSION_INDEX = 'session_index.jsonl';
+const INDEX_MAX = 4 * 1024 * 1024;
+const TITLE_MAX = 90;
+/** Folga da janela pelo nome: a pasta do dia usa o fuso de quem gravou (e no Docker o servidor roda em UTC). */
+const ZONE_SLACK_MS = 24 * 3600_000;
+/** sessions/AAAA/MM/DD no fim do caminho de uma pasta de rollouts. */
+const DAY_DIR = /(\d{4})[\\/](\d{2})[\\/](\d{2})$/;
+const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 export interface CodexHistoryAccount {
   id: string;
@@ -46,18 +62,43 @@ export interface RolloutSummary {
   lastAt?: number;
 }
 
+/** 1ª linha do rollout, já completa. `end` = byte logo depois do seu \n; ausente = linha maior que META_MAX. */
+interface RolloutHead {
+  meta?: RolloutMeta;
+  end?: number;
+}
+
+interface FileCache {
+  /** Tamanho na listagem anterior: mudou = conversa retomada (mesmo com a pasta velha e o mtime parado). */
+  size: number;
+  /** Classificação pela 1ª linha: para sempre (o rollout só cresce), guardada só depois que a linha termina. */
+  head?: RolloutHead;
+  /** Resumo do resto, válido enquanto o tamanho for `size` (o mtime não invalida nada). */
+  summary?: { size: number; value: RolloutSummary };
+}
+
 interface Candidate {
   account: string;
   threadId: string;
   path: string;
   dir: string;
-  mtimeMs: number;
   size: number;
+  /** Agente principal aberto no escritório com esta thread. */
+  agentId?: string;
+  /** Criação da thread pelo UUIDv7 do nome (reserva do horário quando as linhas não têm `timestamp`). */
+  bornAt?: number;
+}
+
+interface Row {
+  c: Candidate;
+  summary: RolloutSummary;
+  lastAt: number;
 }
 
 export class CodexHistory implements HistoryProvider {
   readonly provider = 'codex' as const;
-  private cache = new Map<string, { mtimeMs: number; size: number; summary: RolloutSummary }>();
+  private files = new Map<string, FileCache>();
+  private indexes = new Map<string, { size: number; names: ReadonlyMap<string, string> }>();
   private readonly now: () => number;
   private readonly maxAgeMs: number;
   private readonly limit: number;
@@ -73,39 +114,18 @@ export class CodexHistory implements HistoryProvider {
   }
 
   async list(): Promise<RecentSession[]> {
-    const now = this.now();
-    const all: Candidate[] = [];
-    for (const acc of this.opts.accounts()) all.push(...(await this.candidates(acc, now)));
-    all.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    const picked = all.slice(0, this.limit);
-    const summaries = await mapLimit(picked, READ_CONCURRENCY, (c) => this.summaryOf(c));
-    const keep = new Set(picked.map((c) => c.path));
-    for (const path of this.cache.keys()) if (!keep.has(path)) this.cache.delete(path);
-
-    const out: RecentSession[] = [];
-    picked.forEach((c, i) => {
-      const s = summaries[i];
-      // Subagentes e threads internos não são conversas suas.
-      if (s.meta?.internal || s.meta?.parentThreadId) return;
-      const agentId = this.opts.openAgentOf(c.account, c.threadId);
-      if (!agentId && s.firstAt === undefined && s.lastAt === undefined) return;
-      const cwd = s.meta?.cwd;
-      const r: RecentSession = {
-        account: c.account,
-        provider: 'codex',
-        sessionId: c.threadId,
-        projectDir: cwd ? encodeCwd(cwd) : relative(c.dir, join(c.path, '..')) || 'sessions',
-        lastAt: s.lastAt ?? c.mtimeMs,
-        size: c.size,
-        open: !!agentId,
-      };
-      if (cwd) r.project = cwd;
-      if (s.title) r.title = s.title;
-      if (s.firstAt !== undefined) r.firstAt = s.firstAt;
-      if (agentId) r.agentId = agentId;
-      out.push(r);
-    });
-    return out.sort((a, b) => b.lastAt - a.lastAt);
+    const cutoff = this.now() - this.maxAgeMs;
+    const accounts = this.opts.accounts();
+    const seen = new Set<string>();
+    const rows: Row[] = [];
+    for (const acc of accounts) rows.push(...(await this.rowsOf(acc, cutoff, seen)));
+    // Só sai do cache o arquivo que sumiu: a classificação dos subagentes fica (senão seria relida a cada listagem).
+    for (const path of this.files.keys()) if (!seen.has(path)) this.files.delete(path);
+    for (const dir of this.indexes.keys()) if (!accounts.some((a) => a.dir === dir)) this.indexes.delete(dir);
+    const picked = rows.sort((a, b) => b.lastAt - a.lastAt).slice(0, this.limit);
+    const names = new Map<string, ReadonlyMap<string, string>>();
+    for (const r of picked) if (!names.has(r.c.dir)) names.set(r.c.dir, await this.titles(r.c.dir));
+    return picked.map((r) => toSession(r, names.get(r.c.dir) ?? NO_NAMES));
   }
 
   /**
@@ -155,9 +175,22 @@ export class CodexHistory implements HistoryProvider {
     return { status: 404, error: compressed ? 'sessão compactada pelo Codex (.zst): ainda não dá para ler' : 'sessão não encontrada' };
   }
 
-  /** Rollouts (um por thread: o mais recente) modificados dentro da janela. */
-  private async candidates(acc: CodexHistoryAccount, now: number): Promise<Candidate[]> {
-    const byThread = new Map<string, Candidate>();
+  /** Conversas principais da conta com atividade na janela (uma por thread: a de atividade mais recente). */
+  private async rowsOf(acc: CodexHistoryAccount, cutoff: number, seen: Set<string>): Promise<Row[]> {
+    const candidates = await this.candidates(acc, cutoff, seen);
+    const rows = await mapLimit(candidates, READ_CONCURRENCY, (c) => this.rowOf(c, cutoff));
+    const best = new Map<string, Row>();
+    for (const r of rows) {
+      if (!r) continue;
+      const prev = best.get(r.c.threadId);
+      if (!prev || r.lastAt > prev.lastAt) best.set(r.c.threadId, r);
+    }
+    return [...best.values()];
+  }
+
+  /** Rollouts que vale abrir nesta listagem (passo 1 do funil); guarda o tamanho visto de todos. */
+  private async candidates(acc: CodexHistoryAccount, cutoff: number, seen: Set<string>): Promise<Candidate[]> {
+    const out: Candidate[] = [];
     for (const dir of rolloutDirs(acc.dir)) {
       let names: string[];
       try {
@@ -165,47 +198,165 @@ export class CodexHistory implements HistoryProvider {
       } catch {
         continue;
       }
+      const dayEnd = dayEndOf(dir);
       for (const name of names) {
         const r = parseRolloutName(name);
         if (!r || r.compressed) continue;
         const path = join(dir, name);
         try {
           const st = await stat(path);
-          if (!st.isFile() || now - st.mtimeMs > this.maxAgeMs) continue;
-          const prev = byThread.get(r.threadId);
-          if (!prev || st.mtimeMs > prev.mtimeMs) byThread.set(r.threadId, { account: acc.id, threadId: r.threadId, path, dir: acc.dir, mtimeMs: st.mtimeMs, size: st.size });
+          if (!st.isFile()) continue;
+          seen.add(path);
+          const changed = this.remember(path, st.size);
+          const c: Candidate = { account: acc.id, threadId: r.threadId, path, dir: acc.dir, size: st.size };
+          const agentId = this.opts.openAgentOf(acc.id, r.threadId);
+          if (agentId) c.agentId = agentId;
+          const bornAt = uuidV7Time(r.threadId);
+          if (bornAt !== undefined) c.bornAt = bornAt;
+          const byName = Math.max(bornAt ?? -Infinity, dayEnd ?? -Infinity) + ZONE_SLACK_MS >= cutoff;
+          const known = this.files.get(path)?.summary !== undefined;
+          // O mtime é só pista para abrir: quem decide se entra é o horário das linhas (rowOf).
+          if (agentId || changed || known || byName || st.mtimeMs >= cutoff) out.push(c);
         } catch {
           // apagado no meio da listagem
         }
       }
     }
-    return [...byThread.values()];
+    return out;
   }
 
-  private async summaryOf(c: Candidate): Promise<RolloutSummary> {
-    const hit = this.cache.get(c.path);
-    if (hit && hit.mtimeMs === c.mtimeMs && hit.size === c.size) return hit.summary;
-    let summary: RolloutSummary;
+  /** Guarda o tamanho visto; true = mudou desde a listagem anterior (encolheu = arquivo trocado: esquece o que sabia). */
+  private remember(path: string, size: number): boolean {
+    const f = this.files.get(path);
+    if (!f) {
+      this.files.set(path, { size });
+      return false;
+    }
+    if (f.size === size) return false;
+    if (size < f.size) this.files.set(path, { size });
+    else f.size = size;
+    return true;
+  }
+
+  /** A conversa, se for principal e tiver atividade na janela; undefined = fica de fora. */
+  private async rowOf(c: Candidate, cutoff: number): Promise<Row | undefined> {
+    const head = await this.headOf(c);
+    // Subagentes e threads internos não são conversas suas (e saem antes do corte em `limit`).
+    if (!head || isSide(head.meta)) return undefined;
+    const summary = await this.summaryOf(c, head);
+    // Sem `timestamp` nas linhas: a criação (session_meta, depois o UUIDv7). Nunca o mtime.
+    const lastAt = summary.lastAt ?? summary.firstAt ?? c.bornAt;
+    if (lastAt === undefined || lastAt < cutoff) return undefined;
+    return { c, summary, lastAt };
+  }
+
+  /** 1ª linha, lida uma vez por arquivo; undefined = ainda sendo gravada ou ilegível (a próxima listagem tenta de novo). */
+  private async headOf(c: Candidate): Promise<RolloutHead | undefined> {
+    const f = this.files.get(c.path);
+    if (f?.head) return f.head;
     try {
-      summary = await readRolloutSummary(c.path, c.size);
+      const head = await readRolloutHead(c.path, c.size);
+      if (head && f) f.head = head;
+      return head;
     } catch (err) {
       log.warnOnce(`codex-history:${errMsg(err)}`, `Histórico do Codex: rollout ilegível (${errMsg(err)}).`);
-      summary = {};
+      return undefined;
     }
-    this.cache.set(c.path, { mtimeMs: c.mtimeMs, size: c.size, summary });
-    return summary;
+  }
+
+  private async summaryOf(c: Candidate, head: RolloutHead): Promise<RolloutSummary> {
+    const f = this.files.get(c.path);
+    if (f?.summary?.size === c.size) return f.summary.value;
+    let value: RolloutSummary;
+    try {
+      value = await readRolloutRest(c.path, c.size, head, f?.summary?.value);
+    } catch (err) {
+      log.warnOnce(`codex-history:${errMsg(err)}`, `Histórico do Codex: rollout ilegível (${errMsg(err)}).`);
+      value = head.meta ? { meta: head.meta } : {};
+    }
+    if (f) f.summary = { size: c.size, value };
+    return value;
+  }
+
+  /** Nomes das threads da conta (session_index.jsonl), já mascarados e cortados; relidos quando o tamanho muda. */
+  private async titles(home: string): Promise<ReadonlyMap<string, string>> {
+    const path = join(home, SESSION_INDEX);
+    let size: number;
+    try {
+      const st = await stat(path);
+      if (!st.isFile()) return NO_NAMES;
+      size = st.size;
+    } catch {
+      return NO_NAMES; // sem índice (TUI sem /rename, exec): vale a primeira instrução
+    }
+    const hit = this.indexes.get(home);
+    if (hit?.size === size) return hit.names;
+    let names: ReadonlyMap<string, string> = NO_NAMES;
+    try {
+      names = await readThreadNames(path, size);
+    } catch (err) {
+      log.warnOnce(`codex-index:${errMsg(err)}`, `Histórico do Codex: session_index.jsonl ilegível (${errMsg(err)}).`);
+    }
+    this.indexes.set(home, { size, names });
+    return names;
   }
 }
 
-/** Lê o começo e o fim do rollout (de tamanho `size`): session_meta, primeira instrução e horários. */
-export async function readRolloutSummary(path: string, size: number): Promise<RolloutSummary> {
+function toSession(r: Row, names: ReadonlyMap<string, string>): RecentSession {
+  const { c, summary: s } = r;
+  const cwd = s.meta?.cwd;
+  const out: RecentSession = {
+    account: c.account,
+    provider: 'codex',
+    sessionId: c.threadId,
+    projectDir: cwd ? encodeCwd(cwd) : relative(c.dir, join(c.path, '..')) || 'sessions',
+    lastAt: r.lastAt,
+    size: c.size,
+    open: !!c.agentId,
+  };
+  if (cwd) out.project = cwd;
+  const title = names.get(c.threadId) ?? s.title;
+  if (title) out.title = title;
+  if (s.firstAt !== undefined) out.firstAt = s.firstAt;
+  if (c.agentId) out.agentId = c.agentId;
+  return out;
+}
+
+/** Subagente (spawn_agent) ou thread interno do Codex (guardian, revisão, compactação...). */
+function isSide(meta: RolloutMeta | undefined): boolean {
+  return !!meta && (meta.internal || meta.parentThreadId !== undefined);
+}
+
+/** Criação da thread pelo UUIDv7 (os 48 bits de cima são o epoch em ms); undefined se o id não é v7. */
+function uuidV7Time(id: string): number | undefined {
+  return id[14] === '7' ? parseInt(id.slice(0, 8) + id.slice(9, 13), 16) : undefined;
+}
+
+/** Fim do dia de uma pasta sessions/AAAA/MM/DD (em UTC; a folga cobre o fuso de quem gravou); undefined fora dela. */
+function dayEndOf(dir: string): number | undefined {
+  const m = DAY_DIR.exec(dir);
+  return m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1) : undefined;
+}
+
+type ReadAt = (start: number, length: number) => Promise<Buffer>;
+
+/** Abre o arquivo (de tamanho `size`) só para leitura e dá a `fn` uma leitura por trecho. */
+async function withFile<T>(path: string, size: number, fn: (read: ReadAt) => Promise<T>): Promise<T> {
   const fh = await open(path, 'r');
   try {
-    const read = async (start: number, length: number): Promise<Buffer> => {
+    return await fn(async (start, length) => {
       const buf = Buffer.alloc(Math.max(0, Math.min(length, size - start)));
       const { bytesRead } = await fh.read(buf, 0, buf.length, start);
       return buf.subarray(0, bytesRead);
-    };
+    });
+  } finally {
+    await fh.close();
+  }
+}
+
+/** 1ª linha do rollout (até META_MAX); undefined = ainda sem o \n (sendo gravada). */
+async function readRolloutHead(path: string, size: number): Promise<RolloutHead | undefined> {
+  return withFile(path, size, async (read) => {
     let head = await read(0, HEAD_BYTES);
     let nl = head.indexOf(0x0a);
     // session_meta grande (instruções base, ferramentas): lê mais, até META_MAX.
@@ -215,21 +366,34 @@ export async function readRolloutSummary(path: string, size: number): Promise<Ro
       head = Buffer.concat([head, more]);
       nl = head.indexOf(0x0a);
     }
-    const summary: RolloutSummary = {};
-    const firstLine = head.toString('utf8', 0, nl === -1 ? head.length : nl);
-    const meta = metaFromLine(firstLine);
-    if (meta) summary.meta = meta;
-    const state = createCodexState(meta);
-    const ctx = { idPrefix: '', now: 0, activities: false };
     if (nl !== -1) {
-      const after = await read(nl + 1, PROMPT_BYTES);
+      const meta = metaFromLine(head.toString('utf8', 0, nl));
+      return meta ? { meta, end: nl + 1 } : { end: nl + 1 };
+    }
+    // Sem \n até META_MAX: linha grande demais (fica sem meta, como uma ilegível); antes disso, ainda sendo gravada.
+    return head.length >= META_MAX ? {} : undefined;
+  });
+}
+
+/** O resto do rollout: primeira instrução (procurada só enquanto não foi achada; ela não muda) e horários. */
+async function readRolloutRest(path: string, size: number, head: RolloutHead, prev?: RolloutSummary): Promise<RolloutSummary> {
+  return withFile(path, size, async (read) => {
+    const summary: RolloutSummary = {};
+    if (head.meta) summary.meta = head.meta;
+    let state: CodexState | undefined;
+    if (prev?.title !== undefined) summary.title = prev.title;
+    else if (head.end !== undefined) {
+      state = createCodexState(head.meta);
+      const ctx = { idPrefix: '', now: 0, activities: false };
+      const after = await read(head.end, PROMPT_BYTES);
       const lines = after.toString('utf8').split('\n');
-      if (nl + 1 + after.length < size) lines.pop(); // cortada
+      if (head.end + after.length < size) lines.pop(); // cortada
       for (const line of lines) {
         if (!line.trim()) continue;
         parseRolloutLine(state, line, ctx);
         if (state.title !== undefined) break;
       }
+      if (state.title) summary.title = state.title;
     }
     const tailStart = Math.max(0, size - TAIL_BYTES);
     const tail = (await read(tailStart, TAIL_BYTES)).toString('utf8').split('\n');
@@ -239,13 +403,43 @@ export async function readRolloutSummary(path: string, size: number): Promise<Ro
       const ms = at ? Date.parse(at) : NaN;
       if (!Number.isNaN(ms) && (summary.lastAt === undefined || ms > summary.lastAt)) summary.lastAt = ms;
     }
-    const first = meta?.startedAt ?? state.firstAt;
+    const first = head.meta?.startedAt ?? prev?.firstAt ?? state?.firstAt;
     if (first !== undefined) summary.firstAt = first;
-    if (summary.lastAt === undefined && state.lastAt !== undefined) summary.lastAt = state.lastAt;
-    if (state.title) summary.title = state.title;
+    if (summary.lastAt === undefined && state?.lastAt !== undefined) summary.lastAt = state.lastAt;
     return summary;
-  } finally {
-    await fh.close();
+  });
+}
+
+/** Lê o começo e o fim do rollout (de tamanho `size`): session_meta, primeira instrução e horários. */
+export async function readRolloutSummary(path: string, size: number): Promise<RolloutSummary> {
+  return readRolloutRest(path, size, (await readRolloutHead(path, size)) ?? {});
+}
+
+/** {id → nome} do session_index.jsonl: a última linha de cada id vence; nome vazio = sem nome. */
+async function readThreadNames(path: string, size: number): Promise<ReadonlyMap<string, string>> {
+  const start = Math.max(0, size - INDEX_MAX);
+  const lines = await withFile(path, size, async (read) => (await read(start, size - start)).toString('utf8').split('\n'));
+  if (start > 0) lines.shift(); // cortada
+  const names = new Map<string, string>();
+  for (const line of lines) {
+    const e = indexEntry(line);
+    if (!e) continue;
+    // Mascarado antes de cortar (um segredo cortado ao meio escaparia do padrão).
+    const name = truncate(maskSecrets(e.name), TITLE_MAX);
+    if (name) names.set(e.id, name);
+    else names.delete(e.id);
+  }
+  return names;
+}
+
+/** {id, thread_name} de uma linha do session_index.jsonl (id em minúsculas); undefined = linha inválida. */
+function indexEntry(line: string): { id: string; name: string } | undefined {
+  if (!line.trim()) return undefined;
+  try {
+    const j = JSON.parse(line) as { id?: unknown; thread_name?: unknown } | null;
+    return j && isThreadId(j.id) && typeof j.thread_name === 'string' ? { id: j.id.toLowerCase(), name: j.thread_name } : undefined;
+  } catch {
+    return undefined; // linha cortada ou JSON inválido
   }
 }
 
