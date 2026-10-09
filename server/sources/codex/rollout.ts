@@ -378,6 +378,9 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
       return { desc: { kind: 'delegate', icon: '👥', text: 'Encerrando um subagente' }, tool: name };
     case 'request_permissions':
       return { desc: { kind: 'wait', icon: '🔐', text: 'Pedindo permissões' }, tool: name };
+    case 'request_user_input':
+      // Pergunta síncrona: o turno para até você responder (kind 'ask': o escritório não sobrepõe o "Precisa de você").
+      return { desc: { ...describeTool('AskUserQuestion', { questions: input.questions }), text: 'Esperando você responder' }, tool: name };
     default:
       return { desc: describeTool(name, input), tool: name };
   }
@@ -402,6 +405,8 @@ export interface CodexState {
   lastAt?: number;
   /** Chamadas de ferramenta ainda sem resultado (call_id → nome). */
   pending: Map<string, string>;
+  /** request_user_input abertos (sem output): call_id → resumo das perguntas (mascarado e cortado). */
+  asking: Map<string, string>;
   /** Uso do plano mais recente (rate_limits) e o plano. */
   usage?: AccountUsage;
   planType?: string;
@@ -409,7 +414,7 @@ export interface CodexState {
 }
 
 export function createCodexState(meta?: RolloutMeta): CodexState {
-  const s: CodexState = { tasks: [], stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, pending: new Map() };
+  const s: CodexState = { tasks: [], stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, pending: new Map(), asking: new Map() };
   if (meta) applyMeta(s, meta);
   return s;
 }
@@ -429,7 +434,11 @@ export type CodexSignal =
   | { type: 'progress' }
   | { type: 'usage'; usage: AccountUsage; plan?: string }
   | { type: 'github'; event: GitHubEvent; key: string }
-  | { type: 'meta'; meta: RolloutMeta };
+  | { type: 'meta'; meta: RolloutMeta }
+  /** request_user_input aberto (sem output): o agente espera você responder. */
+  | { type: 'asking'; questions: string }
+  /** O output do request_user_input chegou (ou o turno acabou). */
+  | { type: 'answered' };
 
 export interface CodexLineResult {
   activities: ParsedActivity[];
@@ -450,6 +459,13 @@ export interface CodexParseContext {
 
 const TITLE_MAX = 90;
 const MAX_PENDING = 128;
+const ASK_SUMMARY_MAX = 120;
+
+/** Resumo das perguntas de um request_user_input ("Qual banco? · Posso apagar dist?"), mascarado ANTES do corte. */
+function askSummary(raw: unknown): string {
+  const questions = Array.isArray(raw) ? raw.map((q) => str(rec(q)?.question)).filter((q): q is string => q !== undefined) : [];
+  return truncate(maskSecrets(questions.join(' · ').slice(0, ASK_SUMMARY_MAX * 8)), ASK_SUMMARY_MAX);
+}
 /** Texto injetado pelo Codex que não é instrução sua. */
 const INJECTED = /^<(environment_context|user_instructions|turn_aborted|subagent_notification|user_shell_command_output|collaboration_mode)\b/;
 
@@ -597,6 +613,7 @@ class RolloutLineParser {
         return this.item(rec(p.item));
       case 'task_started':
       case 'turn_started':
+        this.closeAsks();
         this.s.turnOpen = true;
         this.out.signals.push({ type: 'turnStart' });
         return;
@@ -657,7 +674,36 @@ class RolloutLineParser {
   private endTurn(aborted: boolean): void {
     this.s.turnOpen = false;
     this.s.pending.clear();
+    this.closeAsks();
     this.out.signals.push({ type: 'turnEnd', aborted });
+  }
+
+  /** request_user_input chamado e ainda sem output: a pergunta fica aberta e o agente espera você. */
+  private ask(callId: string, questions: unknown): void {
+    const summary = askSummary(questions);
+    this.s.asking.set(callId, summary);
+    if (this.s.asking.size > MAX_PENDING) this.s.asking.delete(this.s.asking.keys().next().value as string);
+    this.out.signals.push({ type: 'asking', questions: summary });
+  }
+
+  /** O output de um request_user_input aberto: respondida. false = não era uma pergunta aberta. */
+  private answer(callId: string): boolean {
+    const summary = this.s.asking.get(callId);
+    if (summary === undefined) return false;
+    this.s.asking.delete(callId);
+    this.out.signals.push({ type: 'answered' });
+    this.push(SPECIAL.answered(summary || undefined), { key: `${callId}:ans` });
+    return true;
+  }
+
+  /**
+   * Fim do turno (ou um turno novo) com pergunta aberta: ninguém mais espera a resposta. O 'answered' sai ANTES do
+   * turnEnd/turnStart, para quem aplica os sinais em ordem terminar no status do turno.
+   */
+  private closeAsks(): void {
+    if (!this.s.asking.size) return;
+    this.s.asking.clear();
+    this.out.signals.push({ type: 'answered' });
   }
 
   private progress(): void {
@@ -886,6 +932,7 @@ class RolloutLineParser {
         // Atividade em andamento: o item concluído (paginated) chega depois com o mesmo id e não duplica.
         const { desc, tool } = describeCodexTool(name, input, str(p.namespace));
         this.push(desc, { key: callId, tool, callId });
+        if (name === 'request_user_input') this.ask(callId ?? this.autoKey(), input.questions);
         return;
       }
       case 'local_shell_call': {
@@ -903,6 +950,8 @@ class RolloutLineParser {
         const callId = str(p.call_id);
         const name = callId ? this.s.pending.get(callId) : undefined;
         if (callId) this.s.pending.delete(callId);
+        // A resposta do request_user_input (nos dois formatos; o item concluído não existe para ele).
+        if (callId && this.answer(callId)) return;
         if (this.paginated()) return;
         // Legacy: o resultado de um comando (o item concluído não existe nesse formato).
         if (!name || !/^(shell|shell_command|local_shell|exec_command|container\.exec)$/.test(name)) return;

@@ -487,3 +487,71 @@ describe('prompt do spawn_agent mascarado antes do corte', () => {
     expect(desc.text).not.toContain('s' + 'k-Z');
   });
 });
+
+const AT = Date.parse('2026-10-09T12:00:00Z');
+/** Montado em partes: nenhum token inteiro no código. */
+const GHP = 'gh' + 'p_' + 'Z9'.repeat(10);
+const signalsOf = (results: CodexLineResult[]) => results.flatMap((r) => r.signals);
+const typesOf = (r: CodexLineResult) => r.signals.map((s) => s.type);
+
+describe('request_user_input: o agente espera você (P9)', () => {
+  const questions = [
+    { id: 'banco', header: 'Banco', question: `Qual banco usar? token ${GHP}`, options: [{ label: 'Postgres', description: 'Recomendado' }, { label: 'SQLite', description: 'Mais simples' }] },
+    { id: 'dist', header: 'Limpeza', question: 'Posso apagar a pasta dist?', options: [{ label: 'Sim' }, { label: 'Não' }] },
+  ];
+  const ask = (callId: string, qs: unknown[] = questions) => R.functionCall(callId, 'request_user_input', { autoResolutionMs: 60_000, questions: qs }, AT);
+
+  it('pergunta sem output: atividade ask com as perguntas mascaradas, sinal asking com o resumo e a pergunta aberta no estado; o output fecha', () => {
+    const { state, results } = feed([R.meta(T, { at: AT }), R.taskStarted('t1', AT), ask('call_ask')]);
+    const open = results[2];
+    expect(open.activities[0]).toMatchObject({ toolUseId: 'call_ask', current: true });
+    expect(open.activities[0].activity).toMatchObject({ id: 'acc:t#call_ask', kind: 'ask', text: 'Esperando você responder', tool: 'request_user_input', detail: 'Qual banco usar? token gh*_***' });
+    expect(open.activities[0].activity.questions?.map((q) => q.question)).toEqual(['Qual banco usar? token gh*_***', 'Posso apagar a pasta dist?']);
+    expect(open.signals).toEqual([{ type: 'asking', questions: 'Qual banco usar? token gh*_*** · Posso apagar a pasta dist?' }]);
+    expect([...state.asking.keys()]).toEqual(['call_ask']);
+    const answered = parseRolloutLine(state, R.functionOutput('call_ask', '{"answers":{"banco":{"answers":["Postgres"]}}}', AT + 5_000), ctx);
+    expect(answered.signals).toEqual([{ type: 'answered' }]);
+    expect(answered.activities.map((a) => a.activity)).toEqual([
+      expect.objectContaining({ id: 'acc:t#call_ask:ans', kind: 'ask', text: 'Recebeu a sua resposta', detail: 'Qual banco usar? token gh*_*** · Posso apagar a pasta dist?' }),
+    ]);
+    expect(state.asking.size).toBe(0);
+  });
+
+  it('o resumo é mascarado antes do corte (token cruzando o limite de 120 não vaza)', () => {
+    const prefix = `Pergunta ${'x'.repeat(102)} `;
+    expect(prefix.length).toBe(112);
+    const token = 'gh' + 'p_' + 'Z9'.repeat(20);
+    const { results } = feed([R.meta(T), ask('c1', [{ id: 'q', header: 'X', question: `${prefix}${token} resto`, options: [] }])]);
+    const sig = results[1].signals.find((s) => s.type === 'asking');
+    expect(sig).toBeDefined();
+    const summary = sig?.type === 'asking' ? sig.questions : '';
+    expect(summary.length).toBeLessThanOrEqual(120);
+    expect(summary).toContain('gh*_***');
+    expect(summary).not.toContain('gh' + 'p_Z');
+  });
+
+  it('fim do turno com a pergunta aberta: answered antes do turnEnd (e do turnStart de um turno novo); já respondida, nada de answered', () => {
+    const base = [R.meta(T, { at: AT }), R.taskStarted('t1', AT), ask('c1')];
+    const done = feed([...base, R.taskComplete('t1', AT + 9_000)]);
+    expect(typesOf(done.results[3])).toEqual(['answered', 'turnEnd']);
+    expect(done.state.asking.size).toBe(0);
+    expect(typesOf(feed([...base, R.turnAborted('t1', AT + 9_000)]).results[3])).toEqual(['answered', 'turnEnd']);
+    const next = feed([...base, R.taskStarted('t2', AT + 9_000)]);
+    expect(typesOf(next.results[3])).toEqual(['answered', 'turnStart']);
+    expect(next.state.asking.size).toBe(0);
+    const replied = feed([...base, R.functionOutput('c1', '{"answers":{}}', AT + 1_000), R.taskComplete('t1', AT + 9_000)]);
+    expect(typesOf(replied.results[4])).toEqual(['turnEnd']);
+  });
+
+  it('request_user_input_async não abre espera; no legacy e sem atividades (só estado) a pergunta abre e fecha igual', () => {
+    const asyncAsk = feed([R.meta(T), R.functionCall('c2', 'request_user_input_async', { questions: [{ title: 'Posso apagar a pasta dist?', options: ['Sim', 'Não'] }] }, AT)]);
+    expect(signalsOf(asyncAsk.results).some((s) => s.type === 'asking')).toBe(false);
+    expect(asyncAsk.state.asking.size).toBe(0);
+    const legacy = feed([R.meta(T, { history: null }), ask('c3'), R.functionOutput('c3', '{"answers":{}}', AT + 1)]);
+    expect(legacy.results.map(typesOf)).toEqual([['meta'], ['asking'], ['answered']]);
+    const state = createCodexState();
+    const quiet = [ask('c4'), R.functionOutput('c4', '{"answers":{}}', AT + 1)].map((l) => parseRolloutLine(state, l, { idPrefix: '', now: 0, activities: false }));
+    expect(quiet.map(typesOf)).toEqual([['asking'], ['answered']]);
+    expect(quiet.flatMap((r) => r.activities)).toEqual([]);
+  });
+});
