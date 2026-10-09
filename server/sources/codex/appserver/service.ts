@@ -315,8 +315,10 @@ export class CodexAppServerService implements ParallelSink {
     client.on('approvalResolved', (r: { requestId: string | number }) => this.guard(() => this.onResolved(st, conn, r.requestId)));
     client.on('threadStarted', (threadId: string) =>
       this.guard(() => {
-        // Um cliente acabou de carregar a thread: um turno fechado antes disso não vale mais.
-        this.turnReopened(st.id, threadId);
+        // Thread de turno fechado há UNSUBSCRIBE_AFTER_MS (o Habblaud não a retoma): outro cliente acabou de carregá-la,
+        // então o turno fechado não vale mais. Com o prazo ainda correndo, não: o daemon pode anunciar thread/started a
+        // quem retoma a thread, e só a reabertura do turno cancela o desassinar.
+        if (this.idle(st.id, threadId, this.now())) this.turnReopened(st.id, threadId);
         this.resume(st, conn, threadId);
       }),
     );

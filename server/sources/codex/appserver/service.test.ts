@@ -486,6 +486,9 @@ describe('CodexAppServerService: o Habblaud não segura thread que o usuário fe
     s.clock.advance(BACKOFF_MIN_MS);
     s.svc.tick();
     await until(() => s.proxies.length === 2 && s.svc.owns(ACCOUNT, THREAD));
+    // Um thread/started (o daemon pode anunciá-lo a quem retoma a thread) não é o turno reabrindo.
+    s.proxies[1].fake.notify('thread/started', { thread: { id: THREAD, source: 'cli' } });
+    await flush();
     s.clock.advance(UNSUBSCRIBE_AFTER_MS - BACKOFF_MIN_MS);
     s.svc.tick();
 
