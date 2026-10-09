@@ -5,6 +5,8 @@ import { hash32 } from '../../../../shared/hash';
 import type { AreaLayout, WallItemPlacement, WallSegment } from '../layout/types';
 import type { RoomState } from '../sim/room-state';
 import type { WallArtAsset, WorldAssets } from '../assets';
+import type { OfficeTheme } from '../api';
+import { decorateSeasonalRug, decorateSeasonalWall, seasonalRugColor, seasonalWallStyle } from './seasonal';
 
 /** Margem acima da área no cache de paredes (itens que passam do topo da face). */
 export const WALL_MARGIN = 16;
@@ -207,7 +209,7 @@ function tintFloor(ctx: CanvasRenderingContext2D, px: { x: number; y: number; w:
   ctx.restore();
 }
 
-export function buildAreaVis(art: ArtModule, layout: AreaLayout, room: RoomState | undefined, assets: WorldAssets | null): AreaVis {
+export function buildAreaVis(art: ArtModule, layout: AreaLayout, room: RoomState | undefined, assets: WorldAssets | null, theme: OfficeTheme = 'auto'): AreaVis {
   const r = layout.rect;
   const px = { x: r.x * TILE, y: r.y * TILE, w: r.w * TILE, h: r.h * TILE };
 
@@ -224,19 +226,22 @@ export function buildAreaVis(art: ArtModule, layout: AreaLayout, room: RoomState
   }
   if (layout.floorTint) tintFloor(fctx, px, layout.floorTint);
   for (const rug of layout.rugs) {
+    const color = seasonalRugColor(theme, rug.color);
     try {
-      art.drawRug(fctx, rug.x, rug.y, rug.w, rug.h, rug.color, rug.seed);
+      art.drawRug(fctx, rug.x, rug.y, rug.w, rug.h, color, rug.seed);
     } catch {
-      fctx.fillStyle = rug.color;
+      fctx.fillStyle = color;
       fctx.fillRect(rug.x, rug.y, rug.w, rug.h);
     }
+    decorateSeasonalRug(fctx, theme, rug);
   }
 
   // ---- paredes + itens de parede fixos
   const [walls, wctx] = makeCanvas(px.w, px.h + WALL_MARGIN);
   wctx.translate(-px.x, -px.y + WALL_MARGIN);
   const order = { face: 0, south: 1, cap: 2 } as const;
-  for (const w of [...layout.walls].sort((a, b) => order[a.kind] - order[b.kind])) drawWallSegment(art, wctx, w);
+  for (const w of [...layout.walls].sort((a, b) => order[a.kind] - order[b.kind])) drawWallSegment(art, wctx, { ...w, style: seasonalWallStyle(theme, w.style) });
+  for (const w of layout.walls) decorateSeasonalWall(wctx, theme, w);
 
   const wallItems: WallVis[] = [];
   let sign: WallVis | undefined;

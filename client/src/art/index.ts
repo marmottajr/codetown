@@ -104,7 +104,7 @@ export function characterSprite(req: CharacterFrameRequest): Sprite {
   const n = poseFrameCount(req.pose);
   const frame = ((Math.floor(req.frame) % n) + n) % n;
   const seated = isSeated(req.pose, req.seated);
-  const key = `${keyOf(req.appearance)}|${req.dir}|${req.pose}|${frame}|${req.held ?? 'none'}|${seated ? 1 : 0}`;
+  const key = `${keyOf(req.appearance)}|${req.dir}|${req.pose}|${frame}|${req.held ?? 'none'}|${seated ? 1 : 0}|${req.costume ?? 'none'}`;
   return charCache.get(key, () => toSprite(renderCharacter({ ...req, frame, seated })));
 }
 

@@ -1483,6 +1483,40 @@ function itemPos(dc: Dc): Pt | null {
 
 // ---------------------------------------------------------------- composição
 
+/** Usa o mesmo rig da cabeça para acompanhar quique, cochilo e poses sentadas. */
+function drawCostume(dc: Dc, costume: CharacterFrameRequest['costume']): void {
+  if (!costume) return;
+  const { b, r } = dc;
+  const x = HX + r.lean;
+  const y = HY + r.ub + r.hd;
+  if (costume === 'santa') {
+    b.rect(x + 2, y, 9, 4, '#c93945');
+    b.rect(x + 4, y - 2, 5, 2, '#e95452');
+    b.rect(x + 9, y - 1, 3, 3, '#a82436');
+    b.rect(x + 11, y + 1, 3, 3, '#fff3d9');
+    b.rect(x + 1, y + 4, 11, 2, '#fff3d9');
+    b.hline(x + 2, x + 10, y + 5, '#ddd9cb');
+  } else if (costume === 'witch') {
+    b.rect(x + 6, y - 2, 2, 2, '#50336f');
+    b.rect(x + 5, y, 4, 2, '#69428e');
+    b.rect(x + 3, y + 2, 7, 3, '#50336f');
+    b.hline(x + 3, x + 9, y + 4, '#e9a548');
+    b.rect(x - 1, y + 5, 15, 2, '#372641');
+    b.set(x + 7, y + 4, '#ffe0a3');
+  } else if (costume === 'pumpkin') {
+    b.rect(x + 6, y - 2, 2, 3, '#47754b');
+    b.rect(x + 2, y + 1, 10, 4, '#ed963c');
+    b.rect(x + 1, y + 2, 12, 3, '#dc792e');
+    b.vline(x + 4, y + 1, y + 4, '#f9ae48');
+    b.vline(x + 8, y + 1, y + 4, '#f9ae48');
+    b.hline(x + 2, x + 11, y + 5, '#8d4930');
+  } else {
+    // Gola da capa: rosto e crachá continuam visíveis.
+    b.rect(x, y + 12, 2, 5, '#702743');
+    b.rect(x + 12, y + 12, 2, 5, '#702743');
+  }
+}
+
 export function renderCharacter(req: CharacterFrameRequest): BufSprite {
   if (req.dir === 'right') {
     const left = renderCharacter({ ...req, dir: 'left' });
@@ -1498,6 +1532,10 @@ export function renderCharacter(req: CharacterFrameRequest): BufSprite {
   const ip = itemPos(dc);
 
   // 1) Atrás de tudo: cabelo longo (frente), item nas costas.
+  if (req.costume === 'vampire') {
+    b.rect(5 + r.lean, 18 + r.ub, 14, 8, '#35283e');
+    b.rect(6 + r.lean, 19 + r.ub, 12, 6, '#702743');
+  }
   drawHair(dc, 'back');
   if (ip && r.itemBehind) drawItem(dc, ip[0], ip[1]);
 
@@ -1506,6 +1544,7 @@ export function renderCharacter(req: CharacterFrameRequest): BufSprite {
     drawFacialHair(dc);
     drawHair(dc, 'front');
     drawAccessory(dc);
+    drawCostume(dc, req.costume);
   };
 
   if (view !== 'side' && r.itemAt) {
@@ -1532,6 +1571,7 @@ export function renderCharacter(req: CharacterFrameRequest): BufSprite {
     drawFacialHair(dc);
     drawHair(dc, 'front');
     drawAccessory(dc);
+    drawCostume(dc, req.costume);
     if (ip && !r.itemBehind) drawItem(dc, ip[0], ip[1]);
     drawArm(dc, r.armB, sr, sleeve, 0, true);
   } else {
@@ -1551,6 +1591,7 @@ export function renderCharacter(req: CharacterFrameRequest): BufSprite {
     drawFacialHair(dc);
     drawHair(dc, 'front');
     drawAccessory(dc);
+    drawCostume(dc, req.costume);
     // Braços cruzados por cima do cabelo comprido que cai no peito (a mão que bate fica visível).
     if (r.crossFront !== null) drawCrossedArms(dc, sr, sleeve, r.crossFront === 1);
     if (ip && !r.itemBehind) {

@@ -17,7 +17,11 @@ export interface WorldOptions {
   dayNight: boolean;
   /** (Opcional, aditivo) Ciclo dia/noite: automático, sempre dia ou sempre noite. Vale sobre `dayNight`. */
   daylight?: DaylightMode;
+  /** Tema visual. Automático mantém o escritório original, sem troca por calendário. */
+  theme?: OfficeTheme;
 }
+
+export type OfficeTheme = 'auto' | 'christmas' | 'halloween';
 
 /** Ciclo dia/noite: segue a hora local, ou fixa o dia ou a noite. */
 export type DaylightMode = 'auto' | 'day' | 'night';
@@ -131,4 +135,5 @@ export const DEFAULT_WORLD_OPTIONS: WorldOptions = {
   liveliness: 'normal',
   followSelected: false,
   dayNight: true,
+  theme: 'auto',
 };

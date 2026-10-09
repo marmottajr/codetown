@@ -61,6 +61,7 @@ export class SettingsPopover implements UiComponent {
   private bubbles: ReturnType<typeof segmented<UiPrefs['bubbles']>>;
   private liveliness: ReturnType<typeof segmented<UiPrefs['liveliness']>>;
   private daylight: ReturnType<typeof segmented<UiPrefs['daylight']>>;
+  private theme: ReturnType<typeof segmented<UiPrefs['theme']>>;
   private soundGroup: SoundSettingsGroup;
   private demoGroup: HTMLElement;
   private about: AboutGroup;
@@ -107,6 +108,12 @@ export class SettingsPopover implements UiComponent {
       (v) => ctx.updatePrefs({ daylight: v }),
     );
     this.daylight.row.append(h('span', { class: 'ui-set__hint', text: 'Automático: céu, luzes e sol nas janelas seguem a hora local.' }));
+    this.theme = segmented<UiPrefs['theme']>(
+      'Tema do escritório',
+      [['auto', 'Automático'], ['christmas', 'Natal'], ['halloween', 'Halloween']],
+      (v) => ctx.updatePrefs({ theme: v }),
+    );
+    this.theme.row.append(h('span', { class: 'ui-set__hint', text: 'Automático mantém o visual original. Natal e Halloween decoram o escritório e os personagens.' }));
     this.soundGroup = new SoundSettingsGroup(ctx, sound);
 
     this.demoGroup = h(
@@ -123,6 +130,7 @@ export class SettingsPopover implements UiComponent {
       'div',
       { class: 'ui-popover ui-settings', role: 'dialog', tabIndex: -1, attrs: { 'aria-label': 'Configurações', id: 'ui-settings', popover: 'auto' } },
       h('div', { class: 'ui-popover__head' }, h('h2', { text: 'Configurações' }), close),
+      h('div', { class: 'ui-set-group' }, h('h3', { text: 'Aparência' }), this.theme.row),
       h(
         'div',
         { class: 'ui-set-group' },
@@ -200,6 +208,7 @@ export class SettingsPopover implements UiComponent {
     this.bubbles.set(p.bubbles);
     this.liveliness.set(p.liveliness);
     this.daylight.set(p.daylight);
+    this.theme.set(p.theme);
     this.soundGroup.render();
     setHidden(this.demoGroup, this.ctx.store.mock);
     this.about.render();

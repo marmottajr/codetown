@@ -339,6 +339,17 @@ um **chip colorido com a letra da conta** (C, D…).
 (permissão ou pergunta) · `O` ou `0` visão geral · `Esc` limpar seleção · `[` painel lateral · `]` feed · setas/`WASD` mover ·
 `+` `-` zoom · `?` ajuda.
 
+### Temas do escritório
+
+Em **Configurações → Aparência → Tema do escritório**, escolha:
+
+- **Automático** (padrão): mantém o visual original, sem trocar de tema pelas datas do calendário.
+- **Natal**: guirlandas, luzes quentes, árvores com presentes, tapetes natalinos, neve nas janelas e gorros nos personagens.
+- **Halloween**: abóboras, fantasmas decorativos, teias, morcegos, luzes roxas, tapetes temáticos e acessórios de fantasia.
+
+A troca é imediata e a escolha fica salva neste navegador. Os temas preservam os caminhos,
+as atividades e as animações dos agentes. O ciclo dia/noite continua sendo uma opção independente.
+
 ### Dia, noite e sons
 
 O escritório acompanha a **hora local**: de madrugada e à noite o gramado e a rua ficam azulados e escuros, os postes,
