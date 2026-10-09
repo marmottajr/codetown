@@ -868,6 +868,24 @@ describe('fonte do Codex: pergunta do request_user_input (P9)', () => {
     expect(ctx.agent()?.waitingFor).toBeUndefined();
   });
 
+  it('duas perguntas abertas: responder uma não tira a espera (a outra segue sem resposta); responder a outra volta a trabalhar', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('turn1', at), Q.ask('call_a', 'Qual banco usar?', at + 1_000), Q.ask('call_b', 'Posso migrar?', at + 1_100)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: QUESTION });
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.answer('call_a', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: QUESTION });
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.answer('call_b', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    expect(ctx.agent()?.waitingFor).toBeUndefined();
+  });
+
   it('boot no meio de uma pergunta: o principal e o subagente que pergunta já saem esperando', () => {
     const ctx = setup();
     const at = ctx.now() - 60_000;

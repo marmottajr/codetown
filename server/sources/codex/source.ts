@@ -32,16 +32,16 @@
 // Status: aplicado por bordas (início/fim de turno no rollout, eventos de hook), a informação mais nova vence; um
 // rollout relido nunca sobrescreve o 'waiting' de um PermissionRequest mais novo. Um request_user_input sem output é
 // 'waiting' ("responder uma pergunta") até a resposta ou o fim do turno, sem trocar uma espera por aprovação que já
-// esteja valendo (a resposta só tira a espera da pergunta). Comandos em segundo plano (shells.ts: exec_command com
-// "Process running with session ID N", célula do code mode com "Script running with cell ID N") ficam no agente que os
-// rodou (ou no principal, depois que ele entrega); o principal ocioso com algum vivo fica 'shell'. O fim vem do
-// write_stdin/wait ou do CommandExecution com o process_id ('ShellDone'); o próximo task_started do dono, o thread
-// fechar ou SHELL_EXPIRE_MS depois do fim do turno encerram a espera sem 'ShellDone'. Com a trava segura o turno aberto
-// continua 'working' sem prazo; sem sondagem, 'working' sem nenhuma escrita por WORKING_QUIET_MS vira 'idle'. Ao abrir
-// um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos `tailBytes` e até a fronteira de turno
-// (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de onde a varredura parou e o começo
-// anterior a ela é lido depois, em segundo plano (números e linha do tempo longa). Boot síncrono, com endBoot num
-// `finally`.
+// esteja valendo (a resposta só tira a espera da pergunta, e só quando não sobra outra aberta). Comandos em segundo
+// plano (shells.ts: exec_command com "Process running with session ID N", célula do code mode com "Script running with
+// cell ID N") ficam no agente que os rodou (ou no principal, depois que ele entrega); o principal ocioso com algum vivo
+// fica 'shell'. O fim vem do write_stdin/wait ou do CommandExecution com o process_id ('ShellDone'); o próximo
+// task_started do dono, o thread fechar ou SHELL_EXPIRE_MS depois do fim do turno encerram a espera sem 'ShellDone'.
+// Com a trava segura o turno aberto continua 'working' sem prazo; sem sondagem, 'working' sem nenhuma escrita por
+// WORKING_QUIET_MS vira 'idle'. Ao abrir um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos
+// `tailBytes` e até a fronteira de turno (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de
+// onde a varredura parou e o começo anterior a ela é lido depois, em segundo plano (números e linha do tempo longa).
+// Boot síncrono, com endBoot num `finally`.
 import { createReadStream, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import type { AccountUsage, Activity, AgentStatus, ShellJob, SourceInfo } from '../../../shared/types';
@@ -901,8 +901,9 @@ export class CodexSource implements AgentSource, CodexLive {
           if (t.status !== 'waiting' || t.waitingFor === QUESTION_WAIT) this.decide(t, 'waiting', r.at, QUESTION_WAIT, live);
           break;
         case 'answered':
-          // Só a espera da pergunta sai com a resposta (a de aprovação continua até o comando andar).
-          if (t.status === 'waiting' && t.waitingFor === QUESTION_WAIT) this.decide(t, 'working', r.at, undefined, live);
+          // Só a espera da pergunta sai com a resposta (a de aprovação continua até o comando andar), e só quando não
+          // sobra outra pergunta aberta (o parser emite um 'answered' por pergunta respondida).
+          if (t.status === 'waiting' && t.waitingFor === QUESTION_WAIT && !t.state.asking.size) this.decide(t, 'working', r.at, undefined, live);
           break;
         case 'spawn':
           // Título do filho: vale quando ele entrar no escritório (sem o id dele não há como casar).
