@@ -373,6 +373,26 @@ describe('fonte do Codex: sondagem da trava, leitura até a fronteira e mtime fo
     expect(ctx.agent()?.stats.toolCalls).toBe(parent.length);
   });
 
+  it('sessão ociosa com rollout de mais de 1 MB: o boot lê pelo menos 1 MB do fim (os números do último turno vêm na hora)', async () => {
+    const ctx = setup();
+    const start = ctx.now() - 30 * 60_000;
+    const turn = bigTurn(T, 't1', 1_100_000, start + 2_000);
+    ctx.home.rollout(T, [
+      R.meta(T, { at: start }),
+      R.taskStarted('t1', start),
+      R.user(T, 't1', 'u', 'Revise o relatório', start + 1_000),
+      ...turn,
+      R.tokens({ input: 5_000, output: 700, at: ctx.now() - 60_000 }),
+      R.taskComplete('t1', ctx.now() - 59_000),
+    ]);
+    ctx.home.lock(T, start);
+    ctx.source.boot();
+    // Parar na fronteira mais recente (o task_complete do fim) deixaria os tokens em 0: o começo não os soma.
+    expect(ctx.agent()).toMatchObject({ status: 'idle', stats: { tokensIn: 5_000, tokensOut: 700 } });
+    await ctx.source.idle();
+    expect(ctx.agent()?.stats).toMatchObject({ tokensIn: 5_000, tokensOut: 700, toolCalls: turn.length });
+  });
+
   it('attach com a última linha pela metade: sem exceção, e a atividade sai uma vez só quando a linha completa chega', () => {
     const ctx = setup();
     const at = ctx.now() - 10_000;
