@@ -226,3 +226,63 @@ describe('session_meta', () => {
     expect(parseSessionMeta({ id: T }).historyMode).toBe('legacy');
   });
 });
+
+/** CommandExecution com a lista e o parsed_cmd dados (o R.command grava sempre `zsh -lc`). */
+function execItem(id: string, command: unknown, o: { parsed?: unknown[]; exit?: number; output?: string } = {}): string {
+  const j = JSON.parse(R.command(T, 't', id, 'x', { exit: o.exit, output: o.output }));
+  j.payload.item.command = command;
+  j.payload.item.parsed_cmd = o.parsed ?? [{ type: 'unknown', cmd: 'x' }];
+  return JSON.stringify(j);
+}
+
+const acts = (results: CodexLineResult[]) => results.flatMap((r) => r.activities.map((a) => a.activity));
+
+describe('rollout do Codex: comandos do PowerShell e do cmd (P5)', () => {
+  it('commandText devolve o comando desembrulhado (pwsh -Command, cmd /c, texto inteiro)', () => {
+    expect(commandText(['pwsh.exe', '-NoProfile', '-Command', 'git status'])).toBe('git status');
+    expect(commandText(['cmd.exe', '/d', '/s', '/c', 'dir'])).toBe('dir');
+    expect(commandText('pwsh -NoProfile -Command "npm test"')).toBe('npm test');
+    expect(describeCodexTool('Bash', { command: 'pwsh -NoProfile -Command "git status"' }).desc).toMatchObject({ text: 'Conferindo o git status', detail: 'git status' });
+  });
+
+  it('CommandExecution do code mode: a heurística olha o comando de dentro', () => {
+    const { results } = feed([execItem('exec-1', ['pwsh.exe', '-NoProfile', '-Command', 'npm test']), execItem('exec-2', ['cmd.exe', '/d', '/s', '/c', 'git status'])]);
+    expect(acts(results).map((a) => [a.id, a.text, a.detail, a.tool])).toEqual([
+      ['acc:t#exec-1', 'Rodando testes', 'npm test', 'Bash'],
+      ['acc:t#exec-2', 'Conferindo o git status', 'git status', 'Bash'],
+    ]);
+  });
+
+  it('parsed_cmd: só leitura, listagem ou busca mudam o tipo; mistura com unknown fica com o comando', () => {
+    const { results, state } = feed([
+      execItem('e1', ['pwsh.exe', '-Command', 'Get-Content src/soma.ts'], { parsed: [{ type: 'read', cmd: 'Get-Content src/soma.ts', name: 'soma.ts', path: 'src/soma.ts' }] }),
+      execItem('e2', ['pwsh.exe', '-Command', 'Get-ChildItem src'], { parsed: [{ type: 'list_files', cmd: 'Get-ChildItem src', path: 'src' }] }),
+      execItem('e3', ['pwsh.exe', '-Command', 'rg -n TODO src'], { parsed: [{ type: 'search', cmd: 'rg -n TODO src', query: 'TODO', path: 'src' }] }),
+      execItem('e4', ['pwsh.exe', '-Command', 'Get-ChildItem; npm test'], { parsed: [{ type: 'list_files', cmd: 'Get-ChildItem' }, { type: 'unknown', cmd: 'npm test' }] }),
+      execItem('e5', ['pwsh.exe', '-Command', 'Get-Content a.txt | Select-String x'], {
+        parsed: [{ type: 'read', cmd: 'Get-Content a.txt', name: 'a.txt', path: 'a.txt' }, { type: 'search', cmd: 'Select-String x', query: 'x' }],
+      }),
+      // Leitura sem caminho: não dá para dizer o quê; fica o comando.
+      execItem('e6', ['pwsh.exe', '-Command', 'npm test'], { parsed: [{ type: 'read', cmd: 'npm test' }] }),
+    ]);
+    expect(acts(results).map((a) => [a.id, a.kind, a.text, a.tool])).toEqual([
+      ['acc:t#e1', 'read', 'Lendo soma.ts', 'Bash'],
+      ['acc:t#e2', 'read', 'Listando src', 'Bash'],
+      ['acc:t#e3', 'search', 'Buscando “TODO”', 'Bash'],
+      ['acc:t#e4', 'run', 'Rodando Get-ChildItem', 'Bash'],
+      ['acc:t#e5', 'read', 'Lendo a.txt', 'Bash'],
+      ['acc:t#e6', 'test', 'Rodando testes', 'Bash'],
+    ]);
+    expect(state.stats.toolCalls).toBe(6);
+  });
+
+  it('GitHub: push e PR detectados no comando desembrulhado (pwsh e cmd)', () => {
+    const ok = 'To github.com:o/r.git\n   abc1234..def5678  main -> main\n';
+    const { results } = feed([
+      execItem('g1', ['pwsh.exe', '-Command', 'git push origin main'], { output: ok }),
+      execItem('g2', ['cmd.exe', '/d', '/s', '/c', 'gh pr create --fill'], { output: 'https://github.com/o/r/pull/12\n' }),
+    ]);
+    expect(results[0].signals).toContainEqual({ type: 'github', event: { kind: 'push', branch: 'main' }, key: 'g1' });
+    expect(results[1].signals).toContainEqual({ type: 'github', event: expect.objectContaining({ kind: 'pr_opened', number: 12, repo: 'o/r' }), key: 'g2' });
+  });
+});

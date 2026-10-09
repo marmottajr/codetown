@@ -17,6 +17,7 @@ import type { GitHubEvent } from '../../../shared/github';
 import type { AccountUsage, Activity, AgentStats, TaskItem, TaskStatus, UsageWindow } from '../../../shared/types';
 import { detectGitHubResult, githubCallOf } from '../github';
 import type { ParsedActivity } from '../transcript';
+import { unwrapCommand } from './command';
 
 type Rec = Record<string, unknown>;
 
@@ -160,21 +161,32 @@ export function usageFromRateLimits(raw: unknown, at: number): AccountUsage | un
 
 // ------------------------------------------------------------------ comandos
 
-const SHELLS = /^(?:.*\/)?(?:ba|z|da|k|fi)?sh$/;
-
 /**
- * O comando legível de um CommandExecution/exec: `command` é uma lista (`["/bin/zsh", "-lc", "npm test"]`) ou um
- * texto. O invólucro do shell (`-lc`, `-c`) sai; o resto é juntado com espaços (palavras com espaço entre aspas).
+ * O comando legível de um CommandExecution/exec: `command` é uma lista (`["/bin/zsh", "-lc", "npm test"]`,
+ * `["pwsh.exe", "-Command", "git status"]`, `["cmd.exe", "/c", "dir"]`) ou um texto. O invólucro do shell sai
+ * (`command.ts`); sem invólucro, as palavras são juntadas com espaços (as que têm espaço vão entre aspas).
  */
 export function commandText(cmd: unknown): string {
-  if (typeof cmd === 'string') return cmd.trim();
-  if (!Array.isArray(cmd)) return '';
-  const words = cmd.filter((w): w is string => typeof w === 'string');
-  if (words.length >= 3 && SHELLS.test(words[0]) && /^-[a-z]*c$/.test(words[1])) return words.slice(2).join(' ').trim();
-  return words
-    .map((w) => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`))
-    .join(' ')
-    .trim();
+  return unwrapCommand(cmd).text;
+}
+
+const EXPLORE_CMD = new Set(['read', 'list_files', 'search']);
+
+/**
+ * Atividade de um comando concluído. O `parsed_cmd` do CommandExecution (uma entrada por segmento do comando) só
+ * muda o tipo quando todas as entradas são leitura, listagem ou busca (`ls && npm test` continua um comando); vale a
+ * primeira. Sem isso, a heurística do Bash sobre o comando desembrulhado.
+ */
+function commandActivity(command: string, parsed: unknown): ActivityDescription {
+  const list = Array.isArray(parsed) ? parsed.map(rec) : [];
+  const first = list[0];
+  if (first && list.every((p) => p && EXPLORE_CMD.has(String(p.type)))) {
+    const path = str(first.path) ?? str(first.name);
+    if (first.type === 'read' && path) return describeTool('Read', { file_path: path });
+    if (first.type === 'list_files') return describeTool('LS', { path: path ?? '' });
+    if (first.type === 'search') return describeTool('Grep', { pattern: str(first.query) ?? '' });
+  }
+  return describeTool('Bash', { command });
 }
 
 /** Arquivos tocados por um patch do apply_patch ("*** Add File: x", "*** Update File: y", "*** Delete File: z"). */
@@ -605,7 +617,7 @@ class RolloutLineParser {
         return this.think();
       case 'exec_command_end':
         if (this.paginated()) return;
-        return this.command({ id: str(p.call_id), command: p.command, exitCode: num(p.exit_code), output: str(p.aggregated_output) ?? str(p.formatted_output) ?? str(p.stdout) ?? '', status: str(p.status) });
+        return this.command({ id: str(p.call_id), command: p.command, parsed: p.parsed_cmd, exitCode: num(p.exit_code), output: str(p.aggregated_output) ?? str(p.formatted_output) ?? str(p.stdout) ?? '', status: str(p.status) });
       case 'patch_apply_end':
         if (this.paginated()) return;
         return this.fileChange(str(p.call_id), p.changes, p.success === false ? 'failed' : str(p.status));
@@ -698,7 +710,7 @@ class RolloutLineParser {
         this.sawPaginated();
         this.s.stats.toolCalls++;
         this.changed();
-        return this.command({ id, command: item.command, exitCode: num(item.exit_code), output: str(item.aggregated_output) ?? '', status: str(item.status) });
+        return this.command({ id, command: item.command, parsed: item.parsed_cmd, exitCode: num(item.exit_code), output: str(item.aggregated_output) ?? '', status: str(item.status) });
       case 'FileChange':
         this.sawPaginated();
         this.s.stats.toolCalls++;
@@ -762,11 +774,11 @@ class RolloutLineParser {
     this.progress();
   }
 
-  private command(c: { id?: string; command: unknown; exitCode?: number; output: string; status?: string }): void {
+  private command(c: { id?: string; command: unknown; parsed?: unknown; exitCode?: number; output: string; status?: string }): void {
     const command = commandText(c.command);
     this.done(c.id);
     const key = c.id ?? this.autoKey();
-    this.push(describeTool('Bash', { command }), { key, tool: 'Bash', callId: c.id });
+    this.push(commandActivity(command, c.parsed), { key, tool: 'Bash', callId: c.id });
     if (c.status === 'declined') {
       this.push(SPECIAL.rejected('Bash'), { key: `${key}:r` });
       return;
