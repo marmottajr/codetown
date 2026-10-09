@@ -449,3 +449,15 @@ describe('pathFromUri', () => {
     expect(acts(results)[0]).toMatchObject({ id: 'acc:t#img1', kind: 'read', text: 'Olhando tela.png', detail: 'C:/proj/tela.png', tool: 'Read' });
   });
 });
+
+describe('prompt do spawn_agent mascarado antes do corte', () => {
+  it('a máscara encurta o texto e não puxa para a tela um pedaço de token sem máscara', () => {
+    const ghp = 'gh' + 'p_' + 'Z9'.repeat(18);
+    const sk = 's' + 'k-' + 'Z9'.repeat(10);
+    // O ghp mascarado encolhe 33 caracteres; o sk começa no 52 e, cortado em 60 antes da máscara, sobraria com menos
+    // de 8 caracteres (não casa) e cairia dentro dos 46 do texto.
+    const { desc } = describeCodexTool('spawn_agent', { message: `a ${ghp} ${'x'.repeat(8)} ${sk}` });
+    expect(desc.text).toContain('gh*_***');
+    expect(desc.text).not.toContain('s' + 'k-Z');
+  });
+});

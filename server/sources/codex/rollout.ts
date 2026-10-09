@@ -363,7 +363,9 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
     case 'spawn_agent':
     case 'Agent': {
       const prompt = str(input.message) ?? str(input.prompt) ?? str(input.task);
-      return { desc: describeTool('Agent', { description: prompt ? truncate(prompt, 60) : undefined, subagent_type: input.agent_type }), tool: 'Agent' };
+      // Mascara antes do corte: um token cortado ao meio não casa com a máscara (e o texto mascarado encolhe).
+      const description = prompt ? truncate(maskSecrets(prompt.slice(0, 600)), 60) : undefined;
+      return { desc: describeTool('Agent', { description, subagent_type: input.agent_type }), tool: 'Agent' };
     }
     case 'wait':
     case 'wait_agent':
