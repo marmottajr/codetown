@@ -329,14 +329,17 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   Habblaud a segurasse quando o Codex retoma a thread, o Codex falharia): no Windows, ler 1 byte dá `EBUSY` = segura;
   no Linux, uma linha `FLOCK WRITE` do `/proc/locks` com o dispositivo:inode do arquivo; no macOS, no Docker e no
   Linux sem `/proc/locks`, só a existência. Segura = aberta, sem prazo (um comando longo passa horas sem escrever);
-  solta ou sumida = principal encerrado depois de 5 s, subagente depois de 1,5 s. Só no modo da existência: lock e
-  rollout parados há 12 h (pela última linha), sem evento de hook = lock de crash; sem a trava segura, `working` sem
-  escrita nem hook por 30 min = turno morto. Lock sem rollout = sessão aberta e vazia: o lock não diz a pasta, então o
+  solta ou sumida = principal encerrado depois de 5 s, subagente depois de 1,5 s (o que ainda não concluiu e não está
+  ocioso espera 120 s, porque volta com o mesmo id num `followup_task`). Só no modo da existência: lock e rollout
+  parados há 12 h (pela última linha), sem evento de hook = lock de crash; sem a trava segura, `working` sem escrita
+  nem hook por 30 min = `idle`, no principal e no subagente (uma linha nova do turno ainda aberto volta a `working`,
+  ou a `waiting` com pergunta aberta). Lock sem rollout = sessão aberta e vazia: o lock não diz a pasta, então o
   principal só entra quando o rollout (criado no 1º prompt) ou um hook disser o cwd. Sem a pasta de locks: escrita no
   rollout nos últimos 30 min. Evento de hook segura a presença por 60 s. O mtime nunca decide a presença: só escolhe o
   que abrir.
 - **Rollout** (`sources/codex/rollout.ts`, `reader.ts`): `sessions/AAAA/MM/DD/rollout-*-<threadId>.jsonl` (a pasta é a
-  data de criação; sessão retomada continua no arquivo antigo) e `archived_sessions/`, lidos com `FileTail`. Ao abrir:
+  data de criação; sessão retomada continua no arquivo antigo; um thread revertido tem mais de um arquivo e vale o de
+  última linha mais recente, com o mtime só desempatando) e `archived_sessions/`, lidos com `FileTail`. Ao abrir:
   a 1ª linha (`session_meta`) e `scanBackward`, do fim para o começo em blocos de 1 MB, até a fronteira de turno mais
   recente (teto de 64 MB; um turno do Codex passa de vários MB, e uma janela fixa do fim mostraria "ocioso" no meio
   do trabalho); o tail continua de onde a varredura parou, e o começo anterior vai em segundo plano (números, título e
@@ -344,17 +347,21 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   `task_started`/`task_complete`/`turn_aborted`; atividades por `item_completed` (`CommandExecution` como o Bash,
   `FileChange`, `McpToolCall`, mensagens e raciocínio). Só o 1º `session_meta` vale, e num subagente com fork as
   linhas herdadas do pai (`ordinal < subagent_history_start_ordinal`) ficam de fora. Segredos mascarados antes de
-  qualquer corte. Tokens sem somar o cache de novo (no Codex ele já está dentro da entrada); sem custo.
+  qualquer corte, também nos textos que o `shared/activity.ts` corta depois (`maskedCut`: mascara até 16 KiB, cortando
+  no último espaço, e só então trunca). Tokens sem somar o cache de novo (no Codex ele já está dentro da entrada); sem
+  custo.
   - Comando (`command.ts`): o de dentro do invólucro do shell (`sh -lc`, `pwsh`/`powershell -Command`, `cmd /c`), com
     o `parsed_cmd` do `CommandExecution` quando vem; os eventos do GitHub saem desse comando.
   - Tratamento próprio: `request_user_input` sem output = esperando você, com o resumo das perguntas (o output ou o fim
-    do turno encerram); `tools.update_plan` no JS do `exec` do code mode vira as tarefas (o literal é lido, nunca
-    executado); `SubAgentActivity` do multiagente v2 conta o filho, e a tarefa do `spawn_agent` vira o título dele;
-    extensões (`web.search`, `web::run`, `clock.sleep`, `image_gen`) viram atividades.
+    do turno encerram; com duas abertas, responder uma não tira a espera); `tools.update_plan` no JS do `exec` do code
+    mode vira as tarefas (o literal é lido, nunca executado); `SubAgentActivity` do multiagente v2 conta o filho, e a
+    tarefa do `spawn_agent` vira o título dele; extensões (`web.search`, `web::run`, `clock.sleep`, `image_gen`) viram
+    atividades.
   - Uso do plano por `token_count.rate_limits`: `windows` = os medidores que o plano tem, na ordem `primary`/
     `secondary`, um por duração, mais `fiveHour`/`sevenDay` para as janelas de 300 e 10080 min (formatos antigos
     valem; `primary` nulo com `rate_limit_reached_type` = `noQuota`), empurrado com `accounts.setUsage`. Conta sem
-    sessão aberta relê os rollouts recentes (inclusive os arquivados) a cada 60 s.
+    sessão aberta relê os 8 rollouts mais recentes (inclusive os arquivados) a cada 60 s e fica com o uso de linha mais
+    nova; o mtime só escolhe os arquivos a abrir.
   - Subagentes = threads com `source.subagent.thread_spawn.parent_thread_id`; um neto cujo pai já entregou fica ligado
     ao principal da árvore; threads internos (guardian, review, compact, memory) ficam de fora.
   - Comando que continua rodando depois do turno (`shells.ts`: "Process running with session ID N" no unified exec,
@@ -392,15 +399,23 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   socket AF_UNIX não aparece para o Node no Windows; a pasta sim), confirmação por `codex app-server daemon version`
   (código 0) e só então o `codex app-server proxy` (bytes entre o stdio e o socket), sem shell, com o `CODEX_HOME` da
   conta no ambiente; nunca inicia nem configura o daemon, nada é escrito no `CODEX_HOME`. Sobre ele, WebSocket e
-  JSON-RPC: assina as threads (`thread/loaded/list` e `thread/started` → `thread/resume` sem overrides) e repassa os
-  pedidos de aprovação de comando e de arquivo ao registro (`registerParallel`, modo `'parallel'`): sem prazo, sem
-  página aberta, com as `decisions` que o Codex oferece; vale a 1ª resposta, do escritório ou do terminal, e o
-  `serverRequest/resolved` fecha o cartão. A decisão do escritório vai ao app-server (503 com o canal fora); recusar
-  não leva motivo; "nesta sessão" = `acceptForSession`. Numa thread assinada, o hook recebe `{skip: 'parallel'}`. Sem
-  daemon, confere de novo a cada 30 s; na queda, os cartões daquela conexão fecham, a thread volta ao hook e a
-  reconexão espera de 1 a 30 s. Liga só fora do Docker (o container não alcança o socket do host), com a trava do
-  terminal e o Codex ligado; `HABBLAUD_CODEX_APPSERVER` com valor falso desliga. Binário: `HABBLAUD_CODEX_BIN` ou o
-  `codex` do PATH (no Windows, só um `codex.exe`).
+  JSON-RPC: assina só as threads que o daemon já tem carregadas (`thread/loaded/list` na descoberta e `thread/started`
+  das que outro cliente carrega; o `thread/resume` é sem overrides e nunca vai a uma thread descarregada, porque faria
+  o daemon carregá-la) e repassa os pedidos de aprovação de comando e de arquivo ao registro (`registerParallel`, modo
+  `'parallel'`): sem prazo, sem página aberta, com as `decisions` que o Codex oferece (ausentes = as quatro; presentes
+  sem nenhuma das quatro = nenhum cartão, vale o terminal); o comando do cartão é o de dentro do invólucro do shell
+  (`unwrapCommand`); vale a 1ª resposta, do escritório ou do terminal, e o `serverRequest/resolved` fecha o cartão. A
+  decisão do escritório vai ao app-server (503 com o canal fora); recusar não leva motivo; "nesta sessão" =
+  `acceptForSession`. Numa thread assinada, o hook recebe `{skip: 'parallel'}`. Assinada, a thread fica carregada no
+  daemon com a trava de escritor presa, então a fonte avisa o turno de cada uma (`onTurn` → `setTurnOpen`): 60 s depois
+  de o turno fechar (`UNSUBSCRIBE_AFTER_MS`) o serviço a desassina (`thread/unsubscribe`; os cartões dela fecham e os
+  pedidos novos voltam ao hook, e o TUI fechado sai do escritório no tempo normal do Codex) e a assina de novo quando um
+  turno abre, se ela ainda estiver carregada. Sem daemon, confere de novo a cada 30 s; um `thread/loaded/list` que falha
+  com a conexão de pé avisa uma vez e lista de novo em 30 s; na queda, os cartões daquela conexão fecham, a thread volta
+  ao hook e a reconexão espera de 1 a 30 s. Liga só fora do Docker (o container não alcança o socket do host), com a
+  trava do terminal e o Codex ligado; `HABBLAUD_CODEX_APPSERVER` com valor falso desliga. Binário: `HABBLAUD_CODEX_BIN`
+  ou o `codex` do PATH, o mesmo das mensagens (no Windows, só um `codex.exe`: com o Codex instalado só pelo npm, que
+  põe um `codex.cmd`, aponte `HABBLAUD_CODEX_BIN` para o executável nativo).
 - **Mensagens** (`messages/*`, `messages/codex.ts`): para agentes do Codex, `codex queue --thread=<id> --message=<texto>`
   com `CODEX_HOME` = pasta da conta (no host). Fora do Docker o servidor roda o comando (`HABBLAUD_CODEX_BIN` ou `codex`
   do PATH); no Docker, o auxiliar do host (`npm run codex:bridge`) busca em `POST /api/codex/bridge/poll` e confirma em
@@ -418,7 +433,7 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
 | `HABBLAUD_CODEX` | ligado | `0` desliga a fonte do Codex |
 | `HABBLAUD_CODEX_DIRS` | — | pastas do Codex separadas por vírgula; substitui a detecção (`CODEX_HOME` e `~/.codex*`) |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | binário do Codex para o `codex queue` (modo Node e `npm run codex:bridge`) e para o canal paralelo (`codex app-server daemon version` e `proxy`) |
-| `HABBLAUD_CODEX_APPSERVER` | ligado | canal paralelo de aprovação do Codex; qualquer valor que não seja `1`, `true`, `yes`, `sim` ou `on` desliga. Desligado também no Docker, sem a trava do terminal ou com `HABBLAUD_CODEX=0` |
+| `HABBLAUD_CODEX_APPSERVER` | ligado | canal paralelo de aprovação do Codex; qualquer valor não vazio que não seja `1`, `true`, `yes`, `sim` ou `on` desliga (vazio vale como ausente). Desligado também no Docker, sem a trava do terminal ou com `HABBLAUD_CODEX=0` |
 | `HABBLAUD_CODEX_HOOK_KEY` | — (Docker: `/keys/codex-hook.key`) | só Docker: caminho da chave do hook do Codex montada pelo `docker:up` (precisa terminar em `codex-hook.key`); fora do Docker vale `~/.habblaud/codex-hook.key`, criada se faltar |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0`, `false`, `off` ou `no` desligam só as mensagens pelo escritório |
 | `HABBLAUD_CLAUDE_DIRS` | — | config dirs separados por vírgula; substitui a detecção (`~/.claude*` com `projects/` ou `sessions/` + `CLAUDE_CONFIG_DIR`) |

@@ -224,8 +224,9 @@ aprova (o Habblaud nunca grava essa aprovação). Com o Habblaud no Docker, para
 deixe também `npm run codex:bridge` rodando no Mac (veja [Codex](#codex)).
 
 No Windows, o Codex roda os hooks pelo PowerShell, e o `codex:install` grava `node "<caminho do hook>"`, que roda no
-PowerShell, no cmd e no sh. Se você instalou os hooks numa versão anterior, rode o `codex:install` de novo e aprove os
-hooks outra vez em `/hooks`: o comando mudou, e o Codex trata hook com comando novo como alterado (o install avisa).
+PowerShell, no cmd e no sh (se o `node` do PATH não for 22+, ou com `--node`, grava `& "<node>" "<hook>"`, que só roda
+no PowerShell). Se você instalou os hooks numa versão anterior, rode o `codex:install` de novo e aprove os hooks outra
+vez em `/hooks`: o comando mudou, e o Codex trata hook com comando novo como alterado (o install avisa).
 
 O `codex` no terminal, que roda as sessões num servidor em segundo plano (o daemon do app-server), também pode ser
 aprovado pelo escritório **sem os hooks**, pelo canal paralelo, com o Habblaud no modo Node (veja [Codex](#codex)).
@@ -488,10 +489,14 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
     aparece no cartão **Pede permissão** e no terminal **ao mesmo tempo**, sem prazo, e vale o que você responder
     primeiro. Os botões são **Aprovar**, **Aprovar nesta sessão** (quando o Codex oferece; ele não pergunta de novo
     por pedidos iguais nesta sessão) e **Recusar** (sem motivo: esse canal não leva texto). Respondeu no terminal, o
-    cartão fecha sozinho. Funciona sem os hooks, só com o Habblaud no modo Node (no Docker, o container não alcança o
-    daemon) e com o terminal do Habblaud ligado (mesma trava). O Habblaud só se junta a um daemon que já está
-    rodando: nunca o inicia nem muda a configuração dele. No Windows, ele precisa achar um `codex.exe` (com o Codex
-    instalado só pelo npm, aponte `HABBLAUD_CODEX_BIN` para um). `HABBLAUD_CODEX_APPSERVER=0` desliga.
+    cartão fecha sozinho. O cartão mostra o comando de dentro (sem o `pwsh.exe -Command` em volta), e um pedido sem
+    nenhuma resposta que o escritório saiba dar fica só no terminal. Funciona sem os hooks, só com o Habblaud no modo
+    Node (no Docker, o container não alcança o daemon) e com o terminal do Habblaud ligado (mesma trava). O Habblaud só
+    se junta a um daemon que já está rodando: nunca o inicia nem muda a configuração dele. Também só se junta às
+    conversas que o daemon já tem carregadas (nunca carrega uma), solta cada uma 60 segundos depois de o turno fechar e a
+    assina de novo quando um turno abre, para não segurar a sessão de um terminal que você fechou. No Windows, o canal
+    paralelo e as mensagens usam o `codex.exe` do PATH; com o Codex instalado só pelo npm (que só põe um `codex.cmd`),
+    aponte `HABBLAUD_CODEX_BIN` para o executável nativo. `HABBLAUD_CODEX_APPSERVER=0` desliga.
   - **Nos demais** (o app do Codex, a extensão do VS Code e a CLI fora do daemon): pelo hook. Com alguma página do
     Habblaud aberta, o pedido espera a sua resposta por até **25 segundos** (`npm run codex:install -- --espera <s>`,
     de 5 a 120): **Aprovar** ou **Recusar** (com o motivo). Diferente do Claude Code, o Codex só mostra a aprovação no
@@ -514,12 +519,16 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
 - **Enquanto está aberta:** o Habblaud confere se o Codex ainda segura a trava da sessão (sem nunca travá-la). No
   Windows e no Linux, a sessão fica no escritório pelo tempo que estiver aberta, mesmo parada há horas, e um turno
   longo continua "trabalhando"; no macOS e no Docker, onde isso não dá para conferir, a sessão sem nenhuma linha nova
-  há 12 horas sai. Reiniciado no meio de um turno, o Habblaud lê a conversa de trás para frente até o começo dele.
+  há 12 horas sai, e um turno sem nenhuma escrita há 30 minutos fica ocioso (e volta a trabalhar quando o arquivo volta
+  a crescer). Reiniciado no meio de um turno, o Habblaud lê a conversa de trás para frente até o começo dele.
 - **Quando a sessão sai do escritório:** a CLI do Codex roda as sessões num servidor em segundo plano, que as mantém
   carregadas até um minuto depois de ficarem ociosas e sem ninguém olhando; por isso o personagem pode demorar um
-  pouco para ir embora depois que você fecha o terminal. No Windows e no Linux, a sessão sai segundos depois de o
-  processo que segura a trava dela fechar (o app, a CLI fora do daemon ou o próprio daemon), mesmo que ele tenha caído
-  sem avisar.
+  pouco para ir embora depois que você fecha o terminal. O Habblaud não prolonga isso: ele solta a conversa 60
+  segundos depois de o turno fechar, então um terminal fechado sai no tempo normal do Codex (no pior caso, esses 60
+  segundos mais o minuto do Codex). No Windows e no Linux (fora do Docker), a sessão sai segundos depois de o processo
+  que segura a trava dela fechar (o app, a CLI fora do daemon ou o próprio daemon), mesmo que ele tenha caído sem
+  avisar. O subagente que ainda não concluiu espera 2 minutos antes de sair, porque volta com o mesmo id quando o pai
+  manda um novo pedido a ele (`followup_task`).
 - **O que aparece:** comandos rodados pelo PowerShell ou pelo cmd aparecem pelo comando de dentro (`npm test`, não
   `pwsh.exe -Command …`), e com eles push e PR do GitHub; uma pergunta do Codex deixa o personagem esperando você, com
   as perguntas; o plano do code mode atualiza as tarefas; subagentes contam e chegam com a tarefa como título; busca
@@ -732,8 +741,9 @@ Mais detalhes do servidor em [`server/README.md`](server/README.md).
 | volume `habblaud-data` | `/data` | Dados do próprio Habblaud (nomes dos personagens, linha do tempo do timelapse e estatísticas do Meu dia). |
 
 Com `HABBLAUD_CODEX=0` (no `.env` ou no ambiente), nada do Codex é montado. A pasta da conta **nunca** é montada inteira
-(lá ficam credenciais e configurações). O container roda como usuário sem privilégios, com sistema de arquivos somente leitura, sem capabilities extras e com `no-new-privileges`. Os metadados
-das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e passados ao container.
+(lá ficam credenciais e configurações). O container roda como usuário sem privilégios, com sistema de arquivos
+somente leitura, sem capabilities extras e com `no-new-privileges`. Os metadados das contas (letra, e-mail,
+organização) são lidos no host pelo `docker:up` e passados ao container.
 
 </details>
 
@@ -801,7 +811,8 @@ das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e 
   `127.0.0.1` e só aceitam uma decisão que traga a prova da chave local `~/.habblaud/codex-hook.key` (fora da pasta do
   Codex): quem ocupar a porta com o Habblaud parado não aprova nada. Para o canal paralelo, o Habblaud roda
   `codex app-server daemon version` e `codex app-server proxy` com a pasta da conta: só se junta a um daemon que já
-  está rodando, nunca o inicia nem o configura, e o canal não grava nada na pasta do Codex. Fora o `codex:install`, a
+  está rodando e a conversas que ele já tem carregadas, nunca inicia nem configura o daemon nem carrega uma conversa, e
+  o canal não grava nada na pasta do Codex. Fora o `codex:install`, a
   única escrita lá é a do próprio Codex: o `codex queue` que entrega uma mensagem guarda a fila no estado dele (só
   quando você manda uma). As mensagens ao Codex têm o mesmo aviso das do Claude Code: qualquer programa desta máquina
   que fale com o Habblaud consegue deixar uma mensagem na fila de uma sessão.
@@ -943,9 +954,9 @@ pasta com `HABBLAUD_CODEX_DIRS` (e rode `npm run docker:up` de novo: no Docker, 
 `docker:up` são montadas). Sem os hooks, o Codex aparece pelos arquivos dele, que só são gravados depois de cada passo:
 rode `npm run codex:install`, **aprove os hooks em `/hooks` no Codex** e confira com `npm run codex:status`. O Codex roda
 os hooks pelo shell de login, que pode ter um Node antigo; o `codex:install` escolhe um Node 22+ e diz qual (ou use
-`--node <caminho>`). No Windows, ele os roda pelo PowerShell, com o `node` do PATH. Uma sessão da CLI recém-aberta só
-aparece com a **primeira mensagem**: antes disso o Codex não diz em que pasta ela está (só cria a trava da sessão), e
-sem a pasta não há sala.
+`--node <caminho>`). No Windows, ele os roda pelo PowerShell, com o `node` do PATH (ou o Node 22+ que o install gravou
+na forma `& "<node>" "<hook>"`). Uma sessão da CLI recém-aberta só aparece com a **primeira mensagem**: antes disso o
+Codex não diz em que pasta ela está (só cria a trava da sessão), e sem a pasta não há sala.
 
 </details>
 
@@ -954,8 +965,10 @@ sem a pasta não há sala.
 
 No `codex` do terminal ligado ao daemon, o log de inicialização tem a linha "Aprovação do codex no terminal pelo
 escritório": ela diz se o canal paralelo está ligado e, se não estiver, por quê (Docker, `HABBLAUD_CODEX_APPSERVER=0`,
-terminal desligado). Sem o binário do Codex, o log avisa; no Windows, aponte `HABBLAUD_CODEX_BIN` para um `codex.exe`.
-Nos demais clientes do Codex, o pedido passa pelo hook: confira com `npm run codex:status`, aprove os hooks em `/hooks`
+terminal desligado). Sem o binário do Codex, o log avisa; no Windows, ele precisa ser o `codex.exe` (o `codex.cmd` do
+npm não serve): aponte `HABBLAUD_CODEX_BIN` para o executável nativo. Um pedido em que o Codex não oferece nenhuma
+resposta que o escritório saiba dar (aprovar, aprovar na sessão, recusar) fica só no terminal, e o log diz isso. Nos
+demais clientes do Codex, o pedido passa pelo hook: confira com `npm run codex:status`, aprove os hooks em `/hooks`
 (no Windows, de novo depois de um `codex:install` que trocou o comando) e deixe uma página do Habblaud aberta por
 `http://localhost`. Depois de atualizar o Habblaud, reinicie-o: o hook novo só decide com a prova da chave
 `~/.habblaud/codex-hook.key`, que um servidor antigo não manda. No Docker, rode `npm run docker:up` de novo (ele cria a

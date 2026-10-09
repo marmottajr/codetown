@@ -24,11 +24,14 @@ mudou.
 - **Aprovar o Codex do terminal pelo escritório, ao mesmo tempo que o terminal.** O `codex` no terminal, que roda as
   sessões no daemon do app-server, mostra o pedido de aprovação no cartão **Pede permissão** e no terminal juntos, sem
   prazo: vale o que você responder primeiro, e o cartão fecha sozinho quando a resposta é no terminal. Os botões são
-  **Aprovar**, **Aprovar nesta sessão** (quando o Codex oferece) e **Recusar** (sem motivo). Funciona sem os hooks,
-  com o Habblaud no modo Node e o terminal ligado; o Habblaud só se junta a um daemon que já está rodando, nunca o
-  inicia nem o configura. No Windows, ele precisa de um `codex.exe` (`HABBLAUD_CODEX_BIN`). `HABBLAUD_CODEX_APPSERVER=0`
-  desliga. Nos demais clientes do Codex (o app, a extensão do VS Code e a CLI fora do daemon), vale o hook, com os
-  25 s de espera.
+  **Aprovar**, **Aprovar nesta sessão** (quando o Codex oferece) e **Recusar** (sem motivo); o cartão mostra o
+  comando de dentro, sem o `pwsh.exe -Command` em volta. Funciona sem os hooks, com o Habblaud no modo Node e o
+  terminal ligado; o Habblaud só se junta a um daemon que já está rodando e às conversas que ele já tem carregadas,
+  nunca inicia nem configura o daemon nem carrega uma conversa, e solta cada uma 60 s depois de o turno fechar (assina
+  de novo quando um turno abre), para não segurar a sessão de um terminal que você fechou. No Windows, ele usa o
+  `codex.exe` do PATH (com o Codex instalado só pelo npm, aponte `HABBLAUD_CODEX_BIN` para o executável nativo).
+  `HABBLAUD_CODEX_APPSERVER=0` desliga. Nos demais clientes do Codex (o app, a extensão do VS Code e a CLI fora do
+  daemon), vale o hook, com os 25 s de espera.
 - **Mais do que o Codex faz, no escritório e no terminal.** Uma pergunta do Codex deixa o personagem esperando você,
   com as perguntas; o plano do code mode atualiza as tarefas; os subagentes do multiagente novo contam e chegam com a
   tarefa como título; busca na web, espera e geração de imagem viram atividades; um comando que continua rodando
@@ -39,8 +42,8 @@ mudou.
 
 - No Windows, as mensagens ao Codex procuravam `codex` no PATH e achavam o script que o npm instala ao lado do
   executável: o Habblaud dizia que as mensagens estavam ligadas, mas cada entrega falhava, porque o script não roda
-  sem shell. Agora a busca é pelo `codex.exe`. Com o Codex instalado só pelo npm, aponte `HABBLAUD_CODEX_BIN` para um
-  `codex.exe`.
+  sem shell. Agora a busca é pelo `codex.exe`. Com o Codex instalado só pelo npm, aponte `HABBLAUD_CODEX_BIN` para o
+  executável nativo (`codex.exe`).
 - No Windows, o comando de statusline que já existia antes do `npm run usage:install` (o Habblaud o guarda e
   continua rodando) era executado pelo `cmd.exe`, e o que funcionava no Claude Code (aspas simples, variáveis, pipes)
   quebrava. Agora ele roda no Git Bash, como no Claude Code: o de `CLAUDE_CODE_GIT_BASH_PATH` ou o da instalação do
@@ -53,6 +56,12 @@ mudou.
   Agora o Habblaud confere se o Codex ainda segura a trava da sessão (sem nunca travá-la): no Windows e no Linux, a
   sessão fica enquanto estiver aberta e sai segundos depois de o processo que segura a trava fechar, mesmo à força; no
   macOS e no Docker, continua o prazo de 12 h.
+- Um subagente do Codex que ainda não tinha concluído saía do escritório, entregando no meio do trabalho, quando a
+  trava dele sumia: o Codex a solta e a retoma com o mesmo id quando o pai manda um `followup_task`. Agora ele espera 2
+  minutos antes de sair.
+- No macOS e no Docker, um turno do Codex calado por 30 minutos (um comando longo) ficava ocioso para sempre, mesmo
+  quando voltava a escrever. Agora o personagem volta a trabalhar quando o arquivo volta a crescer, e o corte dos 30
+  minutos vale também para o subagente, que então entrega.
 - Reiniciado no meio de um turno longo do Codex, o Habblaud mostrava a sessão ociosa (e depois um tempo de turno
   errado): ele lia só o fim do arquivo. Agora lê de trás para frente até o começo do turno.
 - Um subagente do Codex criado com a história do pai repetia as atividades, o título e os números do pai.
@@ -61,6 +70,9 @@ mudou.
 - O histórico do Codex perdia sessões principais para os subagentes, que tomavam as vagas, e no Windows dependia da
   data de modificação dos arquivos, que às vezes fica parada. Agora os subagentes saem antes do corte e a data é a das
   conversas.
+- Numa conversa revertida do Codex (dois arquivos para a mesma conversa), o escritório e o histórico podiam abrir o
+  arquivo abandonado, porque no Windows a data de modificação fica parada durante as escritas. Agora vale o arquivo
+  de última linha mais recente.
 - O uso do Codex num plano só semanal mostrava um "5h —" fixo, e o de uma conta sem sessão aberta não se renovava
   depois de uma sessão curta. Agora o cartão mostra só os medidores do plano, e o Habblaud relê o uso a cada minuto.
 - No Windows, o `codex:install` gravava um comando que o PowerShell, onde o Codex roda os hooks, não executava, e a
@@ -78,8 +90,8 @@ mudou.
   `~/.habblaud/codex-hook.key`. Rode `npm run docker:up` de novo.
 - O hook do Codex aceitava a decisão de qualquer programa que ocupasse a porta do Habblaud com ele parado. Agora ele
   só decide com a prova da mesma chave. Depois de atualizar, reinicie o Habblaud.
-- Um token cortado ao meio podia escapar da máscara de segredos nos detalhes de erro e nos pedidos de subagente do
-  Codex: a máscara agora vem antes do corte.
+- Um token cortado ao meio podia escapar da máscara de segredos nos textos que o Codex mostra (prompts, comandos,
+  buscas, perguntas, plano, títulos, detalhes de erro e pedidos de subagente): a máscara agora vem antes do corte.
 
 ## [0.7.0] - 2026-10-09
 

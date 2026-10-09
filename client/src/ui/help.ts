@@ -60,10 +60,11 @@ const CODEX_HELP: string[] = [
   'Cada projeto aberto no Codex (no terminal ou no app) vira uma sala: a mesma do Claude Code naquela pasta, e os dois dividem a sala.',
   'Os agentes do Codex têm o chip da conta vazado (só a borda na cor da conta) e o selo CODEX na etiqueta e nos detalhes.',
   `${CODEX_LIVE_HINT} Sem os hooks, o escritório lê os arquivos de sessão do Codex: cada passo aparece quando termina.`,
-  'Aprovar pelo escritório: no Codex, a aprovação só aparece no terminal depois que você responder aqui ou o prazo acabar (alguns segundos). Não há “não perguntar de novo” nem “interromper”, e recusar pede um motivo.',
+  'Aprovar pelo escritório no `codex` do terminal (ligado ao daemon): o pedido aparece aqui e no terminal ao mesmo tempo, sem prazo, e vale a primeira resposta, daqui ou de lá. Há “Aprovar nesta sessão”, e recusar não pede motivo.',
+  'Aprovar pelo escritório nos demais Codex (app, VS Code, CLI fora do daemon): o pedido espera aqui por até 25 s (o padrão) e depois segue no terminal; recusar pede um motivo, e não há “não perguntar de novo”. Em nenhum dos dois há “interromper”.',
   'Mensagens: entram na fila da sessão e viram o próximo prompt quando o Codex terminar o que está fazendo (até ~10 s). Com o Habblaud no Docker, deixe `npm run codex:bridge` rodando; no modo Node funciona sozinho.',
   'Perguntas do Codex são respondidas no próprio Codex.',
-  'Uso: vem dos arquivos de sessão do Codex, sem instalar nada, e só se renova enquanto alguma sessão roda (por isso o cartão mostra a idade, ex.: “há 12 min”). “sem cota” quer dizer sem cota nem créditos para usar agora.',
+  'Uso: vem dos arquivos de sessão do Codex, sem instalar nada, e só se renova enquanto alguma sessão roda (por isso o cartão mostra a idade, ex.: “há 12 min”). O cartão mostra só os medidores que o plano tem (num plano só semanal, só a semana). “sem cota” quer dizer sem cota nem créditos para usar agora.',
   'Meu dia: o Codex conta tokens, mas não grava custo.',
 ];
 
