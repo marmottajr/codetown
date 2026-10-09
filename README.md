@@ -379,6 +379,27 @@ próprio computador** (o padrão) e só abre por `http://localhost` ou `http://1
 (`HABBLAUD_BIND=0.0.0.0` ou `HABBLAUD_HOST=0.0.0.0`), ele fica desligado. Detalhes em
 [Privacidade e segurança](#privacidade-e-segurança).
 
+### Terminal interativo (assumir, nova sessão e encerrar)
+
+Rodando com `npm start` (fora do Docker), a janela de terminal de cada agente principal é interativa: o botão
+**Abrir terminal** da gaveta, o atalho ao lado de cada agente na lista lateral ou a tecla `T` abrem a mesma janela,
+com abas para os outros agentes do mesmo projeto.
+
+- Sessão aberta aqui: é o Claude Code de verdade (digitar, responder; Esc interrompe o agente, como no terminal).
+- Sessão aberta noutro terminal: **Assumir daqui** (no topo da janela) encerra a sessão lá e continua a **mesma
+  conversa** aqui (`claude --resume <sessão>`, na mesma pasta e conta). O personagem mantém o nome. No Windows, o
+  terminal de onde a sessão saiu volta ao normal (o Habblaud desliga os modos de mouse/teclado que o Claude ligou).
+- **Encerrar** fecha a sessão, esteja ela aqui ou noutro terminal (a conversa fica salva).
+- **Nova sessão** (na gaveta da sala) abre um Claude Code novo na pasta do projeto.
+
+Assumir e encerrar pedem um segundo clique; fechar a janela não encerra a sessão. A janela (e a gaveta do
+agente) pode ser arrastada pela barra e redimensionada pelo canto; duplo clique na barra devolve ao lugar.
+Usa o `node-pty` (dependência opcional) e o `claude` do PATH (`HABBLAUD_CLAUDE_BIN` para outro); só aceita pedidos
+do próprio computador e desliga com `HABBLAUD_PTY=0`. Ao reiniciar o Habblaud, as sessões abertas por ele voltam sozinhas (`claude --resume`, lista em
+`<HABBLAUD_DATA_DIR>/ptys.json`; `HABBLAUD_PTY_RESTORE=0` desliga); o turno em andamento se perde, então reinicie
+com os agentes parados.
+O terminal ao vivo continua no histórico de sessões, para subagentes e quando o interativo está desligado.
+
 ### Timelapse do dia
 
 O botão **Timelapse** (relógio com a seta de voltar, ou a tecla `L`) reproduz o dia em alta velocidade: salas
