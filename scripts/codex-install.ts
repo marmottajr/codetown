@@ -18,19 +18,24 @@
 // {type: "command", command: 'node "<Habblaud>/mod/habblaud-codex/hook.mjs"', ...}. O resto do arquivo fica como
 // está. Antes de gravar, uma cópia vai para hooks.json.habblaud-backup-<data>.
 //
+// Windows: o Codex roda cada hook como `pwsh.exe -NoProfile -Command "<comando>"` (sem shell configurado, `cmd /C`).
+// Com um Node 22+ no PATH, o comando é `node "<caminho com />"`, que roda no PowerShell, no cmd e no sh; senão,
+// `& "<outro Node 22+>" "<caminho>"`, a forma do PowerShell (o install avisa: no cmd ela não roda).
+//
 // Confiança: o Codex só roda um hook novo ou alterado depois que você o aprova em /hooks, e guarda essa aprovação
 // (config.toml, [hooks.state."<hooks.json>:<evento>:<grupo>:<handler>"].trusted_hash) pela POSIÇÃO do grupo e por um
 // hash do evento, do matcher e do handler (comando, timeout, async, statusMessage). Por isso o instalador:
 // - nunca grava a confiança nem mexe no config.toml (quem aprova é você, em /hooks);
 // - sempre ACRESCENTA no fim e, ao atualizar, troca o handler do Habblaud NO MESMO lugar: os grupos de outros apps
-//   (ex.: o Orca) nunca mudam de posição nem de conteúdo;
+//   (ex.: o Orca) nunca mudam de posição nem de conteúdo; uma cópia repetida do Habblaud só sai se isso não mudar a
+//   posição de nenhum handler de outro app (senão fica, com aviso);
 // - usa um comando sem opções e valores fixos (porta e espera ficam em ~/.habblaud/codex-hook.json, que o hook lê):
 //   mudar a porta não pede aprovação nova; mudar a espera muda o timeout do PermissionRequest e pede.
 // Rodar de novo não duplica (o grupo do Habblaud é reconhecido pelo comando).
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isClaudeDir } from '../server/accounts/detect';
 import { discoverCodexDirs } from '../server/sources/codex/accounts';
@@ -73,8 +78,9 @@ Opções:
   --port <n>       porta do Habblaud (padrão: HABBLAUD_PORT ou ${DEFAULT_PORT})
   --espera <s>     quanto o Codex espera sua resposta no Habblaud antes de pedir a aprovação no terminal
                    (padrão: ${DEFAULT_WAIT_S} s; entre ${MIN_WAIT_S} e ${MAX_WAIT_S})
-  --node <caminho> o Node ${MIN_NODE_MAJOR}+ que roda os hooks (padrão: o \`node\` do shell de login, se for ${MIN_NODE_MAJOR}+;
-                   senão o primeiro ${MIN_NODE_MAJOR}+ entre /opt/homebrew/bin, /usr/local/bin e o deste comando)
+  --node <caminho> o Node ${MIN_NODE_MAJOR}+ que roda os hooks (padrão: o \`node\` que o Codex acha, se for ${MIN_NODE_MAJOR}+: o do shell
+                   de login no macOS/Linux, o do PATH no Windows; senão o primeiro ${MIN_NODE_MAJOR}+ entre /opt/homebrew/bin,
+                   /usr/local/bin e o deste comando; no Windows, o deste comando, na forma do PowerShell)
   -h, --help       mostra esta ajuda
 
 Pastas: HABBLAUD_CODEX_DIRS (lista separada por vírgula) ou CODEX_HOME e as pastas ~/.codex* do Codex.
@@ -98,6 +104,84 @@ export function hookCommand(scriptPath: string, nodeBin?: string): string {
   return `${nodeBin ? quotePath(nodeBin) : 'node'} ${quotePath(scriptPath)}`;
 }
 
+/**
+ * O comando no Windows, onde o Codex roda cada hook como `pwsh.exe -NoProfile -Command "<comando>"` (sem shell
+ * configurado, `cmd /C "<comando>"`): `node "<hook>"`, com barras `/` e aspas duplas, roda no PowerShell, no cmd e no
+ * sh. Com um Node escolhido (o do PATH é antigo ou não deu para conferir): `& "<node>" "<hook>"`, a forma do PowerShell
+ * (no cmd, não roda). Aspas simples, como as do quotePath, são erro de sintaxe no PowerShell nessa posição.
+ */
+export function windowsHookCommand(scriptPath: string, nodeBin?: string): string {
+  const q = (p: string) => `"${p.split('\\').join('/')}"`;
+  return nodeBin ? `& ${q(nodeBin)} ${q(scriptPath)}` : `node ${q(scriptPath)}`;
+}
+
+/** PATHEXT do Windows quando a variável não vem. */
+const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
+
+/** Variável de ambiente sem diferenciar maiúsculas (no Windows, uma cópia do process.env traz `Path`, não `PATH`). */
+function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === name);
+  return key === undefined ? undefined : env[key];
+}
+
+function isFileOnDisk(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Windows: o programa que o PowerShell e o cmd rodam para `name`. Para cada pasta do PATH, em ordem, cada extensão do
+ * PATHEXT; o 1º arquivo que existir decide, mesmo que seja um script (.cmd). Pasta vazia ou relativa não conta.
+ */
+export function findOnPath(name: string, env: NodeJS.ProcessEnv, isFile: (p: string) => boolean = isFileOnDisk): string | undefined {
+  const exts = (envValue(env, 'PATHEXT') || DEFAULT_PATHEXT)
+    .split(';')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  for (const raw of (envValue(env, 'PATH') ?? '').split(';')) {
+    const dir = raw.trim().replace(/^"(.*)"$/, '$1');
+    if (!dir || !win32.isAbsolute(dir)) continue;
+    for (const ext of exts) {
+      const p = win32.join(dir, `${name}${ext}`);
+      if (isFile(p)) return p;
+    }
+  }
+  return undefined;
+}
+
+/** Roda `<bin> <args>` sem shell e devolve a saída (lança se falhar). */
+export type ExecFn = (bin: string, args: string[]) => string;
+
+function execNoShell(bin: string, args: string[]): string {
+  return execFileSync(bin, args, { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+}
+
+/**
+ * A sonda do chooseNode: `probe(undefined)` = versão do `node` que o Codex acha ao rodar o hook; `probe(caminho)` =
+ * versão daquele binário. Sempre sem shell (execFileSync). macOS/Linux: o `node` do shell de login (`$SHELL -lc`, ou
+ * /bin/sh). Windows: o `node` do PATH com o PATHEXT (findOnPath), executado direto; o $SHELL (o Git Bash o define) não
+ * conta, porque o Codex roda o hook no PowerShell. Falha (inclusive um node.cmd, que não roda sem shell) = undefined.
+ */
+export function createNodeProbe(opts: { platform: NodeJS.Platform; env: NodeJS.ProcessEnv; exec?: ExecFn; isFile?: (p: string) => boolean }): (bin: string | undefined) => string | undefined {
+  const exec = opts.exec ?? execNoShell;
+  const version = (bin: string, args: string[]): string | undefined => {
+    try {
+      return exec(bin, args).trim().split(/\r?\n/).pop()?.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return (bin) => {
+    if (bin) return version(bin, ['--version']);
+    if (opts.platform !== 'win32') return version(opts.env.SHELL || '/bin/sh', ['-lc', 'node --version']);
+    const found = findOnPath('node', opts.env, opts.isFile);
+    return found ? version(found, ['--version']) : undefined;
+  };
+}
+
 /** Major de uma versão como `node --version` imprime ("v24.17.0" → 24). */
 export function nodeMajor(version: string | undefined): number | undefined {
   const m = /^v?(\d+)\./.exec(version?.trim() ?? '');
@@ -105,9 +189,10 @@ export function nodeMajor(version: string | undefined): number | undefined {
 }
 
 /**
- * O Node dos hooks. O Codex roda o hook por `$SHELL -lc`: um shell de LOGIN, que no zsh não lê o .zshrc (onde o nvm
- * costuma estar), então o `node` dele pode ser outro, e antigo. `probe(undefined)` = versão do `node` desse shell;
- * `probe(caminho)` = versão daquele binário. Shell de login com Node 22+: `node` (comando curto, sobrevive a trocas de
+ * O Node dos hooks. No macOS/Linux, o Codex roda o hook por `$SHELL -lc`: um shell de LOGIN, que no zsh não lê o
+ * .zshrc (onde o nvm costuma estar), então o `node` dele pode ser outro, e antigo. No Windows, pelo PowerShell (ou cmd),
+ * que acha o `node` pelo PATH. `probe(undefined)` = versão do `node` desse shell (ver createNodeProbe);
+ * `probe(caminho)` = versão daquele binário. `node` do shell com Node 22+: `node` (comando curto, sobrevive a trocas de
  * versão). Senão, o primeiro candidato 22+ com caminho absoluto; nenhum: `node` mesmo, com aviso.
  */
 export function chooseNode(probe: (bin: string | undefined) => string | undefined, candidates: readonly string[]): { bin?: string; login?: string; chosen?: string } {
@@ -159,7 +244,17 @@ export function scriptPathOf(command: string): string | undefined {
 }
 
 export type PlanAction =
-  | { action: 'install'; file: Settings; message: string; /** Eventos com hook novo ou alterado (aprovar em /hooks). */ approve: string[] }
+  | {
+      action: 'install';
+      file: Settings;
+      message: string;
+      /** Eventos com hook novo ou alterado (aprovar em /hooks). */
+      approve: string[];
+      /** Comandos do Habblaud trocados pelo novo: o Codex só volta a rodar o hook depois de aprovado de novo em /hooks. */
+      replaced: string[];
+      /** Eventos em que cópias repetidas do Habblaud saíram (sem mudar a posição de nenhum hook de outro app). */
+      deduped: string[];
+    }
   | { action: 'uninstall'; file: Settings; message: string; /** Eventos em que grupos de outros apps mudaram de posição. */ shifted: string[] }
   | { action: 'none'; message: string }
   | { action: 'skip'; message: string };
@@ -210,8 +305,28 @@ function removeAt(list: unknown[], positions: Array<{ g: number; h: number }>): 
 }
 
 /**
+ * Tira as cópias repetidas do Habblaud (a primeira fica) sem mudar a posição de nenhum handler de outro app. A
+ * confiança do Codex vai pela posição (grupo:handler), então fica a cópia que vem antes do handler de outro app no
+ * mesmo grupo ou num grupo inteiro antes do grupo dele. Do fim para o começo: tirar uma cópia de trás nunca mexe nas da
+ * frente, e a da frente pode ficar livre para sair depois disso.
+ */
+function dropDuplicates(list: unknown[]): { list: unknown[]; removed: number } {
+  const others = otherPositions(list);
+  let out = list;
+  let removed = 0;
+  for (const p of ourPositions(list).slice(1).reverse()) {
+    const next = removeAt(out, [p]);
+    if (otherPositions(next) !== others) continue;
+    out = next;
+    removed++;
+  }
+  return { list: out, removed };
+}
+
+/**
  * Plano de instalação para um hooks.json já lido (não grava nada). Evento sem o Habblaud: um grupo novo no FIM da
- * lista. Com ele: o handler é trocado no MESMO lugar se mudou (caminho do repositório, espera); cópias repetidas saem.
+ * lista. Com ele: o handler é trocado no MESMO lugar se mudou (comando, caminho do repositório, espera); cópias
+ * repetidas saem quando isso não desloca o hook de outro app (dropDuplicates).
  */
 export function planInstall(file: Settings, command: string, waitS: number): PlanAction {
   const parsed = hooksOf(file);
@@ -219,6 +334,8 @@ export function planInstall(file: Settings, command: string, waitS: number): Pla
   const hooks: Rec = { ...parsed };
   const added: string[] = [];
   const updated: string[] = [];
+  const deduped: string[] = [];
+  const replaced = new Set<string>();
   for (const event of EVENTS) {
     const handler = handlerFor(event, command, waitS);
     let list = [...((hooks[event] as unknown[] | undefined) ?? [])];
@@ -230,24 +347,30 @@ export function planInstall(file: Settings, command: string, waitS: number): Pla
       const first = found[0];
       const group = rec(list[first.g])!;
       const handlers = [...(group.hooks as unknown[])];
-      let changed = false;
-      if (canonical(handlers[first.h]) !== canonical(handler)) {
+      const old = rec(handlers[first.h])!;
+      if (canonical(old) !== canonical(handler)) {
+        if (old.command !== command) replaced.add(String(old.command));
         handlers[first.h] = handler;
         list[first.g] = { ...group, hooks: handlers };
-        changed = true;
+        updated.push(event);
       }
-      // Cópias repetidas (editadas à mão): o hook rodaria duas vezes.
-      if (found.length > 1) {
-        list = removeAt(list, found.slice(1));
-        changed = true;
+      // Cópias repetidas (editadas à mão): o hook rodaria uma vez por cópia. Tirar uma cópia de trás não muda a chave
+      // nem o hash da que fica: não entra no `approve`.
+      const dedup = found.length > 1 ? dropDuplicates(list) : undefined;
+      if (dedup?.removed) {
+        list = dedup.list;
+        deduped.push(event);
       }
-      if (changed) updated.push(event);
     }
     hooks[event] = list;
   }
-  if (!added.length && !updated.length) return { action: 'none', message: 'já instalado' };
-  const parts = [added.length ? (updated.length ? `instalado em ${added.join(', ')}` : `instalado (${added.length} eventos)`) : '', updated.length ? `atualizado em ${updated.join(', ')}` : ''].filter(Boolean);
-  return { action: 'install', file: { ...file, hooks }, message: parts.join('; '), approve: [...added, ...updated] };
+  if (!added.length && !updated.length && !deduped.length) return { action: 'none', message: 'já instalado' };
+  const parts = [
+    added.length ? (updated.length || deduped.length ? `instalado em ${added.join(', ')}` : `instalado (${added.length} eventos)`) : '',
+    updated.length ? `atualizado em ${updated.join(', ')}` : '',
+    deduped.length ? `cópias repetidas tiradas em ${deduped.join(', ')}` : '',
+  ].filter(Boolean);
+  return { action: 'install', file: { ...file, hooks }, message: parts.join('; '), approve: [...added, ...updated], replaced: [...replaced], deduped };
 }
 
 /**
@@ -280,11 +403,13 @@ export function planUninstall(file: Settings): PlanAction {
 }
 
 export interface InstallState {
-  /** Eventos com o handler do Habblaud igual ao esperado. */
+  /** Eventos com o handler do Habblaud (o 1º, se houver cópias) igual ao esperado. */
   ok: string[];
-  /** Eventos com o handler do Habblaud diferente (outro caminho ou outra espera). */
+  /** Eventos com o handler do Habblaud diferente (outro comando, outro caminho ou outra espera). */
   outdated: string[];
   missing: string[];
+  /** Eventos com mais de uma cópia do hook do Habblaud (ele roda uma vez por cópia); ausente = nenhum. */
+  duplicates?: string[];
   /** Caminhos do script nos handlers instalados. */
   paths: string[];
 }
@@ -294,6 +419,7 @@ export function installState(file: Settings, command: string, waitS: number): In
   const parsed = hooksOf(file);
   const hooks = typeof parsed === 'string' ? {} : parsed;
   const state: InstallState = { ok: [], outdated: [], missing: [], paths: [] };
+  const duplicates: string[] = [];
   for (const event of EVENTS) {
     const list = (hooks[event] as unknown[] | undefined) ?? [];
     const found = ourPositions(list);
@@ -301,13 +427,23 @@ export function installState(file: Settings, command: string, waitS: number): In
       state.missing.push(event);
       continue;
     }
+    if (found.length > 1) duplicates.push(event);
     const group = rec(list[found[0].g])!;
     const h = rec((group.hooks as unknown[])[found[0].h])!;
     const path = typeof h.command === 'string' ? scriptPathOf(h.command) : undefined;
     if (path && !state.paths.includes(path)) state.paths.push(path);
-    (canonical(h) === canonical(handlerFor(event, command, waitS)) && found.length === 1 ? state.ok : state.outdated).push(event);
+    (canonical(h) === canonical(handlerFor(event, command, waitS)) ? state.ok : state.outdated).push(event);
   }
-  return state;
+  return duplicates.length ? { ...state, duplicates } : state;
+}
+
+/** Aviso das cópias repetidas que o install deixa no lugar (linhas de saída, a 1ª depois do rótulo da pasta). */
+function stuckDuplicates(events: string[]): string[] {
+  return [
+    `mais de uma cópia do hook do Habblaud em ${events.join(', ')} (ele roda uma vez por cópia).`,
+    '    Tirar a repetida mudaria a posição do hook de outro app nesse evento (e o Codex pediria para aprová-lo de novo',
+    '    em /hooks), por isso ela fica; se quiser, tire-a à mão no hooks.json.',
+  ];
 }
 
 /**
@@ -356,9 +492,11 @@ export interface RunContext {
   out: (line: string) => void;
   /** Consulta o /api/health do Habblaud (testes injetam um falso). */
   health?: (port: number) => Promise<Health | undefined>;
-  /** Versão de um Node (ver chooseNode); ausente = não consulta e usa `node` (os testes não rodam shells). */
+  /** Plataforma em que o Codex roda os hooks (ausente = process.platform). win32: windowsHookCommand. */
+  platform?: NodeJS.Platform;
+  /** Versão de um Node (ver chooseNode e createNodeProbe); ausente = não consulta e usa `node` (os testes não rodam shells). */
   nodeProbe?: (bin: string | undefined) => string | undefined;
-  /** Candidatos a Node quando o do shell de login é antigo. */
+  /** Candidatos a Node quando o do shell de login (no Windows, o do PATH) é antigo. */
   nodeCandidates?: readonly string[];
 }
 
@@ -446,19 +584,28 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
     );
     return 1;
   }
+  const win = (ctx.platform ?? process.platform) === 'win32';
   let nodeBin = opts.node;
   if (!nodeBin && ctx.nodeProbe) {
     const pick = chooseNode(ctx.nodeProbe, ctx.nodeCandidates ?? []);
     nodeBin = pick.bin;
-    const login = pick.login ? `Node ${pick.login}` : 'nenhum Node';
-    if (pick.bin) out(`i O shell de login (onde o Codex roda os hooks) tem ${login}; o hook precisa do ${MIN_NODE_MAJOR}+ e vai usar ${tildify(pick.bin, home)} (${pick.chosen}).`);
+    const where = win ? 'O `node` do PATH (o que o Codex roda nos hooks, pelo PowerShell ou pelo cmd)' : 'O shell de login (onde o Codex roda os hooks)';
+    const has = win ? (pick.login ? `é o Node ${pick.login}` : 'não existe ou não respondeu') : `tem ${pick.login ? `Node ${pick.login}` : 'nenhum Node'}`;
+    if (pick.bin && win) {
+      out(`! ${where} ${has}; o hook precisa do ${MIN_NODE_MAJOR}+ e vai usar ${tildify(pick.bin, home)} (${pick.chosen}) na forma do PowerShell:`);
+      out(`    & "<node>" "<hook>" roda no PowerShell, o shell dos hooks do Codex no Windows, mas não roda no cmd. Para o comando`);
+      out(`    curto (node "<hook>", que roda nos dois), ponha um Node ${MIN_NODE_MAJOR}+ no PATH e rode de novo.`);
+    } else if (pick.bin) out(`i ${where} ${has}; o hook precisa do ${MIN_NODE_MAJOR}+ e vai usar ${tildify(pick.bin, home)} (${pick.chosen}).`);
     else if ((nodeMajor(pick.login) ?? 0) < MIN_NODE_MAJOR)
-      out(`! O shell de login (onde o Codex roda os hooks) tem ${login} e não achei um Node ${MIN_NODE_MAJOR}+: os hooks podem falhar. Use --node <caminho de um Node ${MIN_NODE_MAJOR}+>.`);
+      out(`! ${where} ${has} e não achei um Node ${MIN_NODE_MAJOR}+: os hooks podem falhar. Use --node <caminho de um Node ${MIN_NODE_MAJOR}+>.`);
+  } else if (nodeBin && win) {
+    out('i --node no Windows: o comando fica na forma do PowerShell (& "<node>" "<hook>"), o shell dos hooks do Codex; no cmd, ele não roda.');
   }
-  const command = hookCommand(ctx.hookPath, nodeBin);
+  const command = win ? windowsHookCommand(ctx.hookPath, nodeBin) : hookCommand(ctx.hookPath, nodeBin);
   let failures = 0;
   let changed = 0;
   const approve = new Set<string>();
+  const replaced = new Set<string>();
   for (const dir of dirs) {
     const file = join(dir, 'hooks.json');
     const label = `${basename(dir)} (${tildify(file, home)})`;
@@ -470,7 +617,8 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
     }
     if (opts.command === 'status') {
       const cfgWait = readHookConfig(home)?.permissionTimeoutS;
-      const st = installState(read.settings, command, typeof cfgWait === 'number' ? cfgWait : opts.waitS);
+      const wait = typeof cfgWait === 'number' ? cfgWait : opts.waitS;
+      const st = installState(read.settings, command, wait);
       if (!st.ok.length && !st.outdated.length) {
         out(`• ${label}: não instalado`);
         continue;
@@ -481,13 +629,34 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
         out(`! ${label}: os hooks apontam para ${p}${gone}; rode npm run codex:install para atualizar`);
       }
       if (st.outdated.length) out(`! ${label}: diferente do esperado em ${st.outdated.join(', ')}; rode npm run codex:install para atualizar`);
+      if (st.duplicates) {
+        // As mesmas que o install deixaria (tirá-las mudaria a posição do hook de outro app): rodar o install não resolve.
+        const plan = planInstall(read.settings, command, wait);
+        const stuck = (plan.action === 'install' ? installState(plan.file, command, wait).duplicates : st.duplicates) ?? [];
+        const fixable = st.duplicates.filter((e) => !stuck.includes(e));
+        if (fixable.length) out(`! ${label}: mais de uma cópia do hook do Habblaud em ${fixable.join(', ')}; rode npm run codex:install para tirar as repetidas`);
+        if (stuck.length) {
+          const [first, ...rest] = stuckDuplicates(stuck);
+          out(`! ${label}: ${first}`);
+          for (const l of rest) out(l);
+        }
+      }
       if (st.missing.length) out(`! ${label}: faltando em ${st.missing.join(', ')}; rode npm run codex:install`);
       out(`• ${label}: instalado em ${st.ok.length + st.outdated.length} de ${EVENTS.length} eventos`);
       continue;
     }
     const plan = opts.command === 'install' ? planInstall(read.settings, command, opts.waitS) : planUninstall(read.settings);
+    // Cópias repetidas que o install deixa no lugar: avisadas depois da linha da pasta.
+    const stuck = opts.command === 'install' && plan.action !== 'skip' ? installState(plan.action === 'install' ? plan.file : read.settings, command, opts.waitS).duplicates : undefined;
+    const warnStuck = () => {
+      if (!stuck) return;
+      const [first, ...rest] = stuckDuplicates(stuck);
+      out(`! ${label}: ${first}`);
+      for (const l of rest) out(l);
+    };
     if (plan.action === 'none') {
       out(`= ${label}: ${plan.message}`);
+      warnStuck();
       continue;
     }
     if (plan.action === 'skip') {
@@ -498,13 +667,18 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
     if (opts.dryRun) {
       out(`~ ${label}: ${plan.message} (simulação: nada gravado)`);
       out(`    hooks → ${JSON.stringify(plan.file.hooks ?? null)}`);
+      warnStuck();
       continue;
     }
     try {
       const backup = writeSettings(file, plan.file, read.raw, ctx.now);
       out(`✓ ${label}: ${plan.message}${backup ? ` · backup em ${tildify(backup, home)}` : ''}`);
+      warnStuck();
       changed++;
-      if (plan.action === 'install') for (const e of plan.approve) approve.add(e);
+      if (plan.action === 'install') {
+        for (const e of plan.approve) approve.add(e);
+        for (const c of plan.replaced) replaced.add(c);
+      }
       if (plan.action === 'uninstall' && plan.shifted.length) {
         out(`    Hooks de outros apps que vinham depois dos do Habblaud (${plan.shifted.join(', ')}) mudaram de posição:`);
         out('    o Codex vai pedir para aprová-los de novo em /hooks.');
@@ -562,24 +736,16 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
     out('Pronto. Falta um passo: abra o Codex e aprove os hooks do Habblaud em /hooks (o Codex só roda hook novo');
     out('ou alterado depois que você aprova). Com o Habblaud aberto no navegador, as sessões do Codex aparecem no');
     out(`escritório e os pedidos de aprovação esperam sua resposta lá por até ${opts.waitS} s antes de irem para o terminal.`);
-    if (approve.has('PermissionRequest') && approve.size < EVENTS.length) {
-      out('(A espera ou o caminho do Habblaud mudou: aprove de novo os hooks alterados em /hooks.)');
+    if (replaced.size) {
+      out(`O comando dos hooks mudou (antes: ${[...replaced].join('; ')}; agora: ${command}): o Codex trata hook com`);
+      out('comando novo como alterado e só volta a rodá-lo depois que você aprovar de novo em /hooks.');
+    } else if (approve.size < EVENTS.length) {
+      out(`(Hooks novos ou alterados, a aprovar em /hooks: ${[...approve].join(', ')}.)`);
     }
     out('Para desfazer: npm run codex:uninstall');
   }
   if (opts.command === 'uninstall' && changed) out('A configuração em ~/.habblaud/codex-hook.json fica (só o hook a lê).');
   return failures ? 1 : 0;
-}
-
-/** Versão de um Node: o do shell de login do Codex (`$SHELL -lc`, bin ausente) ou de um caminho. Falha = undefined. */
-function probeNode(bin: string | undefined): string | undefined {
-  try {
-    const opts = { encoding: 'utf8' as const, timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] as ['ignore', 'pipe', 'ignore'] };
-    const out = bin ? execFileSync(bin, ['--version'], opts) : execFileSync(process.env.SHELL || '/bin/sh', ['-lc', 'node --version'], opts);
-    return out.trim().split('\n').pop();
-  } catch {
-    return undefined;
-  }
 }
 
 async function main(): Promise<void> {
@@ -589,14 +755,17 @@ async function main(): Promise<void> {
     return;
   }
   const home = process.env.HOME || homedir();
+  const platform = process.platform;
   process.exitCode = await run(parsed, {
     env: process.env,
     home,
     now: new Date(),
     hookPath: HOOK_SCRIPT,
     out: (l) => console.log(l),
-    nodeProbe: probeNode,
-    nodeCandidates: ['/opt/homebrew/bin/node', '/usr/local/bin/node', process.execPath],
+    platform,
+    nodeProbe: createNodeProbe({ platform, env: process.env }),
+    // No Windows não há /opt/homebrew nem /usr/local: sobra o Node deste comando.
+    nodeCandidates: platform === 'win32' ? [process.execPath] : ['/opt/homebrew/bin/node', '/usr/local/bin/node', process.execPath],
   });
 }
 
