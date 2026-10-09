@@ -13,8 +13,9 @@
 //   agente faz. Lock sem rollout = sessão aberta e ainda vazia: o Codex só cria o arquivo (e o hook SessionStart só
 //   dispara) no primeiro prompt, e o lock não diz a pasta. Sem o projeto não há sala: o principal só entra quando o
 //   rollout ou um hook disser o cwd (uma CLI recém-aberta aparece com a primeira mensagem);
-// - sem lock (ou órfã) = fechada, depois da graça de MAIN_GONE_GRACE_MS (principal) ou de 1,5 s (subagente). Só no
-//   modo 'unknown': lock criado há mais de STALE_LOCK_MS, rollout parado há mais de STALE_LOCK_MS pela ÚLTIMA LINHA
+// - sem lock (ou órfã) = fechada, depois da graça de MAIN_GONE_GRACE_MS (principal) ou de 1,5 s (subagente; o que ainda
+//   não concluiu espera SUB_FOLLOWUP_GRACE_MS, porque volta com o mesmo id num followup_task). Só no modo 'unknown':
+//   lock criado há mais de STALE_LOCK_MS, rollout parado há mais de STALE_LOCK_MS pela ÚLTIMA LINHA
 //   (ou sem rollout) e nenhum evento de hook = órfã de um crash, mesmo com o turno aberto. Uma escrita nova no rollout
 //   (ou um hook) reabre;
 // - versão sem `thread-writer-locks/` (ou Docker sem a pasta montada): o mtime só escolhe os rollouts a abrir; fica o
@@ -89,6 +90,11 @@ export const SESSION_END_GRACE_MS = 5_000;
 export const MAIN_GONE_GRACE_MS = 5_000;
 /** Subagente ausente por este tempo: entrega e sai. */
 const CLOSE_AFTER_MISSING_MS = 1_500;
+/**
+ * Subagente que ainda não concluiu e cuja trava sumiu: espera isto antes de sair, porque ele volta com o mesmo id (o
+ * pai manda um followup_task e o Codex o carrega de novo). O concluído sai com CLOSE_AFTER_MISSING_MS.
+ */
+export const SUB_FOLLOWUP_GRACE_MS = 120_000;
 /**
  * 'working' sem nenhuma escrita no rollout nem evento de hook por este tempo: o turno morreu (crash). Só sem a trava
  * segura: com ela, um comando longo pode passar horas sem escrever.
@@ -389,7 +395,7 @@ export class CodexSource implements AgentSource, CodexLive {
     for (const [key, t] of [...this.threads]) {
       if (seen.has(key)) continue;
       t.missingSince ??= now;
-      const grace = t.kind === 'main' ? MAIN_GONE_GRACE_MS : CLOSE_AFTER_MISSING_MS;
+      const grace = t.kind === 'main' ? MAIN_GONE_GRACE_MS : t.kind === 'sub' && !t.subDone && t.status !== 'idle' ? SUB_FOLLOWUP_GRACE_MS : CLOSE_AFTER_MISSING_MS;
       if (!boot && now - t.missingSince < grace) continue;
       this.leave(t);
       this.unwatch(t);

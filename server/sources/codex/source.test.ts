@@ -14,7 +14,7 @@ import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-so
 import { B, commandParsed, forkRollout, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { writeLines } from '../../test/fixtures';
 import { readLocks, RolloutIndex } from './files';
-import { CodexSource, LOCK_SETTLE_MS, MAIN_GONE_GRACE_MS, scanPrefix, SHELL_EXPIRE_MS, USAGE_RESCAN_MS } from './source';
+import { CodexSource, LOCK_SETTLE_MS, MAIN_GONE_GRACE_MS, scanPrefix, SHELL_EXPIRE_MS, SUB_FOLLOWUP_GRACE_MS, USAGE_RESCAN_MS } from './source';
 
 setQuiet(true);
 
@@ -475,11 +475,14 @@ describe('fonte do Codex: subagentes', () => {
     ctx.home.append(sub, [R.taskStarted('s2', ctx.now())]);
     ctx.poll();
     expect(ctx.agent(`.codex:${C}`)?.status).toBe('working');
-    // Lock sumiu: entrega e sai.
+    // Lock sumiu com o turno aberto: ele pode voltar com o mesmo id (followup_task); entrega e sai depois da graça.
     ctx.home.unlock(C);
     ctx.poll();
     expect(ctx.agent(`.codex:${C}`)?.status).toBe('working');
     ctx.advance(2_000);
+    ctx.poll();
+    expect(ctx.agent(`.codex:${C}`)?.status).toBe('working');
+    ctx.advance(SUB_FOLLOWUP_GRACE_MS);
     ctx.poll();
     expect(ctx.agent(`.codex:${C}`)?.status).toBe('done');
     expect(ctx.agent()?.status).toBe('working');
@@ -1502,5 +1505,61 @@ describe('fonte do Codex: corte de inatividade (C3)', () => {
     ctx.poll();
     expect(ctx.agent()?.status).toBe('working');
     expect(ctx.agent(SUB)?.status).toBe('done');
+  });
+});
+
+describe('fonte do Codex: subagente que volta em followup_task (G1)', () => {
+  const SUB = `.codex:${C}`;
+
+  /** Principal e subagente trabalhando (travas seguras); devolve o rollout do subagente. */
+  function bootWithSub(ctx: ReturnType<typeof setup>): string {
+    const at = ctx.now() - 10_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue a revisão', at)]);
+    const sub = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), R.user(C, 's1', 'su', 'Revise o módulo', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)?.status).toBe('working');
+    return sub;
+  }
+
+  it('trava some com o turno aberto: segue presente aos 60 s (e volta sem entregar), sai SUB_FOLLOWUP_GRACE_MS depois de sumir de novo', () => {
+    const ctx = setup();
+    bootWithSub(ctx);
+    ctx.home.unlock(C);
+    ctx.poll();
+    ctx.advance(60_000);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('working');
+    // Voltou com o mesmo id dentro da graça: o mesmo subagente, sem "entregou".
+    ctx.home.lock(C, ctx.now() - 10_000);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('working');
+    expect(ctx.notices.some((n) => n.text.includes('entregou'))).toBe(false);
+    ctx.home.unlock(C);
+    ctx.poll();
+    ctx.advance(SUB_FOLLOWUP_GRACE_MS - 1);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('working');
+    expect(ctx.source.terminalParser(SUB)).toBeDefined();
+    ctx.advance(1);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    expect(ctx.source.terminalParser(SUB)).toBeUndefined();
+    expect(SUB_FOLLOWUP_GRACE_MS).toBe(120_000);
+  });
+
+  it('concluído: sai como antes, 1,5 s depois de a trava sumir', () => {
+    const ctx = setup();
+    const sub = bootWithSub(ctx);
+    ctx.advance(1_000);
+    ctx.home.append(sub, [R.agent(C, 's1', 'sa', 'Revisado.', ctx.now()), R.taskComplete('s1', ctx.now() + 1)]);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    ctx.home.unlock(C);
+    ctx.poll();
+    ctx.advance(1_500);
+    ctx.poll();
+    expect(ctx.source.terminalParser(SUB)).toBeUndefined();
   });
 });
