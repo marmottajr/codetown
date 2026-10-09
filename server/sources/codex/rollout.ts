@@ -11,6 +11,8 @@
 // Os ids das atividades usam o call_id (= id do item concluído = tool_use_id dos hooks): a chamada vista em
 // andamento, o hook PreToolUse e o item concluído caem na mesma atividade.
 // Tokens: o `total_token_usage` do token_count é cumulativo e o cache JÁ está dentro de input (não soma de novo).
+// Herança: só o 1º session_meta vale; num subagente com fork, as linhas com ordinal < subagent_history_start_ordinal
+// (e o session_meta do pai, copiado logo depois do cabeçalho) são do pai e ficam de fora.
 // Tipos de linha desconhecidos são ignorados; uma linha inválida nunca derruba a leitura.
 import { describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../../shared/activity';
 import type { GitHubEvent } from '../../../shared/github';
@@ -66,6 +68,8 @@ export interface RolloutMeta {
   parentThreadId?: string;
   agentNickname?: string;
   agentRole?: string;
+  /** subagent_history_start_ordinal: as linhas com ordinal menor são a história herdada do pai (fork). */
+  historyStart?: number;
 }
 
 /** Chaves de um objeto em minúsculas e sem `_` (o Codex já gravou `subagent`, `subAgent`, `thread_spawn`...). */
@@ -120,6 +124,8 @@ export function parseSessionMeta(payload: Rec, at?: number): RolloutMeta {
   const role = str(src.spawn ? (looseGet(src.spawn, 'agent_role') ?? looseGet(src.spawn, 'agent_type')) : undefined) ?? str(payload.agent_role);
   if (nickname) meta.agentNickname = truncate(nickname, 40);
   if (role) meta.agentRole = truncate(role, 40);
+  const historyStart = num(payload.subagent_history_start_ordinal);
+  if (historyStart !== undefined && historyStart >= 0) meta.historyStart = historyStart;
   return meta;
 }
 
@@ -901,7 +907,20 @@ class RolloutLineParser {
   }
 }
 
-/** Interpreta uma linha do rollout. Linhas inválidas ou desconhecidas não geram nada. */
+/**
+ * Linha que não é deste thread: um session_meta depois do primeiro (o fork de um subagente copia o do pai logo depois
+ * do cabeçalho; um resume repete o do próprio thread) ou a história herdada do pai (ordinal abaixo do
+ * subagent_history_start_ordinal). Não gera atividade, sinal, título, número nem horário.
+ */
+function notOwnLine(state: CodexState, r: Rec): boolean {
+  if (!state.meta) return false;
+  if (r.type === 'session_meta') return true;
+  const start = state.meta.historyStart;
+  const ordinal = num(r.ordinal);
+  return start !== undefined && ordinal !== undefined && ordinal < start;
+}
+
+/** Interpreta uma linha do rollout. Linhas inválidas, desconhecidas ou herdadas (notOwnLine) não geram nada. */
 export function parseRolloutLine(state: CodexState, raw: string, ctx: CodexParseContext): CodexLineResult {
   let j: unknown;
   try {
@@ -912,6 +931,7 @@ export function parseRolloutLine(state: CodexState, raw: string, ctx: CodexParse
   const r = rec(j);
   if (!r) return { activities: [], signals: [], changed: false, at: ctx.now };
   const at = toMs(r.timestamp);
+  if (notOwnLine(state, r)) return { activities: [], signals: [], changed: false, at: at ?? ctx.now };
   if (at !== undefined) {
     if (state.firstAt === undefined || at < state.firstAt) state.firstAt = at;
     if (state.lastAt === undefined || at > state.lastAt) state.lastAt = at;

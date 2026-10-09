@@ -6,6 +6,7 @@ import {
   createCodexState,
   describeCodexTool,
   fileChanges,
+  metaFromLine,
   parseRolloutLine,
   parseSessionMeta,
   patchFiles,
@@ -284,5 +285,115 @@ describe('rollout do Codex: comandos do PowerShell e do cmd (P5)', () => {
     ]);
     expect(results[0].signals).toContainEqual({ type: 'github', event: { kind: 'push', branch: 'main' }, key: 'g1' });
     expect(results[1].signals).toContainEqual({ type: 'github', event: expect.objectContaining({ kind: 'pr_opened', number: 12, repo: 'o/r' }), key: 'g2' });
+  });
+});
+
+const MIB = 1024 * 1024;
+
+/** A linha com `ordinal` e campos a mais no payload (o R não grava ordinal). */
+function withOrdinal(raw: string, ordinal: number, payload: Record<string, unknown> = {}): string {
+  const j = JSON.parse(raw);
+  return JSON.stringify({ ...j, ordinal, payload: { ...j.payload, ...payload } });
+}
+
+/** item_completed qualquer (o R não tem CollabAgentToolCall). */
+function itemLine(thread: string, turn: string, it: Record<string, unknown>, at: number): string {
+  return JSON.stringify({ timestamp: new Date(at).toISOString(), type: 'event_msg', payload: { type: 'item_completed', thread_id: thread, turn_id: turn, item: it } });
+}
+
+describe('session_meta: só o 1º vale e a herança do fork fica de fora (P4, Review Focus #2)', () => {
+  const CHILD = threadId(10);
+  const PARENT = threadId(11);
+  const GRANDPARENT = threadId(12);
+  const t0 = Date.parse('2026-10-09T12:00:00Z');
+  /** As linhas copiadas do pai guardam o horário dele (antes do filho nascer). */
+  const tp = Date.parse('2026-10-09T10:00:00Z');
+  const pushOk = 'To github.com:o/r.git\n   abc1234..def5678  main -> main\n';
+
+  /**
+   * Subagente com fork: o cabeçalho (instruções base grandes: o 2º session_meta fica a mais de 1 MiB do começo,
+   * fora da 1ª linha e dentro da janela do fim), o session_meta do pai copiado (ordinal 1) e a história herdada
+   * (ordinais 2 a 7) antes da do filho (subagent_history_start_ordinal = 8).
+   */
+  function forkedChild(): string[] {
+    const header = withOrdinal(R.meta(CHILD, { at: t0, source: SOURCES.sub(PARENT, 'explorer'), sessionId: PARENT }), 0, {
+      subagent_history_start_ordinal: 8,
+      base_instructions: { text: 'Instruções base sintéticas. '.repeat(Math.ceil(MIB / 28) + 10) },
+    });
+    return [
+      header,
+      withOrdinal(R.meta(PARENT, { at: tp, source: SOURCES.sub(GRANDPARENT, 'worker'), sessionId: GRANDPARENT, branch: 'feat/pai' }), 1),
+      withOrdinal(R.taskStarted('turn-pai', tp + 1), 2),
+      withOrdinal(R.user(PARENT, 'turn-pai', 'u-pai', 'Pedido herdado do pai', tp + 2), 3),
+      withOrdinal(R.command(PARENT, 'turn-pai', 'c-pai', 'git push', { output: pushOk, at: tp + 3 }), 4),
+      withOrdinal(itemLine(PARENT, 'turn-pai', { type: 'CollabAgentToolCall', id: 'spawn-pai', tool: 'spawn_agent', prompt: 'Neto fantasma' }, tp + 4), 5),
+      withOrdinal(R.tokens({ input: 5_000, output: 300, at: tp + 5, rateLimits: {} }), 6),
+      withOrdinal(R.taskComplete('turn-pai', tp + 6), 7),
+      withOrdinal(R.taskStarted('turn-filho', t0 + 10), 8),
+      withOrdinal(R.user(CHILD, 'turn-filho', 'u-filho', 'Liste os arquivos de src', t0 + 11), 9),
+      withOrdinal(R.command(CHILD, 'turn-filho', 'c-filho', 'ls src', { at: t0 + 12 }), 10),
+      withOrdinal(R.tokens({ input: 100, output: 20, at: t0 + 13 }), 11),
+    ];
+  }
+
+  function expectOnlyChild(state: CodexState, results: CodexLineResult[]): void {
+    expect(state.meta).toMatchObject({ threadId: CHILD, parentThreadId: PARENT, agentRole: 'explorer', startedAt: t0, historyStart: 8 });
+    expect(state.gitBranch).toBe('main');
+    expect(ids(results)).toEqual(['acc:t#u-filho', 'acc:t#c-filho']);
+    const signals = results.flatMap((r) => r.signals.map((s) => s.type));
+    expect(signals.filter((s) => s === 'turnStart')).toHaveLength(1);
+    expect(signals.filter((s) => ['turnEnd', 'github', 'usage'].includes(s))).toEqual([]);
+    expect(state.title).toBe('Liste os arquivos de src');
+    expect(state.stats).toEqual({ toolCalls: 1, subagents: 0, tokensIn: 100, tokensOut: 20 });
+    expect(state.usage).toBeUndefined();
+    expect(state.turnOpen).toBe(true);
+    expect(state.lastAt).toBe(t0 + 13);
+  }
+
+  it('janela do fim (estado com o meta do cabeçalho): o 2º session_meta, a mais de 1 MiB do começo, não muda nada', () => {
+    const lines = forkedChild();
+    expect(Buffer.byteLength(lines[0], 'utf8') + 1).toBeGreaterThan(MIB);
+    const head = metaFromLine(lines[0]);
+    expect(head).toMatchObject({ threadId: CHILD, historyStart: 8 });
+    const { state, results } = feed(lines.slice(1), createCodexState(head));
+    expect(results.flatMap((r) => r.signals).some((s) => s.type === 'meta')).toBe(false);
+    expectOnlyChild(state, results);
+    expect(state.firstAt).toBe(t0 + 10);
+  });
+
+  it('leitura desde o começo (estado vazio): o meta é o do cabeçalho e só ele vira sinal', () => {
+    const { state, results } = feed(forkedChild());
+    expect(results.flatMap((r) => r.signals).filter((s) => s.type === 'meta')).toEqual([{ type: 'meta', meta: expect.objectContaining({ threadId: CHILD, parentThreadId: PARENT }) }]);
+    expectOnlyChild(state, results);
+    expect(state.firstAt).toBe(t0);
+  });
+
+  it('título do cabeçalho (só estado, sem atividades): o prompt herdado não vira título', () => {
+    const lines = forkedChild();
+    const state = createCodexState(metaFromLine(lines[0]));
+    for (const l of lines.slice(1)) {
+      parseRolloutLine(state, l, { idPrefix: '', now: 0, activities: false });
+      if (state.title !== undefined) break;
+    }
+    expect(state.title).toBe('Liste os arquivos de src');
+  });
+
+  it('sem subagente: um session_meta repetido (resume) ou de outro thread é ignorado', () => {
+    const other = threadId(13);
+    const { state, results } = feed([R.meta(T, { at: t0 }), R.meta(T, { at: t0 + 5 }), R.meta(other, { at: t0 + 6, cwd: '/projetos/outro' })]);
+    expect(results.map((r) => [r.signals.map((s) => s.type), r.changed])).toEqual([
+      [['meta'], true],
+      [[], false],
+      [[], false],
+    ]);
+    expect(state.meta).toMatchObject({ threadId: T, cwd: '/projetos/loja', startedAt: t0 });
+    expect(state.meta?.historyStart).toBeUndefined();
+  });
+
+  it('parseSessionMeta: historyStart só com um ordinal válido', () => {
+    expect(parseSessionMeta({ id: T, subagent_history_start_ordinal: 5 }).historyStart).toBe(5);
+    expect(parseSessionMeta({ id: T, subagent_history_start_ordinal: -1 }).historyStart).toBeUndefined();
+    expect(parseSessionMeta({ id: T, subagent_history_start_ordinal: '5' }).historyStart).toBeUndefined();
+    expect(parseSessionMeta({ id: T }).historyStart).toBeUndefined();
   });
 });
