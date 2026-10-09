@@ -1,10 +1,10 @@
 // Histórico do terminal do Codex: listagem dos rollouts recentes e a sessão resolvida com segurança.
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setQuiet } from '../../log';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
-import { tempDir } from '../../test/fixtures';
+import { symlinkOrSkip, tempDir } from '../../test/fixtures';
 import { CodexHistory } from './history';
 
 setQuiet(true);
@@ -57,7 +57,7 @@ describe('histórico do Codex', () => {
     expect(list[2].agentId).toBeUndefined();
   });
 
-  it('resolve: só dentro da pasta da conta, com o parser do Codex; id inválido 400; .zst e desconhecida 404', () => {
+  it('resolve: só dentro da pasta da conta, com o parser do Codex; id inválido 400; .zst e desconhecida 404', ({ skip }) => {
     const { home, history } = setup();
     const path = home.rollout(A, [R.meta(A), R.user(A, 't', 'u', 'oi')]);
     const r = history.resolve('.codex', A);
@@ -75,7 +75,7 @@ describe('histórico do Codex', () => {
     const outside = tempDir();
     cleanups.push(outside.cleanup);
     writeFileSync(join(outside.dir, 'x.jsonl'), R.meta(SUB));
-    symlinkSync(join(outside.dir, 'x.jsonl'), join(dir, `rollout-2026-10-01T09-00-00-${SUB}.jsonl`));
+    symlinkOrSkip(skip, join(outside.dir, 'x.jsonl'), join(dir, `rollout-2026-10-01T09-00-00-${SUB}.jsonl`));
     expect(history.resolve('.codex', SUB)).toMatchObject({ status: 404 });
   });
 

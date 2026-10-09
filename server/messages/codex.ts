@@ -40,13 +40,19 @@ function canExecute(p: string): boolean {
   }
 }
 
+/**
+ * Nome do binário no PATH. No Windows, só o `codex.exe`: o `codex` sem extensão e o `codex.cmd` que o npm põe ao lado
+ * são scripts, e o execFile (sem shell) não os roda.
+ */
+export const CODEX_BIN_NAME = process.platform === 'win32' ? 'codex.exe' : 'codex';
+
 /** Binário do Codex: HABBLAUD_CODEX_BIN (caminho de um executável) ou `codex` no PATH. undefined = não achou. */
 export function findCodexBin(env: NodeJS.ProcessEnv, isExecutable: (p: string) => boolean = canExecute): string | undefined {
   const explicit = env.HABBLAUD_CODEX_BIN?.trim();
   if (explicit) return isExecutable(explicit) ? explicit : undefined;
   for (const dir of (env.PATH ?? '').split(delimiter)) {
     if (!dir || !isAbsolute(dir)) continue;
-    const p = join(dir, 'codex');
+    const p = join(dir, CODEX_BIN_NAME);
     if (isExecutable(p)) return p;
   }
   return undefined;

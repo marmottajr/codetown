@@ -46,7 +46,8 @@ describe('contas do Codex', () => {
     const third = h.codex('.codex-x');
     writeFileSync(
       join(h.dir, '.zshrc'),
-      ["alias cx='codex'", `alias cw="CODEX_HOME=${work} codex --search"`, "alias c='claude'", 'export CODEX_HOME=/x # não é alias'].join('\n'),
+      // Caminho com `/`, como no .bashrc do Git Bash (entre aspas duplas, a `\` do Windows seria um escape).
+      ["alias cx='codex'", `alias cw="CODEX_HOME=${work.replaceAll('\\', '/')} codex --search"`, "alias c='claude'", 'export CODEX_HOME=/x # não é alias'].join('\n'),
     );
     expect(parseToolAliases("alias cx='codex'\nalias c='claude'", h.dir, 'codex')).toEqual([{ name: 'cx' }]);
     const accs = detectCodexAccounts([main, work, third], { home: h.dir, env: {}, taken: { shorts: ['C', 'X'], colors: [ACCOUNT_COLORS[0]] } });

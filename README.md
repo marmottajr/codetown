@@ -573,8 +573,9 @@ cada conta. Confira com `npm run mod:status`. Em versões anteriores do Claude C
 
 - O `usage:install` (jeito antigo) altera, em `<conta>/settings.json`, **só** o campo `statusLine.command`: o comando
   original (ex.: `npx -y ccstatusline`) passa a rodar através de `node "<pasta do Habblaud>/scripts/statusline-tap.mjs" --
-  <comando original>`. Uma cópia do arquivo vai antes para `settings.json.habblaud-backup-<data>`. Se a conta não tinha
-  statusline, é criado um que só captura o uso. `npm run usage:install -- --dry-run` mostra o que mudaria sem gravar.
+  <comando original>` (no Windows, o comando original roda no Git Bash, como o Claude Code o rodaria). Uma cópia do
+  arquivo vai antes para `settings.json.habblaud-backup-<data>`. Se a conta não tinha statusline, é criado um que só
+  captura o uso. `npm run usage:install -- --dry-run` mostra o que mudaria sem gravar.
 - O tap repassa o mesmo JSON ao seu statusline (saída e código de saída continuam os dele) e grava **somente**
   `{accountId, configDir, fetchedAt, five_hour, seven_day}` — nada de prompts, custos ou caminhos de projeto. Qualquer
   falha na captura é ignorada: o statusline nunca quebra por causa do Habblaud.
@@ -610,7 +611,7 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0` desliga só as mensagens pelo escritório (a caixa no terminal e nos detalhes do agente). |
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
-| `HABBLAUD_CODEX_BIN` | `codex` do PATH | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
+| `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |
 | `HABBLAUD_ACCOUNTS` | — | JSON para personalizar nome, letra ou cor, casado pelo nome da pasta da conta. Ex.: `[{"id":".claude-conta2","name":"Trabalho","short":"T","color":"#5cc97b"}]`. |
 

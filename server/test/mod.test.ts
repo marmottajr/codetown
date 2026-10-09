@@ -4,11 +4,13 @@
 // vitest consegue conferir sem o Claude Code: arquivos, versões, o hook de permissão do plugin rodando de verdade.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TIMEOUT_S, hookCommand, hookEntry, STATUS_MESSAGE } from '../../scripts/hooks-install';
+import { posixShell } from './fixtures';
 
 const ROOT = resolve(__dirname, '../..');
+const SH = posixShell();
 const PLUGINS = ['habblaud', 'habblaud-permissoes', 'habblaud-mensagens'];
 
 type Rec = Record<string, unknown>;
@@ -111,14 +113,14 @@ describe('plugin habblaud-permissoes', () => {
     for (const spec of specs) expect(spec.startsWith('node:'), spec).toBe(true);
   });
 
-  it('o comando do plugin roda de verdade: com o Habblaud fora do ar, sai rápido e sem decisão', () => {
+  it.skipIf(!SH)('o comando do plugin roda de verdade: com o Habblaud fora do ar, sai rápido e sem decisão', () => {
     const input = JSON.stringify({ session_id: 's', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
     const t0 = Date.now();
     // O Claude Code troca ${CLAUDE_PLUGIN_ROOT} no comando e também o exporta; o sh expande do ambiente igual.
-    const r = spawnSync('/bin/sh', ['-c', String(hooks[0]?.hook.command)], {
+    const r = spawnSync(SH!, ['-c', String(hooks[0]?.hook.command)], {
       input,
       encoding: 'utf8',
-      env: { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`, CLAUDE_PLUGIN_ROOT: dir, HABBLAUD_PORT: '1' },
+      env: { PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`, CLAUDE_PLUGIN_ROOT: dir, HABBLAUD_PORT: '1' },
       timeout: 10_000,
     });
     expect(r.status).toBe(0);

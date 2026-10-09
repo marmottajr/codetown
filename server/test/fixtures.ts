@@ -1,8 +1,9 @@
 // Construtores de linhas JSONL SINTÉTICAS no formato dos transcripts do Claude Code (para testes).
 // Nada aqui vem de conversas reais.
-import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 let n = 0;
 const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
@@ -121,6 +122,35 @@ export const L = {
     return JSON.stringify({ ...base('user', o), origin: { kind: 'task-notification' }, message: { role: 'user', content: text } });
   },
 };
+
+/** O sistema guarda os bits de permissão do POSIX? No Windows, o stat devolve 0o666 (ou 0o444, se só leitura). */
+export const HAS_POSIX_MODES = process.platform !== 'win32';
+
+/** Funções do tap de statusline (JavaScript puro, sem tipos). */
+const { originalShell } = (await import(pathToFileURL(resolve(__dirname, '../../scripts/statusline-tap.mjs')).href)) as { originalShell: () => string | true };
+
+/**
+ * Shell em que o Claude Code roda os comandos de hooks e de statusline, para rodar o comando instalado de verdade:
+ * /bin/sh; no Windows, o Git Bash (o mesmo que o tap acha). undefined = Windows sem Git Bash (o teste é pulado).
+ */
+export function posixShell(): string | undefined {
+  if (process.platform !== 'win32') return '/bin/sh';
+  const sh = originalShell();
+  return typeof sh === 'string' ? sh : undefined;
+}
+
+/**
+ * symlinkSync de arquivo, ou pula o resto do teste quando o sistema não deixa criar o link: no Windows, isso pede o
+ * Modo de Desenvolvedor ou administrador (EPERM). Link de pasta: `'junction'`, que no Windows não pede nada.
+ */
+export function symlinkOrSkip(skip: (note: string) => never, target: string, path: string): void {
+  try {
+    symlinkSync(target, path);
+  } catch (err) {
+    if (process.platform === 'win32' && (err as NodeJS.ErrnoException).code === 'EPERM') skip('o Windows não deixou criar o link (Modo de Desenvolvedor desligado)');
+    throw err;
+  }
+}
 
 /** Pasta temporária para um teste (apagada com `cleanup`). */
 export function tempDir(prefix = 'habblaud-'): { dir: string; cleanup: () => void } {

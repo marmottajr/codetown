@@ -24,9 +24,10 @@ import {
   STATUS_MESSAGE,
   type RunOptions,
 } from '../../scripts/codex-install';
-import { tempDir } from './fixtures';
+import { posixShell, tempDir } from './fixtures';
 
 const CMD = hookCommand('/repo/habblaud/mod/habblaud-codex/hook.mjs');
+const SH = posixShell();
 
 /** hooks.json (sintético) com grupos de outro app em alguns eventos, inclusive um que o Habblaud não usa. */
 const ORCA = {
@@ -256,13 +257,13 @@ describe('codex-install.ts (arquivos, HOME falso)', () => {
     expect(out.join('\n')).toContain('JSON inválido');
   });
 
-  it('o comando instalado roda de verdade: com o Habblaud fora do ar, sai rápido, com 0 e sem saída', async () => {
+  it.skipIf(!SH)('o comando instalado roda de verdade: com o Habblaud fora do ar, sai rápido, com 0 e sem saída', async () => {
     await exec('install', { port: 1 });
     const command: string = read('.codex').hooks.PermissionRequest.at(-1).hooks[0].command;
     for (const event of ['PreToolUse', 'PermissionRequest']) {
       const input = JSON.stringify({ session_id: '0199b0c0-1234-7abc-8def-0123456789ab', hook_event_name: event, cwd: '/p', tool_name: 'Bash', tool_input: { command: 'ls' } });
       const t0 = Date.now();
-      const r = spawnSync('/bin/sh', ['-c', command], { input, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home }, timeout: 10_000 });
+      const r = spawnSync(SH!, ['-c', command], { input, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home }, timeout: 10_000 });
       expect(r.status, event).toBe(0);
       expect(r.stdout, event).toBe('');
       expect(Date.now() - t0).toBeLessThan(5_000);

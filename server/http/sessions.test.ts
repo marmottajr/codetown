@@ -4,7 +4,7 @@
 // servidor, as rotas passam pelo HistorySet (o do Claude Code e, num teste, o de outra ferramenta).
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RecentSessionsResponse, TerminalEntry, TerminalInit } from '../../shared/types';
@@ -15,7 +15,7 @@ import { Office } from '../model/office';
 import { openMainAgent, SessionHistory } from '../sources/history';
 import { HistorySet, type HistoryProvider } from '../sources/source';
 import { encodeCwd } from '../sources/watcher';
-import { appendLines, L, tempDir, writeLines } from '../test/fixtures';
+import { appendLines, L, symlinkOrSkip, tempDir, writeLines } from '../test/fixtures';
 import { createApiHandler } from './app';
 import { createRequestGuard } from './guard';
 import { Hub } from './sse';
@@ -209,7 +209,7 @@ describe('histórico de sessões: listagem', () => {
 });
 
 describe('histórico de sessões: validação (path traversal)', () => {
-  it('id que não é UUID: 400; conta desconhecida ou fora de projects/: 404; nunca abre o arquivo de fora', async () => {
+  it('id que não é UUID: 400; conta desconhecida ou fora de projects/: 404; nunca abre o arquivo de fora', async ({ skip }) => {
     const env = await serve();
     try {
       writeFileSync(join(env.root, 'segredo.jsonl'), `${L.prompt('não pode sair')}\n`);
@@ -242,7 +242,7 @@ describe('histórico de sessões: validação (path traversal)', () => {
       }
       // Link dentro de projects/ apontando para fora: 404.
       const linked = '00000000-0000-4000-8000-0000000000c3';
-      symlinkSync(join(env.root, 'segredo.jsonl'), join(env.dir, 'projects', encodeCwd(CWD), `${linked}.jsonl`));
+      symlinkOrSkip(skip, join(env.root, 'segredo.jsonl'), join(env.dir, 'projects', encodeCwd(CWD), `${linked}.jsonl`));
       mkdirSync(join(env.dir, 'projects', 'vazio'), { recursive: true });
       const r = await request(env.base, terminalRoute('.claude', linked));
       expect(r.status).toBe(404);

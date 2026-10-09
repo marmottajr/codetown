@@ -237,11 +237,12 @@ describe('hook.mjs do Codex (funções)', () => {
   });
 
   it('codexHomeOf/accountOf: CODEX_HOME (com ~), transcript_path (sessions/ ou archived_sessions/) e ~/.codex', () => {
-    expect(hook.codexHomeOf({ HOME: '/u', CODEX_HOME: '~/.codex-b/' }, {})).toBe('/u/.codex-b');
-    expect(hook.codexHomeOf({ HOME: '/u' }, { transcript_path: `/x/.codex-c/sessions/2026/10/09/rollout-a-${CODEX_THREAD}.jsonl` })).toBe('/x/.codex-c');
-    expect(hook.codexHomeOf({ HOME: '/u' }, { transcript_path: `/x/.codex-d/archived_sessions/rollout-a.jsonl` })).toBe('/x/.codex-d');
-    expect(hook.codexHomeOf({ HOME: '/u' }, { transcript_path: 'relativo/sessions/2026/10/09/r.jsonl' })).toBe('/u/.codex');
-    expect(hook.codexHomeOf({ HOME: '/u' }, { transcript_path: null })).toBe('/u/.codex');
+    // resolve/join como o hook: no Windows, com a letra do drive e `\`.
+    expect(hook.codexHomeOf({ HOME: '/u', CODEX_HOME: '~/.codex-b/' }, {})).toBe(resolve('/u/.codex-b'));
+    expect(hook.codexHomeOf({ HOME: '/u' }, { transcript_path: `/x/.codex-c/sessions/2026/10/09/rollout-a-${CODEX_THREAD}.jsonl` })).toBe(resolve('/x/.codex-c'));
+    expect(hook.codexHomeOf({ HOME: '/u' }, { transcript_path: `/x/.codex-d/archived_sessions/rollout-a.jsonl` })).toBe(resolve('/x/.codex-d'));
+    expect(hook.codexHomeOf({ HOME: '/u' }, { transcript_path: 'relativo/sessions/2026/10/09/r.jsonl' })).toBe(join('/u', '.codex'));
+    expect(hook.codexHomeOf({ HOME: '/u' }, { transcript_path: null })).toBe(join('/u', '.codex'));
     expect(hook.accountOf('/u/.codex')).toBe('.codex');
   });
 

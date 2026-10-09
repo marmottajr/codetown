@@ -50,7 +50,10 @@ describe('FileTail com stat que não ajuda', () => {
 
   it('inode reaproveitado: a troca aparece pelo começo do arquivo, com ou sem birthtime de verdade', async () => {
     sim.sameIno = true;
-    for (const birthIsCtime of [false, true]) {
+    // No NTFS, o arquivo recriado com o mesmo nome em menos de 15 s herda o birthtime do apagado ("tunneling"): com o
+    // inode simulado igual, o FileTail não tem por onde notar a troca. Lá o inode não se repete (o id do arquivo muda),
+    // então só a variante com birthtime = ctime vale.
+    for (const birthIsCtime of process.platform === 'win32' ? [true] : [false, true]) {
       sim.birthIsCtime = birthIsCtime;
       writeFileSync(file, 'velho-1\n');
       const t = new FileTail(file);

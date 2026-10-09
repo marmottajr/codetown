@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setQuiet } from '../log';
 import { tempDir } from '../test/fixtures';
@@ -9,7 +9,8 @@ import { rollover, STALE_AFTER_MS, usageFromCache, usageFromWindows, UsageStore 
 
 setQuiet(true);
 
-const H = '/Users/fulano';
+// Raiz absoluta também no Windows (lá o resolve põe a letra do drive).
+const H = resolve('/Users/fulano');
 
 describe('aliases de shell', () => {
   it('só linhas alias que invocam o claude; CLAUDE_CONFIG_DIR expandido', () => {
@@ -26,21 +27,21 @@ describe('aliases de shell', () => {
       "alias w='cd ~/.claude && ls'",
     ].join('\n');
     expect(parseClaudeAliases(rc, H)).toEqual([
-      { name: 'claude2', configDir: `${H}/.claude-conta2` },
+      { name: 'claude2', configDir: join(H, '.claude-conta2') },
       { name: 'c' },
       { name: 'f' },
-      { name: 'd', configDir: `${H}/.claude-conta2` },
-      { name: 'e', configDir: `${H}/.claude-trabalho` },
+      { name: 'd', configDir: join(H, '.claude-conta2') },
+      { name: 'e', configDir: join(H, '.claude-trabalho') },
     ]);
   });
 
   it('prefere o alias mais curto (empate: o primeiro) e usa maiúscula', () => {
     const m = shortcutsByDir(
-      [{ name: 'claude2', configDir: `${H}/.claude-conta2` }, { name: 'c' }, { name: 'f' }, { name: 'd', configDir: `${H}/.claude-conta2` }],
+      [{ name: 'claude2', configDir: join(H, '.claude-conta2') }, { name: 'c' }, { name: 'f' }, { name: 'd', configDir: join(H, '.claude-conta2') }],
       H,
     );
-    expect(m.get(`${H}/.claude`)).toBe('C');
-    expect(m.get(`${H}/.claude-conta2`)).toBe('D');
+    expect(m.get(join(H, '.claude'))).toBe('C');
+    expect(m.get(join(H, '.claude-conta2'))).toBe('D');
   });
 
   it('ids desambiguados quando dois dirs têm o mesmo basename', () => {
@@ -70,7 +71,7 @@ describe('detecção de contas', () => {
     const extra = join(home, 'outra');
     mkdirSync(extra);
     expect(discoverClaudeDirs({ CLAUDE_CONFIG_DIR: extra }, home)).toContain(extra);
-    expect(discoverClaudeDirs({ HABBLAUD_CLAUDE_DIRS: ' /x/a , ~/b ' }, home)).toEqual(['/x/a', join(home, 'b')]);
+    expect(discoverClaudeDirs({ HABBLAUD_CLAUDE_DIRS: ' /x/a , ~/b ' }, home)).toEqual([resolve('/x/a'), join(home, 'b')]);
   });
 
   it('pasta do Codex (CODEX_HOME) não vira conta do Claude Code, por nenhum caminho', () => {
@@ -107,7 +108,7 @@ describe('detecção de contas', () => {
     // CLAUDE_CONFIG_DIR e HABBLAUD_CLAUDE_DIRS apontando para o Codex: fora (o resto da lista segue igual).
     expect(discoverClaudeDirs({ CLAUDE_CONFIG_DIR: codex }, home)).not.toContain(codex);
     expect(codexDirsRefused({ CLAUDE_CONFIG_DIR: codex }, home)).toEqual([disfarcado, codex]);
-    expect(discoverClaudeDirs({ HABBLAUD_CLAUDE_DIRS: `~/.claude,~/.codex,/x/a` }, home)).toEqual([join(home, '.claude'), '/x/a']);
+    expect(discoverClaudeDirs({ HABBLAUD_CLAUDE_DIRS: `~/.claude,~/.codex,/x/a` }, home)).toEqual([join(home, '.claude'), resolve('/x/a')]);
     expect(codexDirsRefused({ HABBLAUD_CLAUDE_DIRS: `~/.claude,~/.codex,/x/a` }, home)).toEqual([codex]);
     const env = { HABBLAUD_ACCOUNTS: JSON.stringify([{ id: '.codex', mountDir: codex }]) };
     expect(discoverClaudeDirs(env, home)).not.toContain(codex);
@@ -235,7 +236,7 @@ describe('uso (5h e semanal)', () => {
       ]);
       expect(changes).toBe(1);
       // Mesma lista de novo: mesmos ids, sem aviso de mudança.
-      expect(svc.setProviderAccounts('codex', set.map((e) => ({ dir: e.dir, detected: det(e.dir.includes('/c/') ? '.claude' : '.codex') }))).map((e) => e.id)).toEqual([
+      expect(svc.setProviderAccounts('codex', set.map((e) => ({ dir: e.dir, detected: det(basename(e.dir)) }))).map((e) => e.id)).toEqual([
         '.codex',
         '.codex~2',
         '.claude~2',

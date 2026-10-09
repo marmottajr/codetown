@@ -29,6 +29,9 @@ const acc = (id: string, extra: Partial<DetectedAccount> = {}): DetectedAccount 
   ...extra,
 });
 
+/** Os caminhos do host aqui são escritos com `/`; no Windows, o join do planMounts os devolve com `\`. */
+const slash = (p: string) => p.replaceAll('\\', '/');
+
 describe('docker-up', () => {
   it('argumentos', () => {
     expect(parseArgs([])).toEqual({ down: false, build: true, help: false });
@@ -40,7 +43,7 @@ describe('docker-up', () => {
   it('monta só projects/ e sessions/ que existem', () => {
     const dirs = ['/Users/fulano/.claude', '/Users/fulano/.claude-conta2'];
     const exists = new Set(['/Users/fulano/.claude/projects', '/Users/fulano/.claude/sessions', '/Users/fulano/.claude-conta2/sessions']);
-    const mounts = planMounts(dirs, [acc('.claude'), acc('.claude-conta2')], (p) => (exists.has(p) ? `/real${p}` : undefined));
+    const mounts = planMounts(dirs, [acc('.claude'), acc('.claude-conta2')], (p) => (exists.has(slash(p)) ? `/real${slash(p)}` : undefined));
     expect(mounts.map((m) => m.binds)).toEqual([
       [
         { source: '/real/Users/fulano/.claude/projects', target: '/claude/.claude/projects' },
@@ -62,7 +65,7 @@ describe('docker-up', () => {
   });
 
   it('override: somente leitura, sem criar pastas no host, `$` escapado e a pasta do statusline em /usage', () => {
-    const mounts = planMounts(['/Users/fu$lano/.claude'], [acc('.claude', { email: 'a@b.c', cachedUsage: { fetchedAtMs: 1, utilization: {} } })], (p) => p);
+    const mounts = planMounts(['/Users/fu$lano/.claude'], [acc('.claude', { email: 'a@b.c', cachedUsage: { fetchedAtMs: 1, utilization: {} } })], slash);
     const yml = renderOverride(mounts, new Date('2026-10-06T00:00:00Z'), '/Users/fulano/.habblaud/usage');
     expect(yml).toContain('source: "/Users/fu$$lano/.claude/projects"');
     expect(yml).toContain('HABBLAUD_USAGE_DIR: "/usage"');
@@ -84,7 +87,7 @@ describe('docker-up', () => {
     // Existem no host também auth.json, config.toml, history.jsonl, shell_snapshots/, logs e SQLite: nada disso entra.
     const exists = new Set([`${host}/sessions`, `${host}/thread-writer-locks`, `${host}/auth.json`, `${host}/config.toml`, `${host}/shell_snapshots`, `${host}/history.jsonl`]);
     const codexAcc: DetectedAccount = { id: '.codex', provider: 'codex', configDir: host, short: 'CX', name: 'Codex', color: '#5cc97b', plan: 'Plus' };
-    const codex = planCodexMounts([host, '/Users/fulano/.codex-vazia'], [codexAcc, { ...codexAcc, id: '.codex-vazia' }], (p) => (exists.has(p) ? `/real${p}` : undefined));
+    const codex = planCodexMounts([host, '/Users/fulano/.codex-vazia'], [codexAcc, { ...codexAcc, id: '.codex-vazia' }], (p) => (exists.has(slash(p)) ? `/real${slash(p)}` : undefined));
     expect(codex.map((m) => m.binds)).toEqual([
       [
         { source: `/real${host}/sessions`, target: '/codex/.codex/sessions' },
@@ -94,7 +97,7 @@ describe('docker-up', () => {
     expect(codexAccountsPayload(codex)).toEqual([
       { id: '.codex', provider: 'codex', configDir: host, mountDir: '/codex/.codex', short: 'CX', name: 'Codex', color: '#5cc97b', plan: 'Plus' },
     ]);
-    const claude = planMounts(['/Users/fulano/.claude'], [acc('.claude')], (p) => p);
+    const claude = planMounts(['/Users/fulano/.claude'], [acc('.claude')], slash);
     const yml = renderOverride(claude, new Date(0), undefined, undefined, codex);
     expect(yml).toContain('HABBLAUD_CODEX_DIRS: "/codex/.codex"');
     expect(yml).toContain(`source: "/real${host}/thread-writer-locks"\n        target: "/codex/.codex/thread-writer-locks"\n        read_only: true`);
@@ -114,7 +117,7 @@ describe('docker-up', () => {
   });
 
   it('fuso do host vai para o container como TZ', () => {
-    const mounts = planMounts(['/Users/fulano/.claude'], [acc('.claude')], (p) => p);
+    const mounts = planMounts(['/Users/fulano/.claude'], [acc('.claude')], slash);
     expect(renderOverride(mounts, new Date(0), undefined, 'America/Sao_Paulo')).toContain('TZ: "America/Sao_Paulo"');
     expect(renderOverride(mounts)).not.toContain('TZ:');
     expect(hostTimeZone({ TZ: 'America/Sao_Paulo' })).toBe('America/Sao_Paulo');

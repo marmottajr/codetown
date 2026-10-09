@@ -16,7 +16,7 @@
 // já capturado seguir valendo.
 import { accessSync, chmodSync, constants, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { discoverClaudeDirs } from '../server/accounts/detect';
 import { describeStateMigration, LEGACY_NAME, migrateLegacyStateDir } from '../server/legacy';
@@ -242,8 +242,10 @@ function stamp(d: Date): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+/** `~/...` para o que está no HOME; no Windows também com `\` (o resto sai com `/`, como o Git Bash escreve). */
 export function tildify(p: string, home: string): string {
-  return p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
+  if (p !== home && !p.startsWith(`${home}/`) && !p.startsWith(`${home}${sep}`)) return p;
+  return `~${p.slice(home.length).split(sep).join('/')}`;
 }
 
 export function readSettings(file: string): { settings: Settings; raw?: string } | { error: string } {

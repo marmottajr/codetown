@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentInfo } from '../../shared/types';
 import { setQuiet } from '../log';
-import { L, tempDir, writeLines } from '../test/fixtures';
+import { L, symlinkOrSkip, tempDir, writeLines } from '../test/fixtures';
 import { HEAD_BYTES, HISTORY_MAX_AGE_MS, isSessionId, openMainAgent, SessionHistory, TAIL_BYTES, type HistoryAccount } from './history';
 import { encodeCwd } from './watcher';
 
@@ -189,21 +189,22 @@ describe('SessionHistory.resolve', () => {
     expect(h.resolve('.claude', sid(9))).toEqual({ status: 404, error: 'sessão não encontrada' });
   });
 
-  it('link dentro de projects/ apontando para fora não serve', () => {
+  it('link dentro de projects/ apontando para fora não serve', ({ skip }) => {
     const { root, acc } = setup();
     const c = acc('.claude');
     session(c, '/p', sid(1), [L.prompt('oi')], NOW);
-    const outside = join(root, 'fora.jsonl');
-    writeFileSync(outside, `${L.prompt('segredo')}\n`);
-    symlinkSync(outside, join(c.dir, 'projects', encodeCwd('/p'), `${sid(2)}.jsonl`));
-    // Pasta de projeto que é um link para fora também não.
+    // Pasta de projeto que é um link para fora (junction: no Windows não pede privilégio).
     mkdirSync(join(root, 'outra'), { recursive: true });
     writeFileSync(join(root, 'outra', `${sid(3)}.jsonl`), `${L.prompt('segredo')}\n`);
-    symlinkSync(join(root, 'outra'), join(c.dir, 'projects', 'link'));
+    symlinkSync(join(root, 'outra'), join(c.dir, 'projects', 'link'), 'junction');
     const h = history([c]);
-    expect(h.resolve('.claude', sid(2))).toEqual({ status: 404, error: 'sessão não encontrada' });
     expect(h.resolve('.claude', sid(3))).toEqual({ status: 404, error: 'sessão não encontrada' });
     expect('path' in h.resolve('.claude', sid(1))).toBe(true);
+    // Arquivo que é um link para fora também não.
+    const outside = join(root, 'fora.jsonl');
+    writeFileSync(outside, `${L.prompt('segredo')}\n`);
+    symlinkOrSkip(skip, outside, join(c.dir, 'projects', encodeCwd('/p'), `${sid(2)}.jsonl`));
+    expect(h.resolve('.claude', sid(2))).toEqual({ status: 404, error: 'sessão não encontrada' });
   });
 
   it('conta sem projects/: 404', () => {

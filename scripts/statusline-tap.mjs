@@ -10,16 +10,17 @@
 // 1. lê todo o stdin;
 // 2. se houver rate_limits, grava <HABBLAUD_USAGE_DIR ou ~/.habblaud/usage>/<pasta da conta>.json com
 //    SÓ {accountId, configDir, fetchedAt, five_hour, seven_day} (nada mais do stdin, por privacidade);
-// 3. roda o comando original com o MESMO stdin, herdando stdout/stderr, e sai com o código dele.
+// 3. roda o comando original com o MESMO stdin, herdando stdout/stderr, e sai com o código dele (no shell em que o
+//    Claude Code o rodaria: ver originalShell).
 //    Sem comando original, não imprime nada.
 //
 // Regras: Node puro e sem dependências; qualquer falha na captura é ignorada em silêncio — o
 // statusline nunca pode quebrar nem ficar lento por causa do Habblaud. Instalação automática
 // (com backup do settings.json): npm run usage:install.
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Valores idênticos gravados há menos que isto não são regravados. */
@@ -94,6 +95,32 @@ export function writeUsage(rec, dir, now) {
   return true;
 }
 
+function isFile(p) {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Shell do comando original: o mesmo em que o Claude Code roda o statusline. Fora do Windows, o /bin/sh. No Windows,
+ * o Git Bash (CLAUDE_CODE_GIT_BASH_PATH ou o bin\bash.exe da instalação do git.exe do PATH; nunca o `bash` do PATH,
+ * que pode ser o do WSL); sem ele, o padrão do Node (cmd.exe).
+ */
+export function originalShell(env = process.env) {
+  if (process.platform !== 'win32') return true;
+  const explicit = (env.CLAUDE_CODE_GIT_BASH_PATH ?? '').trim();
+  if (explicit && isFile(explicit)) return explicit;
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    if (!dir || !isAbsolute(dir) || !isFile(join(dir, 'git.exe'))) continue;
+    // git.exe em <Git>\cmd (o do PATH do Windows) ou em <Git>\mingw64\bin (o do PATH do Git Bash).
+    const bash = [resolve(dir, '..', 'bin', 'bash.exe'), resolve(dir, '..', '..', 'bin', 'bash.exe')].find(isFile);
+    if (bash) return bash;
+  }
+  return true;
+}
+
 /** A captura: nunca lança. */
 export function tap(stdinText, env = process.env, now = Date.now()) {
   try {
@@ -127,7 +154,7 @@ async function main() {
   // O comando original começa antes da captura (que roda enquanto ele trabalha): zero atraso extra.
   let child;
   try {
-    child = spawn(command, { shell: true, stdio: ['pipe', 'inherit', 'inherit'] });
+    child = spawn(command, { shell: originalShell(), stdio: ['pipe', 'inherit', 'inherit'] });
   } catch {
     tap(input.toString('utf8'));
     process.exitCode = 127;

@@ -6,6 +6,13 @@
 // - senão: "Queued message <id> for thread <thread>." no stdout, retorno 0.
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { CODEX_BIN_NAME } from '../messages/codex';
+
+/**
+ * O binário falso roda aqui? Ele é um script com shebang, e no Windows o execFile (sem shell) só roda .exe: lá os testes
+ * que o executam ficam de fora (a busca pelo nome segue testada).
+ */
+export const FAKE_CODEX_RUNS = process.platform !== 'win32';
 
 const SCRIPT = `#!${process.execPath}
 const fs = require('node:fs');
@@ -29,9 +36,9 @@ if (args[0] !== 'queue' || args.some((a) => /^(-c|--config|--enable|--disable|--
 }
 `;
 
-/** Grava o binário falso como <dir>/codex (executável) e devolve o caminho. */
+/** Grava o binário falso como <dir>/codex (no Windows, codex.exe: o nome que a busca procura) e devolve o caminho. */
 export function writeFakeCodex(dir: string): string {
-  const bin = join(dir, 'codex');
+  const bin = join(dir, CODEX_BIN_NAME);
   writeFileSync(bin, SCRIPT);
   chmodSync(bin, 0o755);
   return bin;

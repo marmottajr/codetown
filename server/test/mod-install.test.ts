@@ -600,7 +600,7 @@ describe('mod-install.ts (CLI falso, HOME falso)', () => {
     fake.calls = [];
     rmSync(join(root, '.claude-plugin', 'marketplace.json'));
     expect(await exec('install')).toBe(1);
-    expect(out.join('\n')).toContain('.claude-plugin/marketplace.json');
+    expect(out.join('\n')).toContain(join('.claude-plugin', 'marketplace.json'));
     expect(fake.calls).toEqual([]);
     expect(read('.claude')).toEqual(original);
   });

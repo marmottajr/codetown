@@ -17,7 +17,7 @@ import { createMessageRoutes } from '../messages/http';
 import { MessageRegistry } from '../messages/registry';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
-import { fakeCodexCalls, writeFakeCodex } from './fake-codex';
+import { FAKE_CODEX_RUNS, fakeCodexCalls, writeFakeCodex } from './fake-codex';
 import { tempDir } from './fixtures';
 import { request } from './permission-server';
 
@@ -90,7 +90,7 @@ describe('rotas do auxiliar do Codex', () => {
     expect(await request(s.base, '/api/codex/bridge/poll', { method: 'POST', body: {} })).toMatchObject({ status: 200, json: { messages: [] } });
   });
 
-  it('fluxo: o auxiliar conecta (canMessage) → página manda → rodada roda o codex queue → confirma → delivered', async () => {
+  it.runIf(FAKE_CODEX_RUNS)('fluxo: o auxiliar conecta (canMessage) → página manda → rodada roda o codex queue → confirma → delivered', async () => {
     const s = await serve();
     const bin = writeFakeCodex(tmp.dir);
     const log = join(tmp.dir, 'chamadas.log');
