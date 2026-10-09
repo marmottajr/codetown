@@ -1289,17 +1289,24 @@ function lastLineAt(lines: string[]): number | undefined {
 
 /**
  * Lê em stream (sem travar o event loop) os bytes [0, end) de um rollout: os números, o título e as últimas
- * `keep` atividades anteriores à varredura feita ao abrir a sessão.
+ * `keep` atividades (distintas) anteriores à varredura feita ao abrir a sessão.
  */
 export async function scanPrefix(path: string, end: number, idPrefix: string, keep: number): Promise<{ state: CodexState; activities: Activity[] }> {
   const state = createCodexState();
-  let activities: Activity[] = [];
-  if (end <= 0) return { state, activities };
+  if (end <= 0) return { state, activities: [] };
   const ctx = { idPrefix, now: Date.now(), activities: keep > 0 };
+  // Por id, na ordem de chegada: a mesma chamada em duas linhas (function_call e o CommandExecution de mesmo call_id)
+  // fica uma entrada só, como no Office.addActivity: com `replace`, a versão mais nova no lugar (e no horário) da
+  // primeira; sem ele, fica a primeira.
+  const byId = new Map<string, Activity>();
   const take = (line: string) => {
     const r = parseRolloutLine(state, line, ctx);
-    for (const a of r.activities) activities.push(a.activity);
-    if (activities.length > keep * 2) activities = activities.slice(-keep);
+    for (const a of r.activities) {
+      const old = byId.get(a.activity.id);
+      if (!old) byId.set(a.activity.id, a.activity);
+      else if (a.replace) byId.set(a.activity.id, { ...a.activity, at: old.at });
+    }
+    if (byId.size > keep * 2) for (const id of [...byId.keys()].slice(0, byId.size - keep)) byId.delete(id);
   };
   let partial: Buffer | null = null;
   const stream = createReadStream(path, { start: 0, end: end - 1, highWaterMark: 1024 * 1024 });
@@ -1314,5 +1321,5 @@ export async function scanPrefix(path: string, end: number, idPrefix: string, ke
     partial = start < data.length ? Buffer.from(data.subarray(start)) : null;
   }
   if (partial?.length) take(partial.toString('utf8'));
-  return { state, activities: activities.slice(-keep) };
+  return { state, activities: [...byId.values()].slice(-keep) };
 }

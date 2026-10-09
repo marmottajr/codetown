@@ -97,6 +97,17 @@ export const B = {
   },
 };
 
+/**
+ * item_completed CommandExecution (pwsh) com o parsed_cmd dado: com um tipo conhecido, reclassifica o function_call
+ * exec_command de mesmo id (o R.command grava sempre `zsh -lc` e parsed unknown).
+ */
+export function commandParsed(thread: string, turn: string, id: string, script: string, parsed: unknown[], at: number): string {
+  const j = JSON.parse(R.command(thread, turn, id, script, { at, output: 'ok' }));
+  j.payload.item.command = ['pwsh.exe', '-Command', script];
+  j.payload.item.parsed_cmd = parsed;
+  return JSON.stringify(j);
+}
+
 /** A mesma linha com `ordinal` (para a herança de um fork: ordinal < subagent_history_start_ordinal). */
 export function withOrdinal(raw: string, ordinal: number): string {
   const j = JSON.parse(raw) as Record<string, unknown>;

@@ -1,5 +1,5 @@
 // Integração da fonte do Codex: um CODEX_HOME temporário (rollouts e locks sintéticos), o AccountsService e o Office.
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { describeShellJob } from '../../../shared/activity';
@@ -10,9 +10,9 @@ import { NameStore } from '../../model/names';
 import { DONE_GRACE_MS, Office } from '../../model/office';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
-import { B, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
+import { B, commandParsed, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { readLocks } from './files';
-import { CodexSource, MAIN_GONE_GRACE_MS, SHELL_EXPIRE_MS, USAGE_RESCAN_MS } from './source';
+import { CodexSource, MAIN_GONE_GRACE_MS, scanPrefix, SHELL_EXPIRE_MS, USAGE_RESCAN_MS } from './source';
 
 setQuiet(true);
 
@@ -830,6 +830,53 @@ describe('fonte do Codex: parsed_cmd reclassifica o comando que já estava no es
     ctx.home.append(path, [execParsed('call_9', 'npm test', [{ type: 'unknown', cmd: 'npm test' }], ctx.now())]);
     ctx.poll();
     expect(ofCall(ctx)).toEqual([first]);
+  });
+
+  /** Turno antigo com os dois pares (function_call + CommandExecution de mesmo call_id) e, depois, um turno aberto de mais de 1 MB. */
+  function oldPairsThenBigTurn(t0: number): string[] {
+    return [
+      R.meta(T, { at: t0, cwd: '/projetos/loja' }),
+      R.taskStarted('turn0', t0),
+      R.functionCall('call_9', 'exec_command', { cmd: 'Get-Content src/soma.ts' }, t0 + 1_000),
+      commandParsed(T, 'turn0', 'call_9', 'Get-Content src/soma.ts', read, t0 + 2_000),
+      R.functionCall('call_8', 'exec_command', { cmd: 'npm test' }, t0 + 3_000),
+      commandParsed(T, 'turn0', 'call_8', 'npm test', [{ type: 'unknown', cmd: 'npm test' }], t0 + 4_000),
+      R.taskComplete('turn0', t0 + 5_000),
+      R.taskStarted('p1', t0 + 6_000),
+      ...bigTurn(T, 'p1', 1_100_000, t0 + 7_000),
+    ];
+  }
+
+  it('começo de um rollout grande (lido em segundo plano): o par de mesmo call_id entra uma vez só no histórico longo, reclassificado no horário do function_call; sem reclassificação fica o primeiro', async () => {
+    const ctx = setup();
+    const t0 = ctx.now() - 30 * 60_000;
+    ctx.home.rollout(T, oldPairsThenBigTurn(t0));
+    ctx.home.lock(T, t0);
+    ctx.source.boot();
+    await ctx.source.idle();
+    const history = ctx.office.detail(KEY)!.history;
+    const nine = history.filter((a) => a.id === `${KEY}#call_9`);
+    expect(nine).toHaveLength(1);
+    expect(nine[0]).toMatchObject({ kind: 'read', text: 'Lendo soma.ts', at: t0 + 1_000 });
+    const eight = history.filter((a) => a.id === `${KEY}#call_8`);
+    expect(eight).toHaveLength(1);
+    expect(eight[0].at).toBe(t0 + 3_000);
+  });
+
+  it('scanPrefix: as `keep` atividades guardadas são distintas (o par não ocupa duas vagas)', async () => {
+    const ctx = setup();
+    const t0 = ctx.now() - 30 * 60_000;
+    const path = ctx.home.rollout(T, [
+      R.meta(T, { at: t0, cwd: '/projetos/loja' }),
+      R.taskStarted('turn0', t0),
+      R.functionCall('call_7', 'exec_command', { cmd: 'Get-Content src/a.ts' }, t0 + 1_000),
+      commandParsed(T, 'turn0', 'call_7', 'Get-Content src/a.ts', [{ type: 'read', cmd: 'Get-Content src/a.ts', name: 'a.ts', path: 'src/a.ts' }], t0 + 2_000),
+      R.functionCall('call_9', 'exec_command', { cmd: 'Get-Content src/soma.ts' }, t0 + 3_000),
+      commandParsed(T, 'turn0', 'call_9', 'Get-Content src/soma.ts', read, t0 + 4_000),
+    ]);
+    const { activities } = await scanPrefix(path, statSync(path).size, KEY, 2);
+    expect(activities.map((a) => a.id)).toEqual([`${KEY}#call_7`, `${KEY}#call_9`]);
+    expect(activities.map((a) => a.kind)).toEqual(['read', 'read']);
   });
 });
 
