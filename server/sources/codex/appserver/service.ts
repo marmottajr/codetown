@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import type { CodexDecision } from '../../../../shared/types';
 import { errMsg, log } from '../../../log';
 import type { ParallelRequestInput, ParallelSink, PermissionRegistry } from '../../../permissions/registry';
+import { unwrapCommand } from '../command';
 import { CodexAppServerClient, type ApprovalRequest } from './client';
 
 /** Sem conexão: intervalo entre as conferências do daemon de cada conta. */
@@ -30,6 +31,8 @@ export const BACKOFF_MAX_MS = 30_000;
 export const RESUME_RETRY_MS = 5_000;
 const DAEMON_CHECK_TIMEOUT_MS = 5_000;
 const TICK_MS = 1_000;
+/** Pedido sem `availableDecisions`: o escritório oferece as quatro. */
+const ALL_DECISIONS: readonly CodexDecision[] = ['accept', 'acceptForSession', 'decline', 'cancel'];
 
 /** O `codex app-server proxy` de uma conta (o processo, ou um falso nos testes). */
 export interface CodexProxy {
@@ -397,14 +400,22 @@ export class CodexAppServerService implements ParallelSink {
     // O app-server só manda o pedido a quem assina a thread.
     conn.owned.add(req.threadId);
     conn.retry.delete(req.threadId);
+    // availableDecisions ausente = as quatro; presente sem nenhuma das quatro (só emendas de política) = o escritório não
+    // tem o que responder: nenhum cartão, vale o terminal (a thread segue assinada, então o hook dela sai sem decidir).
+    const decisions = req.decisions ?? [...ALL_DECISIONS];
+    if (decisions.length === 0) {
+      this.say(`Codex (${st.id}): pedido de aprovação sem nenhuma decisão que o escritório saiba dar (accept, acceptForSession, decline, cancel); fica só com o terminal.`);
+      return;
+    }
     const key = requestKey(st.id, req.requestId);
     const input: ParallelRequestInput = {
       key,
       account: st.id,
       threadId: req.threadId,
       tool: req.kind === 'command' ? 'exec_command' : 'apply_patch',
-      input: { command: (req.kind === 'command' ? req.command : req.patch) ?? '' },
-      decisions: req.decisions ?? [],
+      // O comando vem como o shell o recebe (`pwsh.exe -NoProfile -Command '…'`): o cartão mostra o de dentro.
+      input: { command: req.kind === 'command' ? unwrapCommand(req.command ?? '').text : (req.patch ?? '') },
+      decisions,
     };
     if (req.cwd) input.cwd = req.cwd;
     if (req.reason) input.reason = req.reason;

@@ -12,7 +12,7 @@ import { codexAppServerOffReason, loadConfig } from '../../../config';
 import { setQuiet } from '../../../log';
 import { NameStore } from '../../../model/names';
 import { Office } from '../../../model/office';
-import { PermissionRegistry } from '../../../permissions/registry';
+import { PermissionRegistry, type ParallelRequestInput } from '../../../permissions/registry';
 import { FakeAppServer, rpcFail, until } from '../../../test/codex-fixtures-appserver';
 import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, CodexAppServerService, daemonRunning, DISCOVERY_MS, RESUME_RETRY_MS, spawnCodexProxy, type CodexProxy } from './service';
 
@@ -80,9 +80,18 @@ function setup(opts: { daemon?: boolean; control?: boolean; threads?: string[]; 
   /** Próximos app-servers falsos (handshake recusado, resume com erro…); vazio = um que aceita e lista `threads`. */
   const queue: FakeAppServer[] = [];
   const logs: string[] = [];
+  /** O que o serviço passou ao registerParallel (o registro de verdade recebe o mesmo). */
+  const seen: ParallelRequestInput[] = [];
+  const real = registry;
   const svc = new CodexAppServerService({
     accounts: () => accounts,
-    registry,
+    registry: {
+      registerParallel: (req) => {
+        seen.push(req);
+        return real.registerParallel(req);
+      },
+      resolveParallel: (key) => real.resolveParallel(key),
+    },
     codexBin: opts.codexBin === null ? undefined : (opts.codexBin ?? BIN),
     version: '9.9.9',
     now: clock.now,
@@ -117,7 +126,7 @@ function setup(opts: { daemon?: boolean; control?: boolean; threads?: string[]; 
   });
   registry.setParallelSink(svc);
   cleanups.push(() => svc.stop());
-  return { office, registry, clock, svc, home, accounts, daemon, proxies, queue, logs };
+  return { office, registry, clock, svc, home, accounts, daemon, proxies, queue, logs, seen };
 }
 
 type Setup = ReturnType<typeof setup>;
@@ -428,6 +437,55 @@ describe('CodexAppServerService: pedidos de aprovação', () => {
     expect(fake.responses()).toEqual([]);
     // O pedido só chega a quem assina a thread: o hook dela sai sem decidir e o terminal atende.
     expect(s.svc.owns(ACCOUNT, CHILD)).toBe(true);
+  });
+
+  it('comando com o invólucro do shell: o cartão recebe o comando desembrulhado', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+
+    // Act
+    fake.request(8, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-8', command: "pwsh.exe -NoProfile -Command 'git status'" });
+    await until(() => pendingOf(s).length === 1);
+
+    // Assert
+    expect(s.seen.map((r) => r.input)).toEqual([{ command: 'git status' }]);
+  });
+
+  it('sem availableDecisions: o registro recebe as quatro decisões', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+
+    // Act
+    fake.request(10, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-10', command: 'npm test' });
+    await until(() => pendingOf(s).length === 1);
+
+    // Assert
+    expect(s.seen.map((r) => r.decisions)).toEqual([['accept', 'acceptForSession', 'decline', 'cancel']]);
+    expect(pendingOf(s)[0].decisions).toEqual(['accept', 'acceptForSession', 'decline', 'cancel']);
+  });
+
+  it('availableDecisions sem nenhuma das quatro: nenhum cartão, uma linha no log (sem o comando) e o hook da thread sai sem decidir', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+    const before = s.logs.length;
+
+    // Act
+    fake.request(12, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-12', command: 'npm test', availableDecisions: [{ applyNetworkPolicyAmendment: {} }] });
+    await until(() => s.logs.length > before);
+    await flush();
+
+    // Assert
+    expect(s.seen).toEqual([]);
+    expect(pendingOf(s)).toEqual([]);
+    const lines = s.logs.slice(before);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(ACCOUNT);
+    expect(lines[0]).not.toContain('npm test');
+    expect(await s.svc.decide(`${ACCOUNT}:12`, 'accept')).toBe('gone');
+    expect(s.registry.register(codexHook())).toEqual({ skip: 'parallel' });
   });
 });
 
