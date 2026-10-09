@@ -487,6 +487,8 @@ export interface CodexState {
   pending: Map<string, string>;
   /** request_user_input abertos (sem output): call_id → resumo das perguntas (mascarado e cortado). */
   asking: Map<string, string>;
+  /** Filhos do multiagente: id do spawn (call_id) → título do filho e se já contou (cada filho conta uma vez). */
+  spawns: Map<string, { title: string; counted: boolean }>;
   /** Uso do plano mais recente (rate_limits) e o plano. */
   usage?: AccountUsage;
   planType?: string;
@@ -494,7 +496,7 @@ export interface CodexState {
 }
 
 export function createCodexState(meta?: RolloutMeta): CodexState {
-  const s: CodexState = { tasks: [], stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, pending: new Map(), asking: new Map() };
+  const s: CodexState = { tasks: [], stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, pending: new Map(), asking: new Map(), spawns: new Map() };
   if (meta) applyMeta(s, meta);
   return s;
 }
@@ -518,7 +520,9 @@ export type CodexSignal =
   /** request_user_input aberto (sem output): o agente espera você responder. */
   | { type: 'asking'; questions: string }
   /** O output do request_user_input chegou (ou o turno acabou). */
-  | { type: 'answered' };
+  | { type: 'answered' }
+  /** spawn_agent: título do filho (o 1º texto da mensagem), pelo id do filho quando conhecido. */
+  | { type: 'spawn'; childThreadId?: string; title: string };
 
 export interface CodexLineResult {
   activities: ParsedActivity[];
@@ -545,6 +549,34 @@ const ASK_SUMMARY_MAX = 120;
 function askSummary(raw: unknown): string {
   const questions = Array.isArray(raw) ? raw.map((q) => str(rec(q)?.question)).filter((q): q is string => q !== undefined) : [];
   return truncate(maskSecrets(questions.join(' · ').slice(0, ASK_SUMMARY_MAX * 8)), ASK_SUMMARY_MAX);
+}
+
+/** Título (da sessão ou de um subagente) a partir de um texto livre: mascarado ANTES do corte. */
+function titleText(text: string): string {
+  return truncate(maskSecrets(text.slice(0, 1_000)), TITLE_MAX);
+}
+
+/** 1º texto de um conteúdo: o próprio texto ou o 1º bloco {text} da lista (o agent_message traz um bloco cifrado junto). */
+function firstText(content: unknown): string | undefined {
+  if (typeof content === 'string') return str(content);
+  if (!Array.isArray(content)) return undefined;
+  for (const b of content) {
+    const text = str(rec(b)?.text);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+/** Nome da tarefa pelo caminho do agente ("/root/revisar_testes" → "revisar_testes"). */
+function agentTask(path: string | undefined): string | undefined {
+  const last = path?.split('/').filter(Boolean).pop();
+  return last && last !== 'root' ? last : undefined;
+}
+
+/** Título do filho pelo spawn_agent: o 1º texto da mensagem (`message`; `prompt`/`task` em formatos antigos), senão o task_name. */
+function spawnTitle(input: Rec): string {
+  const text = firstText(input.message) ?? str(input.prompt) ?? str(input.task) ?? str(input.task_name);
+  return text ? titleText(text) : '';
 }
 /** Texto injetado pelo Codex que não é instrução sua. */
 const INJECTED = /^<(environment_context|user_instructions|turn_aborted|subagent_notification|user_shell_command_output|collaboration_mode)\b/;
@@ -888,8 +920,8 @@ class RolloutLineParser {
         this.sawPaginated();
         const tool = str(item.tool) ?? 'spawn_agent';
         if (tool === 'spawn_agent') {
-          this.s.stats.subagents++;
-          this.changed();
+          const prompt = str(item.prompt);
+          this.spawned(id, Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids[0] : undefined, prompt ? titleText(prompt) : '');
         }
         this.done(id);
         const { desc, tool: name } = describeCodexTool(tool, { prompt: item.prompt });
@@ -897,6 +929,8 @@ class RolloutLineParser {
         this.progress();
         return;
       }
+      case 'SubAgentActivity':
+        return this.subAgentActivity(id, item);
       case 'Plan':
         this.sawPaginated();
         this.push(describeTool('ExitPlanMode', {}), { key: id, tool: 'Plan' });
@@ -911,6 +945,49 @@ class RolloutLineParser {
       default:
         return;
     }
+  }
+
+  /** spawn_agent chamado: guarda o título do filho até o SubAgentActivity started (o mesmo call_id). */
+  private rememberSpawn(callId: string, title: string): void {
+    if (this.s.spawns.has(callId)) return;
+    this.s.spawns.set(callId, { title, counted: false });
+    if (this.s.spawns.size > MAX_PENDING) this.s.spawns.delete(this.s.spawns.keys().next().value as string);
+  }
+
+  /**
+   * Um filho nasceu (SubAgentActivity started ou CollabAgentToolCall spawn_agent): conta uma vez por id e emite o
+   * spawn com o título guardado do spawn_agent (senão `fallback`). Devolve o título ('' = sem título), ou undefined se
+   * esse id já tinha contado.
+   */
+  private spawned(id: string | undefined, child: unknown, fallback: string): string | undefined {
+    const known = id !== undefined ? this.s.spawns.get(id) : undefined;
+    if (known?.counted) return undefined;
+    const title = known?.title || fallback;
+    if (id !== undefined) {
+      this.s.spawns.set(id, { title, counted: true });
+      if (this.s.spawns.size > MAX_PENDING) this.s.spawns.delete(this.s.spawns.keys().next().value as string);
+    }
+    this.s.stats.subagents++;
+    this.changed();
+    if (title) this.out.signals.push(isThreadId(child) ? { type: 'spawn', childThreadId: child, title } : { type: 'spawn', title });
+    return title;
+  }
+
+  /**
+   * Multiagente v2: só o `started` interessa (conta o filho e emite o spawn; sem o spawn_agent visto, vira a atividade
+   * de delegar). interacted/completed/interrupted ficam de fora: sem atividade, contagem nem progress (o completed do
+   * filho chega no rollout do pai e não pode tirar a espera por aprovação dele).
+   */
+  private subAgentActivity(id: string | undefined, item: Rec): void {
+    if (item.kind !== 'started') return;
+    const seen = id !== undefined && this.s.spawns.has(id);
+    const task = agentTask(str(item.agent_path));
+    const title = this.spawned(id, item.agent_thread_id, task ? titleText(task) : '');
+    if (title === undefined) return;
+    this.done(id);
+    if (seen) return; // a atividade de delegar já saiu com o spawn_agent (mesmo id)
+    const { desc, tool } = describeCodexTool('spawn_agent', { message: title || undefined });
+    this.push(desc, { key: id, tool, callId: id });
   }
 
   /** Chamada concluída: sai da lista das em andamento e tira a espera por aprovação. */
@@ -1013,6 +1090,7 @@ class RolloutLineParser {
         const { desc, tool } = describeCodexTool(name, input, str(p.namespace));
         this.push(desc, { key: callId, tool, callId });
         if (name === 'request_user_input') this.ask(callId ?? this.autoKey(), input.questions);
+        if (name === 'spawn_agent' && callId) this.rememberSpawn(callId, spawnTitle(input));
         return;
       }
       case 'local_shell_call': {
@@ -1046,6 +1124,16 @@ class RolloutLineParser {
         if (this.paginated()) return;
         this.push(describeTool('WebSearch', { query: rec(p.action)?.query }), { tool: 'WebSearch' });
         return;
+      case 'agent_message': {
+        // Multiagente v2: a 1ª mensagem endereçada a um subagente (recipient /root/<tarefa>; fica no rollout dele) é a
+        // tarefa que o pai mandou e vira o título (não é prompt). Na raiz (recipient /root) são os resultados dos filhos.
+        const recipient = str(p.recipient);
+        const text = firstText(p.content);
+        if (this.s.title !== undefined || !text || !recipient || !/^\/root\/./.test(recipient)) return;
+        this.s.title = titleText(text);
+        this.changed();
+        return;
+      }
       default:
         return;
     }

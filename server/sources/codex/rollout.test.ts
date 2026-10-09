@@ -593,3 +593,88 @@ describe('update_plan dentro do exec do code mode (P10)', () => {
     expect(results.slice(2).map((r) => r.changed)).toEqual([false, false, false, false]);
   });
 });
+
+describe('multiagente v2: SubAgentActivity, spawn_agent e agent_message (P11)', () => {
+  const CHILD = threadId(20);
+  const CHILD2 = threadId(21);
+  const sub = (id: string, kind: string, child: string, path: string) => itemLine(T, 't', { type: 'SubAgentActivity', id, kind, agent_thread_id: child, agent_path: path }, AT);
+  /** response_item agent_message (gravado no rollout de quem recebe), com o bloco cifrado que o Codex põe junto. */
+  const agentMessage = (author: string, recipient: string, text: string) =>
+    JSON.stringify({
+      timestamp: new Date(AT).toISOString(),
+      type: 'response_item',
+      payload: { type: 'agent_message', id: 'amsg_1', author, recipient, content: [{ type: 'input_text', text }, { type: 'encrypted_content', encrypted_content: 'cifrado' }] },
+    });
+  const spawnsOf = (results: CodexLineResult[]) => signalsOf(results).filter((s) => s.type === 'spawn');
+  const childMeta = (extra: Record<string, unknown> = {}) => parseSessionMeta({ id: CHILD, session_id: T, source: SOURCES.sub(T, 'worker'), history_mode: 'paginated', ...extra });
+
+  it('pai: spawn_agent (fork_turns none) e o SubAgentActivity started contam um subagente e emitem um spawn com o id e o título do filho', () => {
+    const { state, results } = feed([
+      R.meta(T, { at: AT }),
+      R.taskStarted('t', AT),
+      R.functionCall('call_sp', 'spawn_agent', { task_name: 'revisar_testes', message: `Revise os testes de soma ${GHP}`, agent_type: 'explorer', fork_turns: 'none' }, AT, 'collaboration'),
+      sub('call_sp', 'started', CHILD, '/root/revisar_testes'),
+      R.functionOutput('call_sp', '{"task_name":"/root/revisar_testes"}', AT),
+    ]);
+    expect(acts(results).map((a) => [a.id, a.kind, a.text, a.tool])).toEqual([['acc:t#call_sp', 'delegate', 'Delegando: Revise os testes de soma gh*_***', 'Agent']]);
+    expect(spawnsOf(results)).toStrictEqual([{ type: 'spawn', childThreadId: CHILD, title: 'Revise os testes de soma gh*_***' }]);
+    expect(state.stats.subagents).toBe(1);
+  });
+
+  it('started sem o spawn_agent visto: atividade de delegar com o título pelo agent_path; o mesmo started relido não conta; interacted, completed e interrupted não geram nada', () => {
+    const { state, results } = feed([
+      R.meta(T),
+      sub('subagent-7', 'started', CHILD2, '/root/documentar'),
+      sub('subagent-7', 'started', CHILD2, '/root/documentar'),
+      sub('call_msg', 'interacted', CHILD2, '/root/documentar'),
+      sub('subagent-completed-tc', 'completed', CHILD2, '/root/documentar'),
+      sub('call_int', 'interrupted', CHILD2, '/root/documentar'),
+    ]);
+    expect(acts(results).map((a) => [a.id, a.kind, a.text, a.tool])).toEqual([['acc:t#subagent-7', 'delegate', 'Delegando: documentar', 'Agent']]);
+    expect(spawnsOf(results)).toStrictEqual([{ type: 'spawn', childThreadId: CHILD2, title: 'documentar' }]);
+    expect(state.stats.subagents).toBe(1);
+    // Nem progress: o completed do filho chega no rollout do pai e não tira a espera por aprovação dele.
+    expect(results.slice(2).flatMap((r) => r.signals)).toEqual([]);
+    expect(results.slice(2).map((r) => r.changed)).toEqual([false, false, false, false]);
+  });
+
+  it('CollabAgentToolCall spawn_agent entra na mesma conta: spawn pelo receiver (sem receiver, sem o id) e o started do mesmo id não conta de novo', () => {
+    const collab = (id: string, receivers: string[], prompt: string) =>
+      itemLine(T, 't', { type: 'CollabAgentToolCall', id, tool: 'spawn_agent', status: 'completed', sender_thread_id: T, receiver_thread_ids: receivers, receiver_agents: [], agents_states: {}, prompt }, AT);
+    const { state, results } = feed([R.meta(T), collab('call_v1', [CHILD], 'Documente o módulo de soma'), sub('call_v1', 'started', CHILD, '/root/documentar'), collab('call_v2', [], 'Revise o README')]);
+    expect(spawnsOf(results)).toStrictEqual([
+      { type: 'spawn', childThreadId: CHILD, title: 'Documente o módulo de soma' },
+      { type: 'spawn', title: 'Revise o README' },
+    ]);
+    expect(state.stats.subagents).toBe(2);
+  });
+
+  it('filho: a 1ª agent_message endereçada a ele (a tarefa) vira o título, mascarada e sem atividade, também só com o estado; o follow-up não troca', () => {
+    const { state, results } = feed(
+      [R.taskStarted('tc', AT), agentMessage('/root', '/root/revisar_testes', `Revise os testes de soma ${GHP}`), agentMessage('/root', '/root/revisar_testes', 'Agora documente o módulo')],
+      createCodexState(childMeta()),
+    );
+    expect(state.title).toBe('Revise os testes de soma gh*_***');
+    expect(results.map((r) => r.changed)).toEqual([false, true, false]);
+    expect(ids(results)).toEqual([]);
+    const quiet = createCodexState(childMeta());
+    parseRolloutLine(quiet, agentMessage('/root', '/root/revisar_testes', 'Liste os arquivos de src'), { idPrefix: '', now: 0, activities: false });
+    expect(quiet.title).toBe('Liste os arquivos de src');
+  });
+
+  it('raiz: a mensagem de um filho não vira título; herança do fork (ordinal < historyStart) não conta, não emite spawn nem dá título', () => {
+    const root = feed([R.meta(T), agentMessage('/root/revisar_testes', '/root', 'Terminei: 3 testes corrigidos')]);
+    expect(root.state.title).toBeUndefined();
+    const { state, results } = feed(
+      [
+        withOrdinal(sub('call_old', 'started', CHILD2, '/root/antigo'), 2),
+        withOrdinal(agentMessage('/root', '/root/antigo', 'Tarefa herdada do pai'), 3),
+        withOrdinal(agentMessage('/root', '/root/revisar_testes', 'Tarefa do filho'), 6),
+      ],
+      createCodexState(childMeta({ subagent_history_start_ordinal: 5 })),
+    );
+    expect(state.stats.subagents).toBe(0);
+    expect(spawnsOf(results)).toEqual([]);
+    expect(state.title).toBe('Tarefa do filho');
+  });
+});
