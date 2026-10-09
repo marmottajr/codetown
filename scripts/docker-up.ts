@@ -16,7 +16,10 @@
 //    desliga): SOMENTE sessions/, archived_sessions/, thread-writer-locks/ e o arquivo session_index.jsonl de cada
 //    uma (os que existirem; a pasta sem sessions/ fica de fora), somente leitura, em /codex/<conta>/... — nunca
 //    auth.json, config.toml, shell_snapshots/, history.jsonl, logs nem os SQLite. Vão em HABBLAUD_CODEX_DIRS
-//    e, com `provider: 'codex'` e a pasta do HOST (onde o `codex queue` roda), em HABBLAUD_ACCOUNTS.
+//    e, com `provider: 'codex'` e a pasta do HOST (onde o `codex queue` roda), em HABBLAUD_ACCOUNTS. Com alguma conta
+//    do Codex montada, também a chave local do hook do Codex (~/.habblaud/codex-hook.key, criada se faltar; só o
+//    arquivo, somente leitura) em /keys/codex-hook.key, com o caminho em HABBLAUD_CODEX_HOOK_KEY: no container, os
+//    eventos do hook chegam pelo gateway e só valem com a prova dessa chave.
 // 3. Migra o que sobrou do nome antigo (CodeTown, até a 0.3.2): ~/.codetown vira ~/.habblaud, o container
 //    `codetown` e a rede codetown_default saem e, se o volume novo ainda não existe, os dados de
 //    codetown_codetown-data são copiados para ele (o antigo fica, para apagar à mão). Avisa de CODETOWN_*
@@ -37,6 +40,7 @@ import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AccountInfo, SourceInfo } from '../shared/types';
 import { codexDirsRefused, detectAccounts, discoverClaudeDirs, type DetectedAccount } from '../server/accounts/detect';
+import { HOOK_KEY_FILE, loadHookKey } from '../server/codex/key';
 import { detectCodexAccounts, discoverCodexDirs } from '../server/sources/codex/accounts';
 import { describeStateMigration, LEGACY_NAME, legacyEnvWarning, migrateLegacyStateDir } from '../server/legacy';
 import { makeClaudeRunner, MIN_CLAUDE_VERSION, readPackageVersion, updateInstalledMods, type ModUpdateResult } from './mod-install';
@@ -69,6 +73,11 @@ export const CODEX_MOUNTED_SUBDIRS = ['sessions', 'archived_sessions', 'thread-w
  * próximo docker:up (o servidor tolera título ausente ou desatualizado).
  */
 export const CODEX_MOUNTED_FILES = ['session_index.jsonl'] as const;
+/**
+ * Onde a chave local do hook do Codex (server/codex/key.ts) aparece no container. O nome do arquivo tem de ser o
+ * HOOK_KEY_FILE: o servidor lê a pasta de HABBLAUD_CODEX_HOOK_KEY com loadHookKey.
+ */
+const CONTAINER_HOOK_KEY = posix.join('/keys', HOOK_KEY_FILE);
 const DEFAULT_PORT = 4747;
 const HEALTH_TIMEOUT_MS = 120_000;
 /** Imagem e volume de dados como o Compose os nomeia (`name: habblaud` no docker-compose.yml). */
@@ -340,14 +349,23 @@ export function hostTimeZone(env: NodeJS.ProcessEnv = process.env): string | und
 /**
  * `usageDir`: pasta do host com o uso capturado pelo tap de statusline (já existente; caminho real),
  * montada somente leitura em /usage. `timeZone`: fuso do host, repassado como TZ. `codex`: montagens das contas do
- * Codex (planCodexMounts).
+ * Codex (planCodexMounts). `hookKey`: caminho real, no host, da chave local do hook do Codex (só o arquivo), montada
+ * somente leitura em /keys/codex-hook.key, com esse caminho em HABBLAUD_CODEX_HOOK_KEY.
  */
-export function renderOverride(mounts: AccountMount[], generatedAt: Date = new Date(), usageDir?: string, timeZone?: string, codex: AccountMount[] = []): string {
+export function renderOverride(
+  mounts: AccountMount[],
+  generatedAt: Date = new Date(),
+  usageDir?: string,
+  timeZone?: string,
+  codex: AccountMount[] = [],
+  hookKey?: string,
+): string {
   const env: Array<[string, string]> = [
     ['HABBLAUD_CLAUDE_DIRS', mounts.map((m) => m.mountDir).join(',')],
     ['HABBLAUD_ACCOUNTS', JSON.stringify([...accountsPayload(mounts), ...codexAccountsPayload(codex)])],
   ];
   if (codex.length) env.push(['HABBLAUD_CODEX_DIRS', codex.map((m) => m.mountDir).join(',')]);
+  if (hookKey) env.push(['HABBLAUD_CODEX_HOOK_KEY', CONTAINER_HOOK_KEY]);
   if (usageDir) env.push(['HABBLAUD_USAGE_DIR', CONTAINER_USAGE_DIR]);
   if (timeZone) env.push(['TZ', timeZone]);
   const lines = [
@@ -357,12 +375,14 @@ export function renderOverride(mounts: AccountMount[], generatedAt: Date = new D
     ...(codex.length
       ? ['# Codex: SOMENTE <pasta>/sessions, <pasta>/archived_sessions, <pasta>/thread-writer-locks e <pasta>/session_index.jsonl, somente leitura.']
       : []),
+    ...(hookKey ? ['# Chave do hook do Codex: SOMENTE o arquivo ~/.habblaud/codex-hook.key, somente leitura.'] : []),
     'services:',
     `  ${SERVICE}:`,
     '    environment:',
     ...env.map(([k, v]) => `      ${k}: ${yamlString(v)}`),
   ];
   const binds = [...mounts, ...codex].flatMap((m) => m.binds);
+  if (hookKey) binds.push({ source: hookKey, target: CONTAINER_HOOK_KEY });
   if (usageDir) binds.push({ source: usageDir, target: CONTAINER_USAGE_DIR });
   if (binds.length) {
     lines.push('    volumes:');
@@ -523,6 +543,18 @@ function ensureUsageDir(): string | undefined {
     warn(`não consegui criar ${tildify(USAGE_DIR)} (${(err as Error).message}); o uso do statusline não vai aparecer no container.`);
     return undefined;
   }
+}
+
+/**
+ * Chave local do hook do Codex no host (server/codex/key.ts: 32 bytes, criada com modo 0600 se faltar), que o hook lê em
+ * ~/.habblaud. Roda depois da migração do ~/.codetown (criar ~/.habblaud antes impediria o rename). Devolve o caminho
+ * real do arquivo, ou undefined com um aviso.
+ */
+function ensureHookKey(): string | undefined {
+  const file = join(STATE_DIR, HOOK_KEY_FILE);
+  const real = loadHookKey(STATE_DIR, { create: true }) ? realFile(file) : undefined;
+  if (!real) warn(`não consegui ler nem criar ${tildify(file)} (precisa ter 32 bytes; apague para recriar); no container, os eventos do hook do Codex vão ser recusados.`);
+  return real;
 }
 
 function tildify(p: string): string {
@@ -729,8 +761,11 @@ async function up(opts: Options, port: number): Promise<void> {
   migrateStateDir();
   const usageDir = ensureUsageDir();
   if (usageDir) say(`Uso ao vivo (mod ou tap de statusline): monta ${tildify(USAGE_DIR)} em ${CONTAINER_USAGE_DIR}, somente leitura.`);
+  // Só com alguma conta do Codex montada (HABBLAUD_CODEX=0 não monta nada do Codex).
+  const hookKey = codexMounts.length ? ensureHookKey() : undefined;
+  if (hookKey) say(`Chave do hook do Codex: monta ${tildify(join(STATE_DIR, HOOK_KEY_FILE))} em ${CONTAINER_HOOK_KEY}, somente leitura.`);
   const tmp = `${OVERRIDE_FILE}.tmp`;
-  writeFileSync(tmp, renderOverride(mounts, new Date(), usageDir, hostTimeZone(), codexMounts), { mode: 0o600 });
+  writeFileSync(tmp, renderOverride(mounts, new Date(), usageDir, hostTimeZone(), codexMounts, hookKey), { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, OVERRIDE_FILE);
   say('docker-compose.override.yml gerado.');

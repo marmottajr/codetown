@@ -333,3 +333,28 @@ describe('docker-up: Codex — índice das sessões, conta sem sessions/ e HABBL
     expect(yml).toMatch(/^ {6}HABBLAUD_CODEX: \$\{HABBLAUD_CODEX:-\}\r?$/m);
   });
 });
+
+describe('docker-up: chave local do hook do Codex', () => {
+  const codex = planCodexMounts(['/Users/fulano/.codex'], [{ id: '.codex', provider: 'codex', configDir: '/Users/fulano/.codex', short: 'CX', name: 'Codex', color: '#5cc97b' }], (p, kind) =>
+    kind === 'dir' && slash(p).endsWith('/sessions') ? slash(p) : undefined,
+  );
+
+  it('monta SÓ o arquivo da chave, somente leitura e sem criar nada no host, em /keys/codex-hook.key, e passa o caminho em HABBLAUD_CODEX_HOOK_KEY', () => {
+    const yml = renderOverride([], new Date(0), undefined, undefined, codex, '/Users/fu$lano/.habblaud/codex-hook.key');
+    expect(yml).toContain('HABBLAUD_CODEX_HOOK_KEY: "/keys/codex-hook.key"');
+    expect(yml).toContain(
+      '      - type: bind\n        source: "/Users/fu$$lano/.habblaud/codex-hook.key"\n        target: "/keys/codex-hook.key"\n        read_only: true\n        bind:\n          create_host_path: false',
+    );
+    expect(yml.match(/read_only: true/g)).toHaveLength(2);
+    expect(yml.match(/create_host_path: false/g)).toHaveLength(2);
+    // Nunca a pasta ~/.habblaud inteira (lá ficam nomes, uso e linha do tempo).
+    expect(yml).not.toContain('source: "/Users/fu$$lano/.habblaud"');
+  });
+
+  it('sem a chave (Codex desligado, sem contas do Codex ou falha ao criar): nada de chave no override', () => {
+    for (const yml of [renderOverride([], new Date(0), undefined, undefined, codex), renderOverride([], new Date(0))]) {
+      expect(yml).not.toContain('HABBLAUD_CODEX_HOOK_KEY');
+      expect(yml).not.toContain('codex-hook.key');
+    }
+  });
+});

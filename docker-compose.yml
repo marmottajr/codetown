@@ -8,7 +8,9 @@
 #   - do Codex, SOMENTE <pasta>/sessions, <pasta>/archived_sessions, <pasta>/thread-writer-locks e o arquivo
 #     <pasta>/session_index.jsonl em /codex/<conta>/... (nunca a pasta inteira: auth.json, config.toml,
 #     history.jsonl, logs e os bancos SQLite ficam no host); a pasta sem sessions/ fica de fora;
-#   - HABBLAUD_CLAUDE_DIRS, HABBLAUD_CODEX_DIRS, HABBLAUD_ACCOUNTS e HABBLAUD_USAGE_DIR.
+#   - com alguma conta do Codex, SÓ o arquivo ~/.habblaud/codex-hook.key (a chave local do hook do Codex, criada se
+#     faltar) em /keys/codex-hook.key, somente leitura;
+#   - HABBLAUD_CLAUDE_DIRS, HABBLAUD_CODEX_DIRS, HABBLAUD_CODEX_HOOK_KEY, HABBLAUD_ACCOUNTS e HABBLAUD_USAGE_DIR.
 # O Compose mescla o override automaticamente em qualquer `docker compose ...` rodado nesta pasta.
 name: habblaud
 
