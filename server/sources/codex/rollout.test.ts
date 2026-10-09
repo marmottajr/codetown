@@ -278,6 +278,23 @@ describe('rollout do Codex: comandos do PowerShell e do cmd (P5)', () => {
     expect(state.stats.toolCalls).toBe(6);
   });
 
+  it('sequência real (function_call e depois o CommandExecution de mesmo id): só a reclassificação pede para substituir', () => {
+    const at = Date.parse('2026-10-09T12:00:00Z');
+    const read = [{ type: 'read', cmd: 'Get-Content src/soma.ts', name: 'soma.ts', path: 'src/soma.ts' }];
+    const { results } = feed([
+      R.functionCall('call_1', 'exec_command', { cmd: 'Get-Content src/soma.ts' }, at),
+      execItem('call_1', ['pwsh.exe', '-Command', 'Get-Content src/soma.ts'], { parsed: read }),
+      R.functionCall('call_2', 'exec_command', { cmd: 'npm test' }, at + 2),
+      execItem('call_2', ['pwsh.exe', '-Command', 'npm test']),
+    ]);
+    expect(results.flatMap((r) => r.activities.map((a) => [a.activity.id, a.activity.kind, a.replace]))).toEqual([
+      ['acc:t#call_1', 'run', undefined],
+      ['acc:t#call_1', 'read', true],
+      ['acc:t#call_2', 'test', undefined],
+      ['acc:t#call_2', 'test', undefined],
+    ]);
+  });
+
   it('GitHub: push e PR detectados no comando desembrulhado (pwsh e cmd)', () => {
     const ok = 'To github.com:o/r.git\n   abc1234..def5678  main -> main\n';
     const { results } = feed([
@@ -431,6 +448,15 @@ describe('segredos mascarados antes do corte do detalhe de erro (P15)', () => {
       expect(d).toContain(masked);
       expect(d).not.toContain(leak);
     }
+  });
+
+  it.each([tokens[0], tokens[2]])('busca do parsed_cmd: o token que vira %s não vaza no texto (o Grep corta em 26)', (masked, token, leak) => {
+    const { results } = feed([execItem('s1', ['pwsh.exe', '-Command', 'Select-String x'], { parsed: [{ type: 'search', cmd: 'Select-String x', query: `usage of ${token}` }] })]);
+    const [search] = acts(results);
+    expect(search).toMatchObject({ kind: 'search', tool: 'Bash' });
+    expect(search.text).toContain(masked);
+    expect(search.text).not.toContain(leak);
+    expect(search.detail).not.toContain(leak);
   });
 });
 

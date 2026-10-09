@@ -179,20 +179,20 @@ export function commandText(cmd: unknown): string {
 const EXPLORE_CMD = new Set(['read', 'list_files', 'search']);
 
 /**
- * Atividade de um comando concluído. O `parsed_cmd` do CommandExecution (uma entrada por segmento do comando) só
- * muda o tipo quando todas as entradas são leitura, listagem ou busca (`ls && npm test` continua um comando); vale a
- * primeira. Sem isso, a heurística do Bash sobre o comando desembrulhado.
+ * Tipo de um comando concluído pelo `parsed_cmd` do CommandExecution (uma entrada por segmento do comando): só
+ * quando todas as entradas são leitura, listagem ou busca (`ls && npm test` continua um comando); vale a primeira.
+ * undefined = fica a heurística do Bash sobre o comando desembrulhado.
  */
-function commandActivity(command: string, parsed: unknown): ActivityDescription {
+function parsedCmdActivity(parsed: unknown): ActivityDescription | undefined {
   const list = Array.isArray(parsed) ? parsed.map(rec) : [];
   const first = list[0];
-  if (first && list.every((p) => p && EXPLORE_CMD.has(String(p.type)))) {
-    const path = str(first.path) ?? str(first.name);
-    if (first.type === 'read' && path) return describeTool('Read', { file_path: path });
-    if (first.type === 'list_files') return describeTool('LS', { path: path ?? '' });
-    if (first.type === 'search') return describeTool('Grep', { pattern: str(first.query) ?? '' });
-  }
-  return describeTool('Bash', { command });
+  if (!first || !list.every((p) => p && EXPLORE_CMD.has(String(p.type)))) return undefined;
+  const path = str(first.path) ?? str(first.name);
+  if (first.type === 'read' && path) return describeTool('Read', { file_path: path });
+  if (first.type === 'list_files') return describeTool('LS', { path: path ?? '' });
+  // Mascara antes: o Grep corta a busca em 26 antes da máscara e o começo de um token vazaria no texto.
+  if (first.type === 'search') return describeTool('Grep', { pattern: maskSecrets((str(first.query) ?? '').slice(0, 600)) });
+  return undefined;
 }
 
 /** Arquivos tocados por um patch do apply_patch ("*** Add File: x", "*** Update File: y", "*** Delete File: z"). */
@@ -530,7 +530,7 @@ class RolloutLineParser {
 
   private autoKeys = 0;
 
-  private push(desc: ActivityDescription, opts: { key?: string; tool?: string; current?: boolean; durationMs?: number; callId?: string } = {}): void {
+  private push(desc: ActivityDescription, opts: { key?: string; tool?: string; current?: boolean; durationMs?: number; callId?: string; replace?: boolean } = {}): void {
     if (!this.withActivities) return;
     const key = opts.key ?? this.autoKey();
     const activity: Activity = { id: `${this.ctx.idPrefix}#${key}`, at: this.at, ...desc };
@@ -538,7 +538,9 @@ class RolloutLineParser {
     if (opts.durationMs !== undefined) activity.durationMs = opts.durationMs;
     if (desc.kind === 'error') activity.error = true;
     const current = opts.current ?? true;
-    this.out.activities.push(opts.callId ? { activity, current, toolUseId: opts.callId } : { activity, current });
+    const parsed: ParsedActivity = opts.callId ? { activity, current, toolUseId: opts.callId } : { activity, current };
+    if (opts.replace) parsed.replace = true;
+    this.out.activities.push(parsed);
     if (current) this.s.current = { id: activity.id, kind: desc.kind, at: this.at, callId: opts.callId };
   }
 
@@ -795,7 +797,10 @@ class RolloutLineParser {
     const command = commandText(c.command);
     this.done(c.id);
     const key = c.id ?? this.autoKey();
-    this.push(commandActivity(command, c.parsed), { key, tool: 'Bash', callId: c.id });
+    // O function_call (ou o hook PreToolUse) de mesmo id já pôs no escritório a heurística do Bash: o tipo vindo do
+    // parsed_cmd pede para substituí-la (sem isso o escritório fica com a primeira).
+    const parsed = parsedCmdActivity(c.parsed);
+    this.push(parsed ?? describeTool('Bash', { command }), { key, tool: 'Bash', callId: c.id, replace: parsed !== undefined });
     if (c.status === 'declined') {
       this.push(SPECIAL.rejected('Bash'), { key: `${key}:r` });
       return;

@@ -436,6 +436,32 @@ describe('Office', () => {
     expect(a.recent.filter((x) => x.kind === 'done')).toHaveLength(1);
   });
 
+  it('mesmo id: sem replace fica a 1ª; com replace troca no lugar (mesmo horário), sem item novo no feed', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    const t0 = now();
+    office.addActivity('acc:1', { ...act('c1', t0, 'run'), text: 'Rodando Get-Content' }, true);
+    office.addActivity('acc:1', act('outra', t0 + 1), false);
+    office.commit();
+    advance(1_000);
+    office.addActivity('acc:1', { ...act('c1', now()), text: 'Lendo soma.ts' }, true);
+    expect(office.get('acc:1')!.activity).toMatchObject({ id: 'c1', text: 'Rodando Get-Content' });
+    office.addActivity('acc:1', { ...act('c1', now()), text: 'Lendo soma.ts' }, true, { replace: true });
+    const a = office.get('acc:1')!;
+    expect(a.activity).toEqual({ ...act('c1', t0), text: 'Lendo soma.ts' });
+    expect(a.recent.map((x) => [x.id, x.text])).toEqual([
+      ['c1', 'Lendo soma.ts'],
+      ['outra', 'Lendo x'],
+    ]);
+    expect(office.detail('acc:1')!.history.map((x) => x.id)).toEqual(['c1', 'outra']);
+    const r = office.commit();
+    expect(r.changed).toBe(true);
+    expect(r.feed).toEqual([]);
+    // Id novo com replace: entra como sempre.
+    office.addActivity('acc:1', act('c2', now()), true, { replace: true });
+    expect(office.commit().feed.map((f) => f.id)).toEqual(['c2']);
+  });
+
   it('ocupado com o balão ainda em "Concluiu" antigo: mostra que acompanha os subagentes (fora do feed)', () => {
     const { office, advance, now } = makeOffice();
     office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });

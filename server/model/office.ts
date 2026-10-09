@@ -670,9 +670,10 @@ export class Office {
 
   /**
    * Registra uma atividade. `feed: false` = só histórico (ex.: releitura do fim de um transcript
-   * antigo ao abrir uma sessão retomada — não é novidade para o feed ao vivo).
+   * antigo ao abrir uma sessão retomada — não é novidade para o feed ao vivo). `replace`: troca no lugar a de mesmo id
+   * que já esteja lá (sem isso, fica a primeira).
    */
-  addActivity(id: string, activity: Activity, current: boolean, opts: { feed?: boolean; filler?: boolean } = {}): void {
+  addActivity(id: string, activity: Activity, current: boolean, opts: { feed?: boolean; filler?: boolean; replace?: boolean } = {}): void {
     const rec = this.agents.get(id);
     if (!rec) return;
     const info = rec.info;
@@ -689,7 +690,19 @@ export class Office {
       return;
     }
     // Releitura de um transcript regravado: não duplica o que já está no histórico.
-    if (info.recent.some((a) => a.id === activity.id)) return;
+    const old = info.recent.find((a) => a.id === activity.id);
+    if (old) {
+      if (!opts.replace) return;
+      // A mesma chamada mais bem descrita (Codex: o parsed_cmd do comando concluído): no lugar, com o horário de
+      // antes e sem item novo no feed.
+      const replaced: Activity = { ...activity, at: old.at };
+      const swap = (list: Activity[]) => list.map((a) => (a.id === replaced.id ? replaced : a));
+      info.recent = swap(info.recent);
+      rec.history = swap(rec.history);
+      if (info.activity?.id === replaced.id) info.activity = replaced;
+      this.markDirty();
+      return;
+    }
     if (activity.kind !== 'done') delete rec.synthDone;
     info.recent = [...info.recent, activity].slice(-RECENT_LIMIT);
     rec.history.push(activity);

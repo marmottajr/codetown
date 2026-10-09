@@ -475,6 +475,83 @@ describe('fonte do Codex: eventos de hook', () => {
   });
 });
 
+describe('fonte do Codex: parsed_cmd reclassifica o comando que já estava no escritório', () => {
+  /** CommandExecution do pwsh com o parsed_cmd dado (o R.command grava sempre `zsh -lc` e parsed unknown). */
+  function execParsed(id: string, script: string, parsed: unknown[], at: number): string {
+    const j = JSON.parse(R.command(T, 'turn1', id, script, { at, output: 'ok' }));
+    j.payload.item.command = ['pwsh.exe', '-Command', script];
+    j.payload.item.parsed_cmd = parsed;
+    return JSON.stringify(j);
+  }
+  const read = [{ type: 'read', cmd: 'Get-Content src/soma.ts', name: 'soma.ts', path: 'src/soma.ts' }];
+  const ofCall = (ctx: ReturnType<typeof setup>) => ctx.office.detail(KEY)!.history.filter((a) => a.id === `${KEY}#call_9`);
+
+  it('ao vivo: function_call exec_command e depois o CommandExecution de mesmo id viram uma leitura, sem duplicar', () => {
+    const ctx = setup();
+    const t0 = ctx.now();
+    const path = ctx.home.rollout(T, [R.meta(T, { at: t0 - 5_000, cwd: '/projetos/loja' }), R.taskStarted('turn1', t0 - 4_000)]);
+    ctx.home.lock(T, t0 - 5_000);
+    ctx.source.boot();
+    ctx.home.append(path, [R.functionCall('call_9', 'exec_command', { cmd: 'Get-Content src/soma.ts', workdir: '/projetos/loja' }, ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.activity).toMatchObject({ id: `${KEY}#call_9`, kind: 'run' });
+    ctx.advance(1_000);
+    ctx.home.append(path, [execParsed('call_9', 'Get-Content src/soma.ts', read, ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.activity).toMatchObject({ id: `${KEY}#call_9`, kind: 'read', text: 'Lendo soma.ts', tool: 'Bash' });
+    expect(ofCall(ctx)).toHaveLength(1);
+    expect(ofCall(ctx)[0]).toMatchObject({ kind: 'read', at: t0 });
+    expect(ctx.office.recentFeed(50).filter((f) => f.id === `${KEY}#call_9`)).toHaveLength(1);
+  });
+
+  it('carga inicial (backlog): a mesma sequência já gravada também termina como leitura', () => {
+    const ctx = setup();
+    const t0 = ctx.now();
+    ctx.home.rollout(T, [
+      R.meta(T, { at: t0 - 5_000, cwd: '/projetos/loja' }),
+      R.taskStarted('turn1', t0 - 4_000),
+      R.functionCall('call_9', 'exec_command', { cmd: 'Get-Content src/soma.ts' }, t0 - 3_000),
+      execParsed('call_9', 'Get-Content src/soma.ts', read, t0 - 2_000),
+    ]);
+    ctx.home.lock(T, t0 - 5_000);
+    ctx.source.boot();
+    expect(ofCall(ctx)).toHaveLength(1);
+    expect(ofCall(ctx)[0]).toMatchObject({ kind: 'read', text: 'Lendo soma.ts' });
+  });
+
+  it('com o hook: PreToolUse chega antes do rollout e o item concluído ainda reclassifica', () => {
+    const ctx = setup();
+    ctx.source.boot();
+    ctx.hook({ hook_event_name: 'SessionStart', session_id: T, cwd: '/projetos/loja', transcript_path: null, model: 'gpt-teste-codex', source: 'startup' });
+    ctx.hook({ hook_event_name: 'PreToolUse', session_id: T, cwd: '/projetos/loja', transcript_path: null, turn_id: 'turn1', tool_name: 'Bash', tool_use_id: 'call_9', tool_input: { command: 'Get-Content src/soma.ts' } });
+    expect(ctx.agent()?.activity).toMatchObject({ id: `${KEY}#call_9`, kind: 'run' });
+    ctx.advance(10);
+    const path = ctx.home.rollout(T, [R.meta(T, { at: ctx.now() - 5_000, cwd: '/projetos/loja' }), R.taskStarted('turn1', ctx.now() - 4_000)]);
+    ctx.home.lock(T, ctx.now() - 5_000);
+    ctx.advance(3_100);
+    ctx.poll();
+    ctx.home.append(path, [R.functionCall('call_9', 'exec_command', { cmd: 'Get-Content src/soma.ts' }, ctx.now()), execParsed('call_9', 'Get-Content src/soma.ts', read, ctx.now() + 1)]);
+    ctx.poll();
+    expect(ctx.agent()?.activity).toMatchObject({ id: `${KEY}#call_9`, kind: 'read', text: 'Lendo soma.ts' });
+    expect(ofCall(ctx)).toHaveLength(1);
+  });
+
+  it('comando sem reclassificação (parsed unknown) continua com a atividade que chegou primeiro', () => {
+    const ctx = setup();
+    const t0 = ctx.now();
+    const path = ctx.home.rollout(T, [R.meta(T, { at: t0 - 5_000, cwd: '/projetos/loja' }), R.taskStarted('turn1', t0 - 4_000)]);
+    ctx.home.lock(T, t0 - 5_000);
+    ctx.source.boot();
+    ctx.home.append(path, [R.functionCall('call_9', 'exec_command', { cmd: 'npm test' }, ctx.now())]);
+    ctx.poll();
+    const first = ofCall(ctx)[0];
+    ctx.advance(1_000);
+    ctx.home.append(path, [execParsed('call_9', 'npm test', [{ type: 'unknown', cmd: 'npm test' }], ctx.now())]);
+    ctx.poll();
+    expect(ofCall(ctx)).toEqual([first]);
+  });
+});
+
 describe('fonte do Codex: contas', () => {
   it('duas contas: nomes "Codex X", letras e cores sem colidir; ids devolvidos pelo AccountsService', () => {
     const ctx = setup({ names: ['.codex', '.codex-trabalho'] });

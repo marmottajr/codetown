@@ -104,6 +104,11 @@ export interface ParsedActivity {
   current: boolean;
   /** Chamada de ferramenta que originou a atividade, quando houver. */
   toolUseId?: string;
+  /**
+   * Substitui a atividade de mesmo id que já esteja no escritório (sem isso, fica a primeira). Só o Codex usa: o
+   * comando em andamento (function_call ou hook) chega antes e o item concluído o descreve melhor (parsed_cmd).
+   */
+  replace?: boolean;
 }
 
 export interface TranscriptState {

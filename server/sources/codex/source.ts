@@ -650,7 +650,7 @@ export class CodexSource implements AgentSource, CodexLive {
 
   private toOffice(t: ThreadTracker, r: CodexLineResult, live: boolean): void {
     const office = this.opts.office;
-    for (const a of r.activities) office.addActivity(t.key, a.activity, a.current, { feed: live });
+    for (const a of r.activities) office.addActivity(t.key, a.activity, a.current, { feed: live, replace: a.replace });
     for (const sig of r.signals) {
       // Só o que chega ao vivo anima a sala; a carga inicial vai para o histórico.
       if (sig.type === 'github') office.githubEvent(t.key, sig.event, { key: sig.key, at: r.at, live });
