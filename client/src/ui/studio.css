@@ -1,0 +1,127 @@
+/* Janela do Arquiteto (ui/studio.ts). Usa as variáveis e os botões do styles.css. */
+
+.ui-dialog.ui-studio {
+  width: min(680px, calc(100vw - 32px));
+}
+
+.ui-studio__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+
+.ui-studio__body h3 {
+  margin: 8px 0 0;
+}
+
+.ui-studio__intro,
+.ui-studio__hint,
+.ui-studio__where,
+.ui-studio__summary {
+  margin: 0;
+  color: var(--ui-muted);
+}
+
+.ui-studio__agent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ui-studio__hint {
+  flex: 1 1 220px;
+  font-size: 12px;
+}
+
+.ui-studio__dir {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ui-studio__problems {
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border-radius: 8px;
+  background: rgba(255, 190, 80, 0.08);
+  border: 1px solid rgba(255, 190, 80, 0.25);
+  font-size: 12px;
+}
+
+.ui-studio__problems li.is-error {
+  color: #ff9a8a;
+}
+
+.ui-studio__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-studio__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--ui-line);
+}
+
+.ui-studio__name {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-studio__name span {
+  font-size: 12px;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
+
+.ui-studio__thumb {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--ui-bg-soft);
+}
+
+.ui-studio__thumb :is(canvas, img) {
+  max-width: 36px;
+  max-height: 36px;
+  image-rendering: pixelated;
+}
+
+.ui-studio__empty {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.ui-studio__foot {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.ui-studio__foot a.ui-btn,
+.ui-studio__row a.ui-btn {
+  text-decoration: none;
+}
+
+.ui-studio__msg {
+  margin: 0;
+  font-size: 12px;
+}
+
+.ui-studio__msg.is-error {
+  color: #ff9a8a;
+}

@@ -1,6 +1,6 @@
 // Representação visual das áreas: caches estáticos (piso, paredes, itens de parede fixos) e
 // listas de móveis/itens dinâmicos prontos para o desenho por frame.
-import { FURNITURE, TILE, type ArtModule, type FurnitureKind, type FurnitureSprites, type Sprite } from '../../art/api';
+import { furnitureDef, TILE, type ArtModule, type FurnitureKind, type FurnitureSprites, type Sprite } from '../../art/api';
 import { hash32 } from '../../../../shared/hash';
 import type { AreaLayout, WallItemPlacement, WallSegment } from '../layout/types';
 import type { RoomState } from '../sim/room-state';
@@ -259,7 +259,7 @@ export function buildAreaVis(art: ArtModule, layout: AreaLayout, room: RoomState
 
   // ---- móveis
   const furniture: FurnVis[] = layout.furniture.map((f) => {
-    const def = FURNITURE[f.kind];
+    const def = furnitureDef(f.kind);
     const ax = (f.tx + def.footprint.w / 2) * TILE + (f.dx ?? 0);
     const ay = (f.ty + def.footprint.h) * TILE + (f.dy ?? 0);
     return {

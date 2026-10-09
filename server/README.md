@@ -337,6 +337,7 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0`, `false`, `off` ou `no` desligam só as mensagens pelo escritório |
 | `HABBLAUD_CLAUDE_DIRS` | — | config dirs separados por vírgula; substitui a detecção (`~/.claude*` com `projects/` ou `sessions/` + `CLAUDE_CONFIG_DIR`) |
 | `HABBLAUD_DATA_DIR` | `~/.habblaud` (Docker: `/data`) | estado do Habblaud (nomes persistidos em `names.json`, linha do tempo em `timeline/`, estatísticas do Meu dia em `stats/`, última verificação de versão em `updates.json`) |
+| `HABBLAUD_ASSETS_DIR` | `<HABBLAUD_DATA_DIR>/assets` | assets do usuário criados pelo Arquiteto: itens (`items/<id>/item.json` + PNG), salas (`rooms/<id>.json`) e `office.json`; o servidor observa a pasta, valida (shared/assets.ts), escreve o `STATUS.md` e o snapshot avisa o cliente (`meta.assets`). Rotas em `/api/assets/*` (http/assets.ts) |
 | `HABBLAUD_TIMELINE` | ligado | `0` desliga a gravação da linha do tempo do timelapse |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (releases do repositório do `package.json` no GitHub, a cada 6 h) |
 | `HABBLAUD_DEMO` | desligado | `1` liga o modo demonstração ao iniciar |

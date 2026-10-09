@@ -47,6 +47,8 @@ export interface ApiDeps {
    * Ausente = desligado (Docker, sem node-pty, HABBLAUD_PTY=0 ou sem bind local).
    */
   pty?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
+  /** Assets do usuário e o Arquiteto (/api/assets/*, http/assets.ts). */
+  assets?: (req: IncomingMessage, res: ServerResponse, url: URL) => void;
   /**
    * Fonte do Codex ao vivo: recebe os eventos dos hooks do Codex (POST /api/codex/events, server/codex/http.ts). Sem
    * ela a rota responde {ok: false}. Só com Host local e, fora do Docker, conexão pelo loopback (os eventos só observam:
@@ -111,7 +113,7 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
 }
 
 /** Lê o corpo JSON. Exige `Content-Type: application/json` (barreira contra CSRF; ver http/guard.ts). */
-export function readJson(req: IncomingMessage): Promise<unknown> {
+export function readJson(req: IncomingMessage, max = MAX_BODY): Promise<unknown> {
   if (!isJsonContentType(req.headers['content-type'])) {
     req.resume();
     return Promise.reject(new HttpError(415, 'envie o corpo como JSON (Content-Type: application/json)'));
@@ -122,11 +124,11 @@ export function readJson(req: IncomingMessage): Promise<unknown> {
     req.on('data', (c: Buffer) => {
       size += c.length;
       // Grande demais: continua drenando (sem guardar) para conseguir responder 413.
-      if (size > MAX_BODY) return void fail(new HttpError(413, 'corpo grande demais'));
+      if (size > max) return void fail(new HttpError(413, 'corpo grande demais'));
       chunks.push(c);
     });
     req.on('end', () => {
-      if (size > MAX_BODY) return;
+      if (size > max) return;
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw.trim()) return ok({});
       try {
@@ -296,6 +298,11 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     if (path === '/api/pty' || path.startsWith('/api/pty/') || AGENT_ACTION_ROUTE.test(path)) {
       if (!deps.pty) sendJson(res, 403, { error: 'terminal interativo desligado (veja o log do servidor)' });
       else deps.pty(req, res, path);
+      return true;
+    }
+    if (path === '/api/assets' || path.startsWith('/api/assets/')) {
+      if (!deps.assets) sendJson(res, 404, { error: 'assets desligados' });
+      else deps.assets(req, res, url);
       return true;
     }
     if (path === '/api/codex/events') {

@@ -1,6 +1,8 @@
 // Assets opcionais gerados por IA (quadros, pôsteres e a placa da recepção).
 // GET /assets/manifest.json -> { wallArt: [{ id, kind, file, w, h, tiles, variant?, framed? }], brand: { signage?, mark? } }.
 // Se o manifesto não existir (ou falhar), o mundo segue só com a arte procedural.
+// Também baixa o pacote de assets do usuário (salas e itens do Arquiteto, shared/assets.ts).
+import type { AssetPack } from '../../../shared/assets';
 
 export interface WallArtAsset {
   id: string;
@@ -91,6 +93,18 @@ export async function loadWorldAssets(signal?: AbortSignal): Promise<WorldAssets
     const [signage, mark] = await Promise.all([brand(m.brand?.signage), brand(m.brand?.mark)]);
     if (!wallArt.length && !signage && !mark) return null;
     return { wallArt, signage, mark };
+  } catch {
+    return null;
+  }
+}
+
+/** Pacote de assets do usuário (salas e itens do Arquiteto; GET /api/assets), ou null se não deu. */
+export async function loadDesignPack(signal?: AbortSignal): Promise<AssetPack | null> {
+  try {
+    const res = await fetch('/api/assets', { signal, cache: 'no-store' });
+    if (!res.ok) return null;
+    const p = (await res.json()) as AssetPack;
+    return Array.isArray(p.items) && Array.isArray(p.rooms) && p.office ? p : null;
   } catch {
     return null;
   }

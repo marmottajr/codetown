@@ -3,6 +3,7 @@
 //
 // Regra de evolução: mudanças aqui devem ser ADITIVAS (campos opcionais novos).
 // Renomear/remover campos quebra servidor, mundo e UI ao mesmo tempo.
+import type { AssetsMeta } from './assets';
 
 export type AgentKind = 'main' | 'sub';
 
@@ -356,6 +357,8 @@ export interface OfficeSnapshot {
      * node-pty e acesso local. Ausente = recurso desligado.
      */
     pty?: PtyStatus;
+    /** Assets do usuário (salas e itens do Arquiteto): o cliente baixa o pacote quando a versão muda. */
+    assets?: AssetsMeta;
     /** Verificação de versão nova no GitHub (ausente nos testes e no timelapse). */
     updates?: UpdateStatus;
   };

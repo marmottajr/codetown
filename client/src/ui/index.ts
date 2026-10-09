@@ -12,6 +12,7 @@ import type { OfficeStore } from '../net/store';
 import type { Selection, WorldApi } from '../world/api';
 import type { PanelName, TerminalRouter, UiComponent, UiContext } from './context';
 import { DayLauncher } from './daystats-launcher';
+import { StudioPanel } from './studio';
 import { h } from './dom';
 import { Drawer } from './drawer';
 import { FeedPanel } from './feed';
@@ -194,6 +195,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   help = new HelpDialog();
   const day = new DayLauncher(ctx, (el) => root.append(el));
   topbar.addPanelButton(day.button);
+  // Arquiteto: salas e itens criados a pedido por um Claude Code na pasta de assets (ui/studio.ts).
+  const studio = new StudioPanel(ctx);
+  topbar.addPanelButton(studio.button);
   const empty = new EmptyState(ctx);
   const banner = new ConnectionBanner(ctx);
   const update = new UpdateBanner(store);
@@ -203,7 +207,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
-  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, live, splash.el);
+  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, studio.el, live, splash.el);
   area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
     sidebar: panels.sidebar,
     feed: panels.feed,
@@ -212,7 +216,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   }));
   drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, studio, updateToaster];
 
   // ---------------------------------------------------------------- renderização agrupada por quadro
   let rafId = 0;
