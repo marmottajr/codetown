@@ -44,13 +44,13 @@
 // Boot síncrono, com endBoot num `finally`.
 import { createReadStream, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { AccountUsage, Activity, AgentStatus, ShellJob, SourceInfo } from '../../../shared/types';
+import type { AccountUsage, Activity, AgentStatus, SourceInfo } from '../../../shared/types';
 import type { DetectedAccount } from '../../accounts/detect';
 import type { AccountEntry, AccountsService } from '../../accounts/service';
 import { detectDocker } from '../../config';
 import { errMsg, log } from '../../log';
-import type { Office, ShellDoneInput, TranscriptSummary } from '../../model/office';
-import { ShellTracker, toShellJob, type ShellFinish } from '../shells';
+import type { Office, TranscriptSummary } from '../../model/office';
+import { reportShellDone, shellsByOwner, ShellTracker, type ShellFinish } from '../shells';
 import type { AgentSource } from '../source';
 import { FileTail } from '../tail';
 import type { TerminalParser } from '../terminal';
@@ -717,11 +717,7 @@ export class CodexSource implements AgentSource, CodexLive {
     if (!tree) return false;
     this.expireShells(tree, this.now());
     const office = this.opts.office;
-    const byOwner = new Map<string, ShellJob[]>();
-    for (const job of tree.list()) {
-      const owner = job.owner !== root && this.activeInOffice(job.owner) ? job.owner : root;
-      byOwner.set(owner, [...(byOwner.get(owner) ?? []), toShellJob(job)]);
-    }
+    const byOwner = shellsByOwner(office, root, tree.list());
     office.setShells(root, byOwner.get(root) ?? []);
     for (const t of this.threads.values()) if (t.kind === 'sub' && t.inOffice && this.treeKey(t) === root) office.setShells(t.key, byOwner.get(t.key) ?? []);
     return byOwner.has(root);
@@ -734,27 +730,19 @@ export class CodexSource implements AgentSource, CodexLive {
     else this.publishShells(root);
   }
 
-  /** Um processo em segundo plano terminou: 'ShellDone' no dono (ou no principal, se o dono já entregou ou saiu). */
-  private reportShellDone(root: string, fin: ShellFinish): void {
-    const job = fin.job;
-    const owner = this.activeInOffice(job.owner) ? job.owner : root;
-    const exit = fin.summary ? /exit code (-?\d+)/i.exec(fin.summary)?.[1] : undefined;
-    const detail = [exit !== undefined ? `Código de saída ${exit}` : undefined, job.command].filter(Boolean).join(' — ') || fin.summary;
-    const input: ShellDoneInput = { id: job.taskId ?? job.toolUseId, label: job.label, startedAt: job.startedAt };
-    if (job.command) input.command = job.command;
-    this.opts.office.shellDone(owner, input, fin.outcome, fin.at, detail ? { live: true, summary: detail } : { live: true });
-  }
-
   // ---------------------------------------------------------------- rollout
 
-  /** Uma linha do rollout: shells, sinais e atividades; ao vivo, o fim de um processo vira 'ShellDone'. */
+  /**
+   * Uma linha do rollout: shells, sinais e atividades; ao vivo, o fim de um processo vira 'ShellDone' no dono (ou no
+   * principal, se o dono já entregou ou saiu).
+   */
   private take(t: ThreadTracker, line: string, live: boolean): void {
     const r = parseRolloutLine(t.state, line, { idPrefix: t.key, now: this.now() });
     const fins = this.trackShells(t, line, r);
     this.apply(t, r, live);
     if (!live || !fins) return;
     const root = this.treeKey(t);
-    for (const fin of fins) this.reportShellDone(root, fin);
+    for (const fin of fins) reportShellDone(this.opts.office, root, fin, true);
     this.refreshShells(root);
   }
 

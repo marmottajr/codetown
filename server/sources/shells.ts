@@ -10,6 +10,7 @@
 // plano); /clear ou sessão encerrada (rastreador descartado); idade.
 import type { ShellJob } from '../../shared/types';
 import type { ShellOutcome } from '../../shared/activity';
+import type { Office, ShellDoneInput } from '../model/office';
 
 /** Jobs mais velhos que isso são descartados (o processo certamente já morreu ou a notificação se perdeu). */
 export const SHELL_MAX_AGE_MS = 24 * 3_600_000;
@@ -335,4 +336,45 @@ export function toShellJob(j: TrackedShell): ShellJob {
   const job: ShellJob = { id: j.taskId ?? j.toolUseId, label: j.label, startedAt: j.startedAt, background: j.background, kind: j.kind };
   if (j.command) job.command = j.command;
   return job;
+}
+
+/** O que os shells de uma sessão usam do escritório (Office). */
+export type ShellOffice = Pick<Office, 'has' | 'isSubDone' | 'shellDone'>;
+
+/** O subagente dono saiu ou entregou (o principal `main` nunca: o que é dele fica nele). */
+function ownerGone(office: Pick<ShellOffice, 'has' | 'isSubDone'>, main: string, owner: string): boolean {
+  return owner !== main && (!office.has(owner) || office.isSubDone(owner));
+}
+
+/**
+ * Shells mostrados em cada agente de uma sessão (Claude Code) ou árvore (Codex), pelo principal `main`: cada job fica no
+ * dono enquanto ele está no escritório e ativo; o de um subagente que saiu ou entregou continua rodando e passa ao
+ * principal, se estiver em segundo plano (o em primeiro plano morreu com ele).
+ */
+export function shellsByOwner(office: Pick<ShellOffice, 'has' | 'isSubDone'>, main: string, jobs: readonly TrackedShell[]): Map<string, ShellJob[]> {
+  const byOwner = new Map<string, ShellJob[]>();
+  for (const job of jobs) {
+    let owner = job.owner;
+    if (ownerGone(office, main, owner)) {
+      if (!job.background) continue;
+      owner = main;
+    }
+    byOwner.set(owner, [...(byOwner.get(owner) ?? []), toShellJob(job)]);
+  }
+  return byOwner;
+}
+
+/**
+ * Um shell em segundo plano terminou: atividade 'ShellDone' no dono (ou no principal `main`, se o dono saiu ou
+ * entregou), com o detalhe "Código de saída N — comando" (senão o resumo da notificação). `live: false` = releitura.
+ */
+export function reportShellDone(office: ShellOffice, main: string, fin: ShellFinish, live: boolean): void {
+  const job = fin.job;
+  if (job.kind !== 'shell' || !job.background) return;
+  const owner = ownerGone(office, main, job.owner) ? main : job.owner;
+  const exit = fin.summary ? /exit code (-?\d+)/i.exec(fin.summary)?.[1] : undefined;
+  const detail = [exit !== undefined ? `Código de saída ${exit}` : undefined, job.command].filter(Boolean).join(' — ') || fin.summary;
+  const input: ShellDoneInput = { id: job.taskId ?? job.toolUseId, label: job.label, startedAt: job.startedAt };
+  if (job.command) input.command = job.command;
+  office.shellDone(owner, input, fin.outcome, fin.at, detail ? { live, summary: detail } : { live });
 }

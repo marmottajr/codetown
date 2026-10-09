@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { notificationOutcome, SHELL_MAX_AGE_MS, ShellTracker, toShellJob, type ShellStart } from './shells';
+import { notificationOutcome, reportShellDone, SHELL_MAX_AGE_MS, shellsByOwner, ShellTracker, toShellJob, type ShellStart, type TrackedShell } from './shells';
 
 const T0 = Date.parse('2026-10-07T08:50:00Z');
 
@@ -118,5 +118,67 @@ describe('ShellTracker', () => {
     expect(s.merge(older.openBackground())).toBe(true);
     expect(s.list().map(toShellJob)).toEqual([expect.objectContaining({ id: 'brod', startedAt: T0 + 5 })]);
     expect(s.notify({ taskId: 'brod', status: 'failed', at: T0 + 20 })).toMatchObject({ outcome: 'failed' });
+  });
+});
+
+describe('shellsByOwner e reportShellDone (os mesmos para o Claude Code e o Codex)', () => {
+  /** Escritório de mentira: agentes presentes (ativo ou já entregue) e os ShellDone recebidos. */
+  function fakeOffice(present: Record<string, 'active' | 'done'>) {
+    const done: Array<{ id: string; job: { id: string; label: string; startedAt: number; command?: string }; outcome: string; at: number; opts?: { live?: boolean; summary?: string } }> = [];
+    return {
+      done,
+      has: (id: string) => id in present,
+      isSubDone: (id: string) => present[id] === 'done',
+      shellDone(id: string, job: { id: string; label: string; startedAt: number; command?: string }, outcome: string, at: number, opts?: { live?: boolean; summary?: string }) {
+        done.push({ id, job, outcome, at, opts });
+      },
+    };
+  }
+  const job = (owner: string, toolUseId: string, extra: Partial<TrackedShell> = {}): TrackedShell => ({
+    owner,
+    toolUseId,
+    label: 'Rodar a suíte completa',
+    command: 'vendor/bin/phpunit',
+    background: true,
+    kind: 'shell',
+    startedAt: T0,
+    requestedAt: T0,
+    ...extra,
+  });
+
+  it('cada shell fica no dono ativo; o de quem entregou ou saiu passa ao principal se roda em segundo plano (o em primeiro plano morreu com ele)', () => {
+    const office = fakeOffice({ main: 'active', ativo: 'active', entregou: 'done' });
+    const jobs = [
+      job('main', 'm1'),
+      job('ativo', 'a1', { background: false }),
+      job('entregou', 'e1', { taskId: 'be1' }),
+      job('saiu', 's1'),
+      job('saiu', 's2', { background: false }),
+    ];
+    const by = shellsByOwner(office, 'main', jobs);
+    expect([...by.keys()].sort()).toEqual(['ativo', 'main']);
+    expect(by.get('main')!.map((j) => j.id)).toEqual(['m1', 'be1', 's1']);
+    expect(by.get('ativo')).toEqual([toShellJob(jobs[1])]);
+  });
+
+  it('ShellDone no dono ativo, ou no principal se o dono saiu ou entregou, com "Código de saída N — comando"', () => {
+    const office = fakeOffice({ main: 'active', ativo: 'active', entregou: 'done' });
+    reportShellDone(office, 'main', { job: job('ativo', 'a1', { taskId: 'ba1' }), outcome: 'failed', at: T0 + 5, summary: 'Background command completed (exit code 2)' }, true);
+    reportShellDone(office, 'main', { job: job('entregou', 'e1'), outcome: 'ok', at: T0 + 6, summary: 'exit code 0' }, false);
+    reportShellDone(office, 'main', { job: job('saiu', 's1', { command: undefined }), outcome: 'killed', at: T0 + 7, summary: 'parado pelo usuário' }, true);
+    reportShellDone(office, 'main', { job: job('main', 'm1', { command: undefined }), outcome: 'ok', at: T0 + 8 }, true);
+    expect(office.done).toEqual([
+      { id: 'ativo', job: { id: 'ba1', label: 'Rodar a suíte completa', startedAt: T0, command: 'vendor/bin/phpunit' }, outcome: 'failed', at: T0 + 5, opts: { live: true, summary: 'Código de saída 2 — vendor/bin/phpunit' } },
+      { id: 'main', job: { id: 'e1', label: 'Rodar a suíte completa', startedAt: T0, command: 'vendor/bin/phpunit' }, outcome: 'ok', at: T0 + 6, opts: { live: false, summary: 'Código de saída 0 — vendor/bin/phpunit' } },
+      { id: 'main', job: { id: 's1', label: 'Rodar a suíte completa', startedAt: T0 }, outcome: 'killed', at: T0 + 7, opts: { live: true, summary: 'parado pelo usuário' } },
+      { id: 'main', job: { id: 'm1', label: 'Rodar a suíte completa', startedAt: T0 }, outcome: 'ok', at: T0 + 8, opts: { live: true } },
+    ]);
+  });
+
+  it('ShellDone só de shell em segundo plano (monitor e primeiro plano ficam de fora)', () => {
+    const office = fakeOffice({ main: 'active' });
+    reportShellDone(office, 'main', { job: job('main', 'mon', { kind: 'monitor' }), outcome: 'ok', at: T0 }, true);
+    reportShellDone(office, 'main', { job: job('main', 'fg', { background: false }), outcome: 'ok', at: T0 }, true);
+    expect(office.done).toEqual([]);
   });
 });

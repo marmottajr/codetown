@@ -14,7 +14,7 @@ import type { AccountsService } from '../accounts/service';
 import { errMsg, log } from '../log';
 import type { Office, TranscriptSummary } from '../model/office';
 import { compareVersions, registryStatus, RegistryReader, SHELL_STATUS_VERSION, type RegistryEntry } from './registry';
-import { SHELL_FALLBACK_MAX_AGE_MS, ShellTracker, toShellJob, type ShellFinish } from './shells';
+import { reportShellDone, SHELL_FALLBACK_MAX_AGE_MS, shellsByOwner, ShellTracker, type ShellFinish } from './shells';
 import type { AgentSource } from './source';
 import {
   BOOT_RECENT_MS,
@@ -354,33 +354,9 @@ export class ClaudeWatcher implements AgentSource {
    */
   private publishShells(t: SessionTracker): void {
     const office = this.opts.office;
-    const byOwner = new Map<string, ReturnType<typeof toShellJob>[]>();
-    for (const job of t.shells.list()) {
-      let owner = job.owner;
-      if (owner !== t.key && (!office.has(owner) || office.isSubDone(owner))) {
-        if (!job.background) continue;
-        owner = t.key;
-      }
-      const list = byOwner.get(owner) ?? [];
-      list.push(toShellJob(job));
-      byOwner.set(owner, list);
-    }
+    const byOwner = shellsByOwner(office, t.key, t.shells.list());
     office.setShells(t.key, byOwner.get(t.key) ?? []);
     for (const sub of t.subs.values()) office.setShells(sub.id, byOwner.get(sub.id) ?? []);
-  }
-
-  /** Um shell em segundo plano terminou: atividade 'ShellDone' no dono (ou no principal, se o dono já saiu). */
-  private reportShellDone(t: SessionTracker, fin: ShellFinish, live: boolean): void {
-    const job = fin.job;
-    if (job.kind !== 'shell' || !job.background) return;
-    const office = this.opts.office;
-    let owner = job.owner;
-    if (!office.has(owner) || (owner !== t.key && office.isSubDone(owner))) owner = t.key;
-    const exit = fin.summary ? /exit code (-?\d+)/i.exec(fin.summary)?.[1] : undefined;
-    const detail = [exit !== undefined ? `Código de saída ${exit}` : undefined, job.command].filter(Boolean).join(' — ') || fin.summary;
-    const input: { id: string; label: string; startedAt: number; command?: string } = { id: job.taskId ?? job.toolUseId, label: job.label, startedAt: job.startedAt };
-    if (job.command) input.command = job.command;
-    office.shellDone(owner, input, fin.outcome, fin.at, detail ? { live, summary: detail } : { live });
   }
 
   private newTracker(key: string, accountId: string, dir: string, entry: RegistryEntry): SessionTracker {
@@ -566,7 +542,7 @@ export class ClaudeWatcher implements AgentSource {
 
   private applySignal(t: SessionTracker, owner: string, sig: TranscriptSignal, at = this.now(), live = true): void {
     const fin = applyShellSignal(t.shells, owner, sig, at);
-    if (fin) this.reportShellDone(t, fin, live);
+    if (fin) reportShellDone(this.opts.office, t.key, fin, live);
     switch (sig.type) {
       case 'spawn':
         t.spawns.set(sig.spawn.toolUseId, { ...sig.spawn, owner });
