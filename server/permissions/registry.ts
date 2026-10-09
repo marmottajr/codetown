@@ -311,7 +311,10 @@ export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefin
     a.status = 'waiting';
     a.statusSince = p.createdAt;
   }
-  a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : p.provider === 'codex' ? 'aprovar um comando' : 'aprovar uma permissão';
+  // Codex: o pedido (hook ou canal paralelo) é sempre uma aprovação e vale por cima da espera que a fonte tenha posto
+  // (a pergunta do request_user_input nunca passa por cima de uma aprovação pendente). Claude Code: vale o da fonte.
+  if (p.provider === 'codex') a.waitingFor = 'aprovar um comando';
+  else a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : 'aprovar uma permissão';
   return a;
 }
 

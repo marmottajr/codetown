@@ -165,6 +165,22 @@ describe('registerParallel: o pedido do canal do app-server', () => {
     expect(registry.size).toBe(0);
   });
 
+  it('a pergunta do request_user_input (espera posta pela fonte) não passa por cima do pedido do canal, nas duas ordens; com o pedido fechado, a pergunta volta', () => {
+    const { office, registry } = setup();
+    // Pergunta aberta antes do pedido.
+    office.setStatus(MAIN, 'waiting', 'responder uma pergunta');
+    opened(registry.registerParallel(req()));
+    expect(snapAgent(office, MAIN)).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
+    // Respondido no terminal: a pergunta segue sem resposta.
+    registry.resolveParallel(KEY);
+    expect(snapAgent(office, MAIN)).toMatchObject({ status: 'waiting', waitingFor: 'responder uma pergunta' });
+    // Pedido antes da pergunta.
+    office.setStatus(MAIN, 'working');
+    opened(registry.registerParallel(req({ key: '.codex:8' })));
+    office.setStatus(MAIN, 'waiting', 'responder uma pergunta');
+    expect(snapAgent(office, MAIN)).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
+  });
+
   it('resolveParallel (respondido no terminal ou cancelado) fecha o cartão; a key volta a valer para um pedido novo', () => {
     const { office, registry } = setup();
     const id = opened(registry.registerParallel(req()));

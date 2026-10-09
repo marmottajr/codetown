@@ -3,11 +3,12 @@ import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { describeShellJob } from '../../../shared/activity';
-import type { AgentInfo, Notice } from '../../../shared/types';
+import type { AgentInfo, Notice, PermissionRequestInfo } from '../../../shared/types';
 import { AccountsService } from '../../accounts/service';
 import { setQuiet } from '../../log';
 import { NameStore } from '../../model/names';
 import { DONE_GRACE_MS, Office } from '../../model/office';
+import { PermissionRegistry } from '../../permissions/registry';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
 import { B, commandParsed, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
@@ -30,7 +31,7 @@ afterEach(() => {
  * `locks`: como a sondagem vê os locks do fixture (arquivos vazios que ninguém trava). 'held' (padrão) = Windows/Linux
  * com a trava segura; 'exists' = macOS/Docker (só a existência, estado 'unknown'). `ctx.locks.set` muda uma thread.
  */
-function setup(opts: { names?: string[]; noLocks?: boolean; locks?: 'held' | 'exists'; env?: (dirs: string[]) => NodeJS.ProcessEnv } = {}) {
+function setup(opts: { names?: string[]; noLocks?: boolean; locks?: 'held' | 'exists'; env?: (dirs: string[]) => NodeJS.ProcessEnv; permissions?: () => ReadonlyMap<string, PermissionRequestInfo> } = {}) {
   const locks = fakeLockProber(opts.locks === 'exists' ? 'exists' : 'win32');
   const homes = (opts.names ?? ['.codex']).map((n) => codexHome(n));
   const home = homes[0];
@@ -47,6 +48,7 @@ function setup(opts: { names?: string[]; noLocks?: boolean; locks?: 'held' | 'ex
     accounts: (s) => accounts.list(s),
     sources: () => [],
     accountName: (id) => accounts.find(id)?.detected.name,
+    permissions: opts.permissions,
     now,
   });
   late.office = office;
@@ -1012,6 +1014,28 @@ describe('fonte do Codex: pergunta do request_user_input (P9)', () => {
     ctx.home.append(path, [R.taskComplete('turn1', ctx.now())]);
     ctx.poll();
     expect(ctx.agent()?.status).toBe('idle');
+  });
+
+  it('pedido do canal paralelo (só no registro, sem o hook): a pergunta não passa por cima dele, antes ou depois; fechado o pedido, volta a pergunta', () => {
+    const late: { registry?: PermissionRegistry } = {};
+    const ctx = setup({ permissions: () => late.registry?.snapshot() ?? new Map() });
+    const registry = (late.registry = new PermissionRegistry({ office: ctx.office, viewers: () => 1, now: ctx.now }));
+    const parallel = (key: string) => registry.registerParallel({ key, account: '.codex', threadId: T, tool: 'exec_command', input: { command: 'rm -rf dist' }, decisions: [] });
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('turn1', at)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    // Pedido antes da pergunta.
+    expect(parallel('.codex:1')).toHaveProperty('id');
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.ask('call_ask', 'Posso apagar a pasta dist?', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
+    registry.resolveParallel('.codex:1');
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: QUESTION });
+    // Pergunta (ainda aberta) antes do pedido.
+    expect(parallel('.codex:2')).toHaveProperty('id');
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
   });
 });
 
