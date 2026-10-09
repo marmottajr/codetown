@@ -1,9 +1,42 @@
 // Salas do escritório: identidade (cwd normalizado), nome exibido e posição (slot) no prédio.
 
-/** cwd normalizado: sem barras repetidas nem barra final. */
+/**
+ * cwd normalizado (id da sala), igual para o Claude Code e o Codex na mesma pasta:
+ * - sem o prefixo de caminho estendido do Windows (`\\?\C:\x` → `C:\x`; `\\?\UNC\srv\x` → `\\srv\x`);
+ * - URI `file:///C:/x` → `C:\x` e `file:///home/x` → `/home/x`, com `%xx` decodificado;
+ * - letra do drive em maiúscula (`c:\x` → `C:\x`);
+ * - sem barras `/` repetidas nem barra `/` final.
+ * Barras invertidas e as maiúsculas do resto do caminho não mudam: o Claude grava `D:\Projetos\x`, então os ids das
+ * salas atuais continuam iguais. Só operações de texto (sem node:path), para dar o mesmo id no Windows e no Linux.
+ */
 export function normalizeCwd(cwd: string): string {
-  const p = cwd.trim().replace(/\/{2,}/g, '/');
+  let p = fromFileUri(stripExtendedPrefix(cwd.trim()));
+  p = p.replace(/^[a-z](?=:(?:[\\/]|$))/, (d) => d.toUpperCase());
+  p = p.replace(/\/{2,}/g, '/');
   return p.length > 1 ? p.replace(/\/+$/, '') : p;
+}
+
+/** `\\?\UNC\srv\x` → `\\srv\x`; `\\?\C:\x` → `C:\x`. */
+function stripExtendedPrefix(p: string): string {
+  if (/^\\\\\?\\UNC\\/i.test(p)) return `\\\\${p.slice(8)}`;
+  if (p.startsWith('\\\\?\\')) return p.slice(4);
+  return p;
+}
+
+/** `file:///C:/x` → `C:\x`; `file:///home/x` → `/home/x` (`%xx` decodificado). Outro texto volta igual. */
+function fromFileUri(p: string): string {
+  const m = /^file:\/\/(?:localhost)?(\/.*)$/i.exec(p);
+  if (!m) return p;
+  let path: string;
+  try {
+    path = decodeURIComponent(m[1]);
+  } catch {
+    return p;
+  }
+  const win = /^\/([a-zA-Z]):(\/.*)?$/.exec(path);
+  if (!win) return path;
+  const rest = (win[2] ?? '').replace(/\/+$/, '');
+  return `${win[1]}:${rest ? rest.replace(/\//g, '\\') : '\\'}`;
 }
 
 function segments(path: string): string[] {

@@ -39,6 +39,56 @@ describe('salas', () => {
     expect(normalizeCwd('/')).toBe('/');
   });
 
+  it('caminhos já normalizados (como o Claude grava) não mudam: as salas atuais mantêm o id', () => {
+    const iguais = [
+      String.raw`D:\Projetos\x`,
+      String.raw`D:\Projetos\Empresa\app`,
+      'C:\\',
+      String.raw`\\srv\share\x`,
+      String.raw`D:\Projetos\app%20x`,
+      '/home/x',
+      '/home/x/meu app',
+      '/srv/app%20x',
+    ];
+    for (const p of iguais) expect(normalizeCwd(p), p).toBe(p);
+  });
+
+  it('tira o prefixo de caminho estendido do Windows (\\\\?\\ e \\\\?\\UNC\\)', () => {
+    expect(normalizeCwd(String.raw`\\?\D:\Projetos\x`)).toBe(String.raw`D:\Projetos\x`);
+    expect(normalizeCwd(String.raw`\\?\d:\Projetos\x`)).toBe(String.raw`D:\Projetos\x`);
+    expect(normalizeCwd(String.raw`\\?\UNC\srv\share\x`)).toBe(String.raw`\\srv\share\x`);
+    expect(normalizeCwd(String.raw`\\?\unc\srv\share\x`)).toBe(String.raw`\\srv\share\x`);
+  });
+
+  it('converte URI file:// em caminho nativo, decodificando %xx', () => {
+    expect(normalizeCwd('file:///d:/Projetos/x')).toBe(String.raw`D:\Projetos\x`);
+    expect(normalizeCwd('file:///C:/Meus%20Projetos/app')).toBe(String.raw`C:\Meus Projetos\app`);
+    // O VS Code codifica os dois-pontos do drive.
+    expect(normalizeCwd('file:///c%3A/Projetos/x')).toBe(String.raw`C:\Projetos\x`);
+    expect(normalizeCwd('file:///d:/Projetos/x/')).toBe(String.raw`D:\Projetos\x`);
+    expect(normalizeCwd('file:///C:/')).toBe('C:\\');
+    expect(normalizeCwd('file:///home/x')).toBe('/home/x');
+    expect(normalizeCwd('file:///home/x/meu%20app/')).toBe('/home/x/meu app');
+    expect(normalizeCwd('FILE:///home/x')).toBe('/home/x');
+    expect(normalizeCwd('file://localhost/home/x')).toBe('/home/x');
+  });
+
+  it('URI com %xx inválido não quebra', () => {
+    expect(() => normalizeCwd('file:///home/x/%zz')).not.toThrow();
+  });
+
+  it('letra do drive em maiúscula; barras e o resto do caminho não mudam', () => {
+    expect(normalizeCwd(String.raw`c:\x`)).toBe(String.raw`C:\x`);
+    expect(normalizeCwd(String.raw`d:\Projetos\MeuApp`)).toBe(String.raw`D:\Projetos\MeuApp`);
+    expect(normalizeCwd('c:/x')).toBe('C:/x');
+    expect(normalizeCwd('c:')).toBe('C:');
+  });
+
+  it('é idempotente', () => {
+    const casos = [String.raw`\\?\d:\x`, String.raw`\\?\UNC\srv\x`, 'file:///c%3A/x/', 'file:///home/x/%2541', String.raw`c:\x`, '/a//b/', '/'];
+    for (const p of casos) expect(normalizeCwd(normalizeCwd(p)), p).toBe(normalizeCwd(p));
+  });
+
   it('desambigua basenames repetidos com o diretório pai', () => {
     const names = roomDisplayNames(
       new Map([
@@ -138,6 +188,48 @@ describe('NameStore: personagem de cada sala', () => {
         expect(t.assign('s1', new Set()).name).toBe('Marina');
         expect(t.reservedNames().size).toBe(0);
       }
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('sala gravada em outra grafia (drive minúsculo, \\\\?\\, file://): a chave vira o id normalizado; na colisão fica o uso mais recente', () => {
+    const tmp = tempDir();
+    try {
+      const file = join(tmp.dir, 'names.json');
+      writeFileSync(
+        file,
+        JSON.stringify({
+          version: 1,
+          names: {},
+          rooms: {
+            // Colisão com a mais recente primeiro e com a mais recente depois: a ordem no arquivo não decide.
+            [String.raw`d:\p\api`]: { name: 'Ana', look: 'f', seed: 1, parts: { hairStyle: 'bob' }, owner: 's1', at: NOW - DAY },
+            [String.raw`D:\p\api`]: { name: 'Bia', look: 'f', seed: 2, at: NOW - 2 * DAY },
+            [String.raw`C:\p\cli`]: { name: 'Caio', look: 'm', seed: 3, at: NOW - 2 * DAY },
+            [String.raw`c:\p\cli`]: { name: 'Davi', look: 'm', seed: 4, owner: 's4', at: NOW - DAY },
+            [String.raw`\\?\D:\p\web`]: { name: 'Eva', look: 'f', seed: 5, at: NOW },
+            'file:///d:/p/loja': { name: 'Gil', look: 'm', seed: 6, at: NOW },
+            // Já normalizadas: ficam iguais.
+            [String.raw`D:\p\site`]: { name: 'Iris', look: 'f', seed: 7, at: NOW },
+            '/p/srv': { name: 'Juca', look: 'm', seed: 8, at: NOW },
+          },
+        }),
+      );
+      const s = new NameStore(file, { now: () => NOW });
+      s.load();
+      expect(s.character(String.raw`D:\p\api`)).toEqual({ name: 'Ana', look: 'f', seed: 1, parts: { hairStyle: 'bob' }, owner: 's1', at: NOW - DAY });
+      expect(s.character(String.raw`C:\p\cli`)).toMatchObject({ name: 'Davi', owner: 's4' });
+      expect(s.character(String.raw`D:\p\web`)?.name).toBe('Eva');
+      expect(s.character(String.raw`D:\p\loja`)?.name).toBe('Gil');
+      expect(s.character(String.raw`D:\p\site`)?.name).toBe('Iris');
+      expect(s.character('/p/srv')?.name).toBe('Juca');
+      for (const r of [String.raw`d:\p\api`, String.raw`c:\p\cli`, String.raw`\\?\D:\p\web`, 'file:///d:/p/loja']) expect(s.character(r)).toBeUndefined();
+      expect([...s.reservedNames().keys()].sort()).toEqual(['Ana', 'Davi', 'Eva', 'Gil', 'Iris', 'Juca']);
+      s.flush();
+      expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).rooms).sort()).toEqual(
+        ['/p/srv', String.raw`C:\p\cli`, String.raw`D:\p\api`, String.raw`D:\p\loja`, String.raw`D:\p\site`, String.raw`D:\p\web`].sort(),
+      );
     } finally {
       tmp.cleanup();
     }
@@ -463,6 +555,27 @@ describe('Office', () => {
     expect(off.agents.map((a) => a.id)).toEqual(['acc:1']);
   });
 
+  it('mesma pasta no Claude e no Codex com grafias diferentes: uma sala só, com o id que o Claude já usava', () => {
+    const { office, now } = makeOffice();
+    const loja = String.raw`D:\Projetos\loja`;
+    // O Claude grava o cwd assim; o Codex pode trazer \\?\, URI file:// ou o drive em minúscula.
+    const grafias = [loja, String.raw`\\?\D:\Projetos\loja`, 'file:///d:/Projetos/loja', String.raw`d:\Projetos\loja`];
+    grafias.forEach((cwd, i) =>
+      office.addMain({ id: `acc:${i}`, account: 'acc', sessionId: `s${i}`, cwd, role: 'Agente principal', startedAt: now(), status: 'working' }),
+    );
+    office.addMain({ id: 'acc:p1', account: 'acc', sessionId: 'p1', cwd: '/home/x/api', role: 'Agente principal', startedAt: now(), status: 'working' });
+    office.addMain({ id: 'acc:p2', account: 'acc', sessionId: 'p2', cwd: 'file:///home/x/api/', role: 'Agente principal', startedAt: now(), status: 'idle' });
+    const snap = office.commit().snapshot;
+    expect(snap.rooms.map((r) => [r.id, r.path, r.name]).sort()).toEqual([
+      ['/home/x/api', '/home/x/api', 'api'],
+      [loja, loja, 'loja'],
+    ]);
+    const roomOf = new Map(snap.agents.map((a) => [a.id, a.roomId]));
+    for (let i = 0; i < grafias.length; i++) expect(roomOf.get(`acc:${i}`)).toBe(loja);
+    expect(roomOf.get('acc:p1')).toBe('/home/x/api');
+    expect(roomOf.get('acc:p2')).toBe('/home/x/api');
+  });
+
   it('meta.terminal: só com o terminal ligado', () => {
     expect(makeOffice().office.commit().snapshot.meta.terminal).toBe(false);
     const deps = { names: new NameStore(null), version: 't', startedAt: 0, accounts: () => [], sources: () => [], accountName: () => undefined };
@@ -713,6 +826,35 @@ describe('Office: personagem do projeto', () => {
         expect(office.get('acc:2')).toMatchObject({ name: 'Zé Backend', seed: 42, custom: true });
         expect(names.character('/p/api')?.owner).toBe('s2');
         names.flush();
+      } finally {
+        tmp.cleanup();
+      }
+    });
+
+    it('personagem gravado na sala com o drive em minúscula: depois da atualização, continua na sala de id normalizado', () => {
+      const tmp = tempDir();
+      try {
+        const file = join(tmp.dir, 'names.json');
+        const at = Date.now();
+        writeFileSync(
+          file,
+          JSON.stringify({
+            version: 1,
+            names: {},
+            rooms: { [String.raw`d:\p\api`]: { name: 'Zé Backend', look: 'm', seed: 42, owner: 's1', at } },
+          }),
+        );
+        const names = new NameStore(file);
+        names.load();
+        const { office, now } = makeOffice(names);
+        office.addMain(main('acc:1', 's1', String.raw`D:\p\api`, now()));
+        office.addMain(main('acc:2', 's2', String.raw`d:\p\api`, now()));
+        expect(office.get('acc:1')).toMatchObject({ roomId: String.raw`D:\p\api`, name: 'Zé Backend', seed: 42, custom: true });
+        expect(office.get('acc:2')!.roomId).toBe(String.raw`D:\p\api`);
+        expect(office.get('acc:2')!.custom).toBeUndefined();
+        expect(names.character(String.raw`D:\p\api`)?.owner).toBe('s1');
+        names.flush();
+        expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).rooms)).toEqual([String.raw`D:\p\api`]);
       } finally {
         tmp.cleanup();
       }
