@@ -15,6 +15,8 @@ import type {
   PermissionDecision,
   PermissionRequestInfo,
   Provider,
+  PtyInfo,
+  PtyStatus,
   RoomInfo,
   ShellJob,
   SourceInfo,
@@ -69,6 +71,8 @@ export interface OfficeDeps {
   messages?: () => ReadonlySet<string>;
   /** Verificação de versão nova no GitHub (ver OfficeSnapshot.meta.updates). */
   updates?: () => UpdateStatus;
+  /** Terminais interativos (PtyManager): estado do recurso e os abertos. */
+  ptys?: () => { status: PtyStatus; list: PtyInfo[] };
   now?: () => number;
 }
 
@@ -250,6 +254,11 @@ export class Office {
     return [...this.agents.values()].map((r) => r.info);
   }
 
+  /** Pasta do projeto da sala (cwd original, sem normalizar). */
+  roomPath(roomId: string): string | undefined {
+    return this.rooms.get(roomId)?.path;
+  }
+
   roomName(roomId: string): string {
     return this.roomNames.get(roomId) ?? roomId.split('/').filter(Boolean).pop() ?? roomId;
   }
@@ -282,7 +291,9 @@ export class Office {
     }
     const roomId = normalizeCwd(p.cwd);
     this.ensureRoom(roomId, now);
-    const person = this.deps.names.assign(p.sessionId, this.usedNames());
+    // A mesma sessão retomada noutro processo (ex.: "Assumir aqui") mantém o nome, mesmo com o processo antigo
+    // ainda saindo do escritório.
+    const person = this.deps.names.assign(p.sessionId, this.usedNames(p.sessionId));
     const info: AgentInfo = {
       id: p.id,
       kind: 'main',
@@ -834,12 +845,14 @@ export class Office {
     const trim = (a: AgentInfo): AgentInfo => (a.recent.length > SNAPSHOT_RECENT ? { ...a, recent: a.recent.slice(-SNAPSHOT_RECENT) } : a);
     const sessions = new Map<string, number>();
     for (const a of real) if (a.kind === 'main' && a.status !== 'offline') sessions.set(a.account, (sessions.get(a.account) ?? 0) + 1);
+    const ptys = this.deps.ptys?.();
     return {
       rev: this.rev,
       serverTime: now,
       rooms,
       agents: [...real, ...demoAgents].map(trim),
       accounts: [...this.deps.accounts(sessions), ...(this.demoSnap?.accounts ?? [])],
+      ...(ptys ? { ptys: ptys.list } : {}),
       meta: {
         demo: this.isDemo(),
         sources: this.deps.sources(),
@@ -848,13 +861,15 @@ export class Office {
         build: this.deps.build?.(),
         terminal: this.deps.terminal === true,
         messages: this.deps.messages !== undefined,
+        ...(ptys ? { pty: ptys.status } : {}),
         updates: this.deps.updates?.(),
       },
     };
   }
 
-  private usedNames(): Set<string> {
-    const used = new Set([...this.agents.values()].map((r) => r.info.name));
+  /** Nomes em uso (`exceptSession`: menos os agentes principais dessa sessão). */
+  private usedNames(exceptSession?: string): Set<string> {
+    const used = new Set([...this.agents.values()].filter((r) => !(exceptSession && r.info.kind === 'main' && r.info.sessionId === exceptSession)).map((r) => r.info.name));
     for (const a of this.demoSnap?.agents ?? []) used.add(a.name);
     return used;
   }

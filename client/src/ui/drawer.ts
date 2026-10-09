@@ -43,6 +43,7 @@ import { createAgentRow, updateAgentRow } from './rows';
 import { SocialSection } from './social';
 import { TERMINAL_UNAVAILABLE_HINT, type TerminalControl } from './terminal';
 import { Movable } from './movable';
+import type { PtyControl } from './pty';
 import { richText } from './usage';
 import {
   createAccountChip,
@@ -242,10 +243,12 @@ class AgentView {
   private sessionValue: HTMLElement;
   private linesPlus: HTMLElement;
   private linesMinus: HTMLElement;
+  private termRo: HTMLElement;
 
   constructor(
     private ctx: UiContext,
     private terminal: TerminalControl,
+    private pty: PtyControl,
   ) {
     this.avatar = createAvatarPlaceholder('lg');
     this.name = h('h2', { class: 'ui-hero__name' });
@@ -291,6 +294,7 @@ class AgentView {
       { class: 'ui-btn ui-term-cta', type: 'button', attrs: { 'aria-pressed': 'false' }, on: { click: () => this.toggleTerminal() } },
       termIcon,
       this.termLabel,
+      (this.termRo = h('span', { class: 'ui-term-cta__ro', text: 'ao vivo' })),
       h('kbd', { class: 'ui-kbd', text: 'T', attrs: { 'aria-hidden': 'true' } }),
     );
 
@@ -425,7 +429,8 @@ class AgentView {
   /** Abre (ou fecha) o terminal deste agente; desligado sem acesso local ou depois que ele saiu. */
   toggleTerminal(): void {
     if (!this.id || this.termBtn.getAttribute('aria-disabled') === 'true') return;
-    this.terminal.toggle(this.id, this.termBtn);
+    if (this.ctx.terminals) this.ctx.terminals.toggle(this.id, this.termBtn);
+    else this.terminal.toggle(this.id, this.termBtn);
   }
 
   toggleFollow(): void {
@@ -600,8 +605,13 @@ class AgentView {
   }
 
   private renderTerminalButton(live: boolean, provider = providerOf(this.last)): void {
-    const available = !!this.ctx.store.snapshot?.meta.terminal;
-    const open = this.terminal.agentId === this.id;
+    const router = this.ctx.terminals;
+    const available = router ? router.available : !!this.ctx.store.snapshot?.meta.terminal;
+    const open = (router ? router.openAgentId : this.terminal.agentId) === this.id;
+    // Interativo: o Claude Code roda aqui (pty) ou roda noutro terminal e dá para assumir pela janela.
+    const readOnly = !!this.ctx.store.snapshot?.meta.terminal;
+    const kind = !this.id ? '' : router?.interactive(this.id) ? 'interativo' : !readOnly && this.pty.enabled && this.last?.kind === 'main' ? 'em outro terminal' : 'ao vivo';
+    setText(this.termRo, kind);
     // aria-disabled (e não disabled): o botão continua focável e a dica do porquê aparece no hover.
     const enabled = open || (available && live);
     setAttr(this.termBtn, 'aria-disabled', enabled ? null : 'true');
@@ -619,7 +629,11 @@ class AgentView {
             : TERMINAL_UNAVAILABLE_HINT
           : !live
             ? 'O agente já saiu do escritório.'
-            : `Ver a conversa desta sessão como no ${provider === 'codex' ? 'Codex' : 'terminal do Claude Code'}, ao vivo (T)`,
+            : kind === 'ao vivo'
+              ? `Ver a conversa desta sessão como no ${provider === 'codex' ? 'Codex' : 'terminal do Claude Code'}, ao vivo${this.pty.enabled && this.last?.kind === 'main' ? '; "Assumir daqui" continua nela aqui' : ''} (T)`
+              : kind === 'interativo'
+                ? 'Abrir o terminal desta sessão, que roda aqui no Habblaud (T)'
+                : 'Abrir o terminal: a sessão roda em outro terminal; dá para assumir daqui (T)',
     );
   }
 
@@ -706,8 +720,15 @@ class RoomView {
   private tasks: KeyedList<{ task: TaskItem; owner: string; key: string }>;
   private feed: KeyedList<FeedItem>;
   private feedSec: ReturnType<typeof section>;
+  private newBtn: HTMLButtonElement;
+  private newMsg: HTMLElement;
 
-  constructor(private ctx: UiContext) {
+  constructor(
+    private ctx: UiContext,
+    private pty: PtyControl,
+  ) {
+    this.newBtn = h('button', { class: 'ui-btn', type: 'button', text: 'Nova sessão', title: 'Abre um Claude Code novo nesta pasta, num terminal interativo', on: { click: () => this.newSession() } });
+    this.newMsg = h('p', { class: 'ui-actions__msg is-error', role: 'status', hidden: true });
     this.swatch = h('span', { class: 'ui-room-hero__swatch', attrs: { 'aria-hidden': 'true' } });
     this.name = h('h2', { class: 'ui-hero__name' });
     this.path = h('span', { class: 'ui-room-hero__path' });
@@ -757,7 +778,8 @@ class RoomView {
         h('div', { class: 'ui-hero__text' }, this.name, h('span', { class: 'ui-copy-row' }, this.path, copyButton(() => this.last?.path ?? '', 'Copiar caminho'))),
       ),
       this.gone,
-      h('div', { class: 'ui-status' }, accsEl, h('span', { class: 'ui-status__actions' }, centerBtn)),
+      h('div', { class: 'ui-status' }, accsEl, h('span', { class: 'ui-status__actions' }, this.newBtn, centerBtn)),
+      this.newMsg,
       this.agentsSec.el,
       this.tasksSec.el,
       this.feedSec.el,
@@ -766,6 +788,18 @@ class RoomView {
 
   get roomId(): string {
     return this.id;
+  }
+
+  /** Sessão nova na pasta da sala, na conta de quem estiver nela (ou na padrão). */
+  private newSession(): void {
+    const r = this.last;
+    if (!r) return;
+    const account = (this.ctx.store.snapshot?.agents ?? []).find((a) => a.roomId === r.id && a.kind === 'main')?.account;
+    setHidden(this.newMsg, true);
+    this.pty.newSession(r.path, account).catch((err: Error) => {
+      setText(this.newMsg, `Não deu: ${err.message}`);
+      setHidden(this.newMsg, false);
+    });
   }
 
   open(id: string): void {
@@ -791,6 +825,7 @@ class RoomView {
       // Sem tema: cor padrão.
     }
     setHidden(this.gone, !!live);
+    setHidden(this.newBtn, !this.pty.enabled);
 
     const snap = this.ctx.store.snapshot;
     const agents = (snap?.agents ?? []).filter((a) => a.roomId === r.id);
@@ -828,9 +863,10 @@ export class Drawer implements UiComponent {
   constructor(
     private ctx: UiContext,
     terminal: TerminalControl,
+    pty: PtyControl,
   ) {
-    this.agentView = new AgentView(ctx, terminal);
-    this.roomView = new RoomView(ctx);
+    this.agentView = new AgentView(ctx, terminal, pty);
+    this.roomView = new RoomView(ctx, pty);
     this.heading = h('span', { class: 'ui-drawer__kind' });
     const close = iconButton(ICONS.close, 'Fechar detalhes (Esc)', () => ctx.select(null));
     this.body = h('div', { class: 'ui-drawer__body' });
