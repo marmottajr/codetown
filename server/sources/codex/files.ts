@@ -1,9 +1,10 @@
 // Arquivos de uma pasta do Codex (CODEX_HOME) que a fonte lê: os rollouts (sessions/AAAA/MM/DD/ e
 // archived_sessions/) e os locks dos threads carregados (thread-writer-locks/<thread>.lock). Só leitura: nada é
-// criado e os locks são só conferidos pela EXISTÊNCIA (abrir com flock seguraria o lock e quebraria o Codex).
+// criado e os locks são só SONDADOS (locks.ts: nunca adquiridos; segurar a trava quebraria o Codex).
 // auth.json, config.toml, history.jsonl, shell_snapshots/, logs e os SQLite nunca são abertos.
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import type { LockProber, LockState } from './locks';
 import { createCodexState, metaFromLine, parseRolloutLine, type RolloutMeta } from './rollout';
 
 /** rollout-<AAAA-MM-DDThh-mm-ss>-<thread>[_<rollout>].jsonl[.zst] (o `_<rollout>` é de thread revertido). */
@@ -49,13 +50,15 @@ export interface LockInfo {
   threadId: string;
   /** Criação do lock (o Codex nunca escreve nele: o mtime é o momento em que foi criado). */
   createdAt: number;
+  /** O que a sondagem disse: held = sessão viva; free = órfã (vale como lock sumido); unknown = só a existência. */
+  state: LockState;
 }
 
 /**
- * Locks dos threads carregados agora; null = a pasta não existe (versão do Codex sem locks, ou não montada no
- * Docker). O `.coordination.lock` e qualquer outro arquivo ficam de fora.
+ * Locks dos threads carregados agora, cada um com o estado da sondagem; null = a pasta não existe (versão do Codex
+ * sem locks, ou não montada no Docker). O `.coordination.lock` e qualquer outro arquivo ficam de fora.
  */
-export function readLocks(home: string): Map<string, LockInfo> | null {
+export function readLocks(home: string, prober: LockProber): Map<string, LockInfo> | null {
   const dir = join(home, LOCKS_DIR);
   let names: string[];
   try {
@@ -67,10 +70,11 @@ export function readLocks(home: string): Map<string, LockInfo> | null {
   for (const name of names) {
     const m = LOCK_FILE.exec(name);
     if (!m) continue;
+    const path = join(dir, name);
     try {
-      const st = statSync(join(dir, name));
+      const st = statSync(path);
       const born = st.birthtimeMs > 0 ? Math.min(st.birthtimeMs, st.mtimeMs) : st.mtimeMs;
-      out.set(m[1].toLowerCase(), { threadId: m[1].toLowerCase(), createdAt: born });
+      out.set(m[1].toLowerCase(), { threadId: m[1].toLowerCase(), createdAt: born, state: prober.probe(path) });
     } catch {
       // sumiu entre a listagem e o stat
     }

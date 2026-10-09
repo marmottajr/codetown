@@ -3,32 +3,43 @@
 // (CodexLive, via POST /api/codex/events) chegam por applyHookEvent e adiantam o que os arquivos ainda não contam.
 //
 // Presença (o Codex não grava um registro de sessões como o do Claude Code):
-// - um thread carregado tem o arquivo `thread-writer-locks/<thread>.lock`, conferido só pela EXISTÊNCIA (polling;
-//   nunca flock). O lock precisa ter alguns segundos de vida (LOCK_SETTLE_MS, pela idade do arquivo): operações de
-//   manutenção (arquivar, renomear, migrar, compactar) criam locks rápidos que não são sessões;
+// - um thread carregado tem o arquivo `thread-writer-locks/<thread>.lock`, travado pelo processo do Codex. A trava é
+//   SONDADA a cada ciclo (locks.ts; nunca adquirida): 'held' (Windows: EBUSY; Linux: /proc/locks) = sessão viva, por
+//   mais velhos que sejam o lock e o rollout; 'free' = órfã de um crash, vale como lock sumido; 'unknown' (macOS,
+//   Docker: só a existência) = vale a regra de 12 h abaixo. O lock precisa ter alguns segundos de vida
+//   (LOCK_SETTLE_MS, pela idade do arquivo): operações de manutenção (arquivar, renomear, migrar, compactar) criam
+//   locks rápidos que não são sessões;
 // - o rollout do thread (achado pelo id no nome do arquivo) dá o projeto (cwd do session_meta), o título e o que o
 //   agente faz. Lock sem rollout = sessão aberta e ainda vazia: o Codex só cria o arquivo (e o hook SessionStart só
 //   dispara) no primeiro prompt, e o lock não diz a pasta. Sem o projeto não há sala: o principal só entra quando o
 //   rollout ou um hook disser o cwd (uma CLI recém-aberta aparece com a primeira mensagem);
-// - sem lock = fechada (com a mesma folga de 1,5 s do Claude Code). Lock velho de crash (o Codex só o limpa na
-//   próxima vez que abre): lock criado há mais de STALE_LOCK_MS, rollout parado há mais de STALE_LOCK_MS (ou sem
-//   rollout) e nenhum evento de hook = fechada. Uma escrita nova no rollout (ou um hook) reabre. Limite conhecido:
-//   uma sessão aberta e esquecida por mais de 12 h sem nada novo também sai (volta ao primeiro sinal de vida);
-// - versão sem `thread-writer-locks/` (ou Docker sem a pasta montada): rollout modificado nos últimos 30 min;
+// - sem lock (ou órfã) = fechada, depois da graça de MAIN_GONE_GRACE_MS (principal) ou de 1,5 s (subagente). Só no
+//   modo 'unknown': lock criado há mais de STALE_LOCK_MS, rollout parado há mais de STALE_LOCK_MS pela ÚLTIMA LINHA
+//   (ou sem rollout) e nenhum evento de hook = órfã de um crash, mesmo com o turno aberto. Uma escrita nova no rollout
+//   (ou um hook) reabre;
+// - versão sem `thread-writer-locks/` (ou Docker sem a pasta montada): o mtime só escolhe os rollouts a abrir; fica o
+//   que tem escrita nos últimos 30 min (crescimento do arquivo ou horário da última linha);
 // - um evento de hook segura o agente presente por HOOK_PRESENCE_MS mesmo sem lock visível; SessionEnd fecha (se o
 //   lock também sumiu, ou depois de SESSION_END_GRACE_MS).
+// O mtime nunca decide presença, progresso nem status (no Windows ele fica parado durante as escritas): a "última
+// escrita" é o crescimento do arquivo visto pelo tail ou o `timestamp` da última linha.
 // Subagentes (spawn_agent) são threads próprios, com lock e rollout: o session_meta aponta o pai. Entram como
 // subagentes do pai enquanto trabalham e entregam ao concluir o turno (ou ao sumir); threads internos (guardian,
 // revisão, compactação, memória) ficam de fora.
 //
 // Status: aplicado por bordas (início/fim de turno no rollout, eventos de hook), a informação mais nova vence; um
-// rollout relido nunca sobrescreve o 'waiting' de um PermissionRequest mais novo. Boot curto e síncrono (só a janela
-// final de rollouts grandes; o começo é lido depois, em segundo plano), com endBoot num `finally`.
+// rollout relido nunca sobrescreve o 'waiting' de um PermissionRequest mais novo. Com a trava segura o turno aberto
+// continua 'working' sem prazo; sem sondagem, 'working' sem nenhuma escrita por WORKING_QUIET_MS vira 'idle'. Ao abrir
+// um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos `tailBytes` e até a fronteira de turno
+// (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de onde a varredura parou e o começo
+// anterior a ela é lido depois, em segundo plano (números e linha do tempo longa). Boot síncrono, com endBoot num
+// `finally`.
 import { createReadStream, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import type { AccountUsage, Activity, AgentStatus, SourceInfo } from '../../../shared/types';
 import type { DetectedAccount } from '../../accounts/detect';
 import type { AccountEntry, AccountsService } from '../../accounts/service';
+import { detectDocker } from '../../config';
 import { errMsg, log } from '../../log';
 import type { Office, TranscriptSummary } from '../../model/office';
 import type { AgentSource } from '../source';
@@ -37,6 +48,8 @@ import type { TerminalParser } from '../terminal';
 import { codexPlanLabel, detectCodexAccounts } from './accounts';
 import { readLocks, readRolloutHead, rolloutDirs, RolloutIndex, parseRolloutName, LOCKS_DIR, type LockInfo } from './files';
 import type { CodexLive } from './live';
+import { createLockProber, type LockProber } from './locks';
+import { isTurnBoundary, lineTimestamp, scanBackward } from './reader';
 import {
   createCodexState,
   describeCodexTool,
@@ -50,17 +63,25 @@ import { createCodexTerminalParser } from './terminal';
 
 /** Idade mínima do lock para valer como sessão aberta (os locks de manutenção duram menos). */
 export const LOCK_SETTLE_MS = 3_000;
-/** Lock presente com rollout parado há mais que isto e nenhum evento de hook: lock velho de um crash. */
+/**
+ * Só no modo sem sondagem ('unknown'): lock criado há mais que isto, rollout parado há mais que isto (pela última
+ * linha) e nenhum evento de hook = lock velho de um crash.
+ */
 export const STALE_LOCK_MS = 12 * 3600_000;
-/** Sem `thread-writer-locks/`: presença = rollout modificado nos últimos 30 min. */
+/** Sem `thread-writer-locks/`: presença = escrita no rollout nos últimos 30 min (o mtime só escolhe o que abrir). */
 export const FALLBACK_RECENT_MS = 30 * 60_000;
 /** Um evento de hook segura o agente presente por este tempo (sem lock visível). */
 export const HOOK_PRESENCE_MS = 60_000;
 /** SessionEnd com o lock ainda presente: fecha mesmo assim depois disto. */
 export const SESSION_END_GRACE_MS = 5_000;
-/** Tempo que o thread precisa ficar ausente para ser dado como encerrado. */
+/** Principal ausente (lock sumido ou órfão, presença do hook vencida) por este tempo: encerrado. */
+export const MAIN_GONE_GRACE_MS = 5_000;
+/** Subagente ausente por este tempo: entrega e sai. */
 const CLOSE_AFTER_MISSING_MS = 1_500;
-/** 'working' sem nenhuma escrita no rollout nem evento de hook por este tempo: o turno morreu (crash). */
+/**
+ * 'working' sem nenhuma escrita no rollout nem evento de hook por este tempo: o turno morreu (crash). Só sem a trava
+ * segura: com ela, um comando longo pode passar horas sem escrever.
+ */
 export const WORKING_QUIET_MS = 30 * 60_000;
 /** Sem eventos de turno (legacy antigo): escreveu há pouco = trabalhando. */
 const LEGACY_WORKING_MS = 90_000;
@@ -97,10 +118,15 @@ export interface CodexSourceOptions {
   home?: string;
   now?: () => number;
   pollMs?: number;
-  /** Quanto do fim de cada rollout é lido ao abrir a sessão (padrão 1 MB). */
+  /**
+   * Mínimo lido do fim de cada rollout ao abrir a sessão (padrão 1 MB, as atividades recentes); a leitura continua para
+   * trás até a fronteira de turno (no máximo SCAN_MAX_BYTES).
+   */
   tailBytes?: number;
   /** Desliga o fs.watch (testes). */
   watch?: boolean;
+  /** Sondagem das travas (testes); padrão `createLockProber({ platform: process.platform, inDocker: detectDocker(env) })`. */
+  lockProber?: LockProber;
 }
 
 interface CodexAccount {
@@ -110,10 +136,10 @@ interface CodexAccount {
   /** Pasta para exibir (no Docker, a do host). */
   configDir: string;
   index: RolloutIndex;
-  /** Locks vistos no último ciclo (null = sem a pasta de locks). */
+  /** Locks vistos no último ciclo, com o estado da sondagem (null = sem a pasta de locks). */
   locks: Map<string, LockInfo> | null;
-  /** Modo sem locks: rollouts modificados há pouco (thread → mtime), revistos a cada 10 s. */
-  recent: Map<string, number>;
+  /** Modo sem locks: candidatos a abrir (rollouts com mtime recente), revistos a cada 10 s. */
+  recent: Set<string>;
   recentAt: number;
   usage?: AccountUsage;
   plan?: string;
@@ -142,8 +168,13 @@ interface ThreadTracker {
   statusAt: number;
   waitingFor?: string;
   lastHookAt?: number;
-  /** mtime do rollout na última leitura. */
+  /**
+   * Última escrita no rollout: o `timestamp` da última linha lida ao abrir, depois o momento em que o tail viu o
+   * arquivo crescer. Nunca o mtime.
+   */
   lastWriteAt?: number;
+  /** Tamanho do rollout já visto (o que passar disto é escrita nova). */
+  sizeSeen?: number;
   endedAt?: number;
   missingSince?: number;
   /** Subagente que já entregou (turno concluído). */
@@ -181,6 +212,7 @@ export class CodexSource implements AgentSource, CodexLive {
   private readonly now: () => number;
   private readonly tailBytes: number;
   private readonly useWatch: boolean;
+  private readonly prober: LockProber;
   private stopped = false;
 
   constructor(private readonly opts: CodexSourceOptions) {
@@ -188,6 +220,7 @@ export class CodexSource implements AgentSource, CodexLive {
     this.tailBytes = opts.tailBytes ?? 1024 * 1024;
     this.useWatch = opts.watch ?? true;
     const env = opts.env ?? process.env;
+    this.prober = opts.lockProber ?? createLockProber({ platform: process.platform, inDocker: detectDocker(env) });
     const claude = opts.accounts.entries();
     this.detected = detectCodexAccounts(opts.dirs, {
       env,
@@ -212,7 +245,7 @@ export class CodexSource implements AgentSource, CodexLive {
         old.configDir = e.detected.configDir;
         return old;
       }
-      return { id: e.id, dir: e.dir, configDir: e.detected.configDir, index: new RolloutIndex(e.dir, this.now), locks: null, recent: new Map(), recentAt: -Infinity };
+      return { id: e.id, dir: e.dir, configDir: e.detected.configDir, index: new RolloutIndex(e.dir, this.now), locks: null, recent: new Set(), recentAt: -Infinity };
     });
   }
 
@@ -317,7 +350,8 @@ export class CodexSource implements AgentSource, CodexLive {
     for (const [key, t] of [...this.threads]) {
       if (seen.has(key)) continue;
       t.missingSince ??= now;
-      if (!boot && now - t.missingSince < CLOSE_AFTER_MISSING_MS) continue;
+      const grace = t.kind === 'main' ? MAIN_GONE_GRACE_MS : CLOSE_AFTER_MISSING_MS;
+      if (!boot && now - t.missingSince < grace) continue;
       this.leave(t);
       this.unwatch(t);
       this.threads.delete(key);
@@ -327,15 +361,18 @@ export class CodexSource implements AgentSource, CodexLive {
   }
 
   /**
-   * Threads presentes de uma conta e por quê: 'lock' (lock com idade suficiente), 'recent' (sem pasta de locks:
-   * rollout modificado há pouco) ou 'hook' (evento de hook recente).
+   * Threads presentes de uma conta e por quê: 'lock' (lock com idade suficiente que a sondagem não deu como órfão),
+   * 'recent' (sem pasta de locks: candidato pelo mtime ou com escrita recente; quem decide é `wanted`) ou 'hook'
+   * (evento de hook recente).
    */
   private presentThreads(acc: CodexAccount, now: number): Map<string, 'lock' | 'recent' | 'hook'> {
     const out = new Map<string, 'lock' | 'recent' | 'hook'>();
-    acc.locks = readLocks(acc.dir);
+    acc.locks = readLocks(acc.dir, this.prober);
     if (acc.locks) {
       this.watchDir(`${acc.dir}${sep}${LOCKS_DIR}`);
       for (const lock of acc.locks.values()) {
+        // Órfã (o arquivo ficou e ninguém segura a trava: o Codex morreu): conta como lock sumido.
+        if (lock.state === 'free') continue;
         const known = this.threads.get(`${acc.id}:${lock.threadId}`);
         // Lock novo demais (manutenção?): espera (o polling de ~1 s confere de novo). O que já está no escritório
         // não precisa esperar de novo.
@@ -343,14 +380,14 @@ export class CodexSource implements AgentSource, CodexLive {
         out.set(lock.threadId, 'lock');
       }
     } else {
+      // O mtime só escolhe o que abrir (no Windows ele pode ficar parado); depois de lido, vale a última escrita.
       if (now - acc.recentAt >= 10_000) {
         acc.recentAt = now;
-        acc.recent = new Map(acc.index.recentlyModified(FALLBACK_RECENT_MS).map((r) => [r.threadId, r.mtimeMs]));
+        acc.recent = new Set(acc.index.recentlyModified(FALLBACK_RECENT_MS).map((r) => r.threadId));
       }
-      for (const [threadId, mtime] of acc.recent) {
-        const t = this.threads.get(`${acc.id}:${threadId}`);
-        const last = Math.max(mtime, t?.lastWriteAt ?? 0);
-        if (now - last <= FALLBACK_RECENT_MS) out.set(threadId, 'recent');
+      for (const threadId of acc.recent) out.set(threadId, 'recent');
+      for (const t of this.threads.values()) {
+        if (t.acc === acc && t.lastWriteAt !== undefined && now - t.lastWriteAt <= FALLBACK_RECENT_MS) out.set(t.threadId, 'recent');
       }
     }
     for (const t of this.threads.values()) {
@@ -403,18 +440,21 @@ export class CodexSource implements AgentSource, CodexLive {
     const hookRecent = t.lastHookAt !== undefined && now - t.lastHookAt < HOOK_PRESENCE_MS;
     // SessionEnd: fecha, a não ser que algo novo tenha acontecido depois.
     if (t.endedAt !== undefined) {
-      const lock = t.acc.locks?.get(t.threadId);
+      const lock = this.lockOf(t);
       const newer = (t.lastHookAt ?? 0) > t.endedAt || (t.lastWriteAt ?? 0) > t.endedAt + 1_000 || (lock?.createdAt ?? 0) > t.endedAt;
       if (newer) delete t.endedAt;
       else if (!lock || now - t.endedAt >= SESSION_END_GRACE_MS) return false;
     }
     if (!hookRecent && via === 'lock') {
-      const lock = t.acc.locks?.get(t.threadId);
-      // Lock velho de um crash: o lock é antigo e o rollout está parado há muito tempo (ou nem existe). Um thread
-      // antigo retomado agora tem lock novo (o Codex cria o arquivo ao carregar e o apaga ao descarregar).
+      const lock = this.lockOf(t);
+      // Só sem sondagem ('unknown'): lock velho de um crash = o lock é antigo e o rollout está parado há muito tempo
+      // pela última linha (ou nem existe), mesmo com o turno aberto. Um thread antigo retomado agora tem lock novo (o
+      // Codex cria o arquivo ao carregar e o apaga ao descarregar). Com a trava segura ('held'), a sessão está viva.
       const rolloutIdle = !t.rolloutPath || (t.lastWriteAt !== undefined && now - t.lastWriteAt > STALE_LOCK_MS);
-      if (lock && now - lock.createdAt > STALE_LOCK_MS && rolloutIdle) return false;
+      if (lock?.state === 'unknown' && now - lock.createdAt > STALE_LOCK_MS && rolloutIdle) return false;
     }
+    // Sem a pasta de locks: o mtime só trouxe o candidato; fica quem escreveu nos últimos 30 min.
+    if (!hookRecent && via === 'recent' && (t.lastWriteAt === undefined || now - t.lastWriteAt > FALLBACK_RECENT_MS)) return false;
     // Sem o projeto (sessão aberta ainda sem prompt, só com o lock) não há sala para o principal: espera o rollout ou um
     // hook dizer o cwd. Isso também segura um lock de subagente até o rollout dele dizer de quem ele é.
     if (t.kind === 'main' && !this.cwdOf(t)) return false;
@@ -425,6 +465,17 @@ export class CodexSource implements AgentSource, CodexLive {
       if (!t.inOffice && t.status !== 'working' && t.status !== 'waiting' && !t.hookSpawned) return false;
     }
     return true;
+  }
+
+  /** Lock do thread que ainda conta: a órfã ('free', ninguém segura a trava) vale como sumida. */
+  private lockOf(t: ThreadTracker): LockInfo | undefined {
+    const lock = t.acc.locks?.get(t.threadId);
+    return lock && lock.state !== 'free' ? lock : undefined;
+  }
+
+  /** A trava do thread está segura por um processo vivo do Codex (a sondagem viu). */
+  private lockHeld(t: ThreadTracker): boolean {
+    return t.acc.locks?.get(t.threadId)?.state === 'held';
   }
 
   private parentKey(t: ThreadTracker): string | undefined {
@@ -545,7 +596,11 @@ export class CodexSource implements AgentSource, CodexLive {
         t.nextResolveAt = 0;
         return;
       }
-      t.lastWriteAt = t.tail.mtimeMs;
+      // Escrita nova = o arquivo cresceu além do que já foi visto (o mtime não acompanha as escritas no Windows).
+      if (t.tail.size > (t.sizeSeen ?? 0)) {
+        t.sizeSeen = t.tail.size;
+        t.lastWriteAt = Math.max(t.lastWriteAt ?? 0, this.now());
+      }
       if (r.reset) {
         // Reescrito no mesmo caminho (ex.: codex migrate-rollouts): relê como histórico.
         this.load(t, t.tail.path);
@@ -557,23 +612,27 @@ export class CodexSource implements AgentSource, CodexLive {
     }
   }
 
-  /** Lê o começo (session_meta, título) e a janela do fim do rollout; o resto do começo vai em segundo plano. */
+  /**
+   * Abre o rollout: o começo (session_meta, título) e, do fim para trás, pelo menos `tailBytes` e até a fronteira de
+   * turno (o turno aberto pode estar a vários MB do fim; a janela fixa daria 'idle' no meio do trabalho). O tail
+   * continua de onde a varredura parou: a última linha ainda sem `\n` fica para ele, que a entrega uma vez só quando
+   * ela se completar. O começo anterior à varredura vai em segundo plano (números, título e linha do tempo longa).
+   */
   private load(t: ThreadTracker, path: string): void {
     const head = readRolloutHead(path);
     if (head.meta) this.setMeta(t, head.meta);
     const tail = new FileTail(path);
-    const start = tail.seekTail(this.tailBytes);
+    tail.seekEnd(); // fixa o arquivo (inode) e o tamanho antes da varredura
+    const scan = scanBackward(path, { size: tail.size, isBoundary: boundaryAfter(this.tailBytes) });
+    tail.offset = scan.end;
     t.tail = tail;
     t.rolloutPath = path;
+    t.sizeSeen = tail.size;
     t.state = createCodexState(head.meta);
     if (head.title) t.state.title = head.title;
     t.backlog = [];
-    for (let i = 0; i < 64; i++) {
-      const r = tail.read();
-      for (const line of r.lines) this.apply(t, parseRolloutLine(t.state, line, { idPrefix: t.key, now: this.now() }), false);
-      if (!r.more) break;
-    }
-    t.lastWriteAt = tail.mtimeMs;
+    for (const line of scan.lines) this.apply(t, parseRolloutLine(t.state, line, { idPrefix: t.key, now: this.now() }), false);
+    t.lastWriteAt = lastLineAt(scan.lines) ?? t.state.lastAt;
     this.settleStatus(t);
     if (t.inOffice) {
       this.flushBacklog(t);
@@ -581,7 +640,7 @@ export class CodexSource implements AgentSource, CodexLive {
     }
     this.applySummary(t);
     this.watchFile(t, path);
-    if (start > 0) this.queuePrefix(t, path, start);
+    if (scan.start > 0) this.queuePrefix(t, path, scan.start);
   }
 
   private setMeta(t: ThreadTracker, meta: RolloutMeta): void {
@@ -599,8 +658,9 @@ export class CodexSource implements AgentSource, CodexLive {
   }
 
   /**
-   * Status depois de ler a janela do rollout: o turno aberto (ou, no legacy antigo sem eventos de turno, uma escrita
-   * recente) é 'working'. Um status mais novo vindo de hook vence.
+   * Status depois de ler o rollout: o turno aberto (ou, no legacy antigo sem eventos de turno, uma escrita recente) é
+   * 'working'; sem a trava segura, um turno aberto sem escrita há WORKING_QUIET_MS é dado como morto. Um status mais
+   * novo vindo de hook vence.
    */
   private settleStatus(t: ThreadTracker): void {
     const s = t.state;
@@ -609,7 +669,7 @@ export class CodexSource implements AgentSource, CodexLive {
     let status: AgentStatus;
     if (s.turnOpen !== undefined) status = s.turnOpen ? 'working' : 'idle';
     else status = s.lastAt !== undefined && this.now() - s.lastAt < LEGACY_WORKING_MS ? 'working' : 'idle';
-    if (status === 'working' && this.now() - Math.max(t.lastWriteAt ?? 0, at) > WORKING_QUIET_MS) status = 'idle';
+    if (status === 'working' && !this.lockHeld(t) && this.now() - Math.max(t.lastWriteAt ?? 0, at) > WORKING_QUIET_MS) status = 'idle';
     t.status = status;
     t.statusAt = at;
     delete t.waitingFor;
@@ -676,9 +736,12 @@ export class CodexSource implements AgentSource, CodexLive {
     if (live) this.statusToOffice(t);
   }
 
-  /** 'working' sem nenhuma notícia por muito tempo (turno morto num crash): vira 'idle'. */
+  /**
+   * 'working' sem nenhuma notícia por muito tempo (turno morto num crash): vira 'idle'. Só sem a trava segura: com ela
+   * o processo está vivo e o turno aberto continua (um comando longo pode passar horas sem escrever nada).
+   */
   private quietCheck(t: ThreadTracker, now: number): void {
-    if (t.status !== 'working') return;
+    if (t.status !== 'working' || this.lockHeld(t)) return;
     const last = Math.max(t.lastWriteAt ?? 0, t.lastHookAt ?? 0, t.statusAt);
     if (now - last > WORKING_QUIET_MS) this.decide(t, 'idle', now, undefined, true);
   }
@@ -696,7 +759,10 @@ export class CodexSource implements AgentSource, CodexLive {
     this.opts.office.applyTranscript(t.key, summary);
   }
 
-  /** Começo de um rollout grande (antes da janela lida): números, título e a linha do tempo longa. */
+  /**
+   * Começo de um rollout grande (os bytes antes da varredura, sem sobreposição com ela): números, título e a linha do
+   * tempo longa. O status não sai daqui: a varredura já tem a fronteira de turno.
+   */
   private queuePrefix(t: ThreadTracker, path: string, end: number): void {
     const state = t.state;
     this.prefixChain = this.prefixChain
@@ -976,8 +1042,29 @@ export class CodexSource implements AgentSource, CodexLive {
 }
 
 /**
+ * Fronteira de turno para a varredura reversa, mas só depois de juntar `minBytes` do fim: as atividades recentes e o
+ * último token_count/rate_limits vêm junto, como na janela fixa de antes, mesmo com o turno recém-fechado.
+ */
+function boundaryAfter(minBytes: number): (line: string) => boolean {
+  let bytes = 0;
+  return (line) => {
+    bytes += Buffer.byteLength(line) + 1;
+    return bytes >= minBytes && isTurnBoundary(line);
+  };
+}
+
+/** `timestamp` da última linha que tiver um (as linhas vêm na ordem do arquivo). */
+function lastLineAt(lines: string[]): number | undefined {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const at = lineTimestamp(lines[i]);
+    if (at !== undefined) return at;
+  }
+  return undefined;
+}
+
+/**
  * Lê em stream (sem travar o event loop) os bytes [0, end) de um rollout: os números, o título e as últimas
- * `keep` atividades anteriores à janela lida ao abrir a sessão.
+ * `keep` atividades anteriores à varredura feita ao abrir a sessão.
  */
 export async function scanPrefix(path: string, end: number, idPrefix: string, keep: number): Promise<{ state: CodexState; activities: Activity[] }> {
   const state = createCodexState();

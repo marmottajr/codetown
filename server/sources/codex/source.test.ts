@@ -8,6 +8,8 @@ import { setQuiet } from '../../log';
 import { NameStore } from '../../model/names';
 import { Office } from '../../model/office';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
+import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
+import { readLocks } from './files';
 import { CodexSource } from './source';
 
 setQuiet(true);
@@ -22,7 +24,12 @@ afterEach(() => {
   cleanups = [];
 });
 
-function setup(opts: { names?: string[]; noLocks?: boolean; env?: (dirs: string[]) => NodeJS.ProcessEnv } = {}) {
+/**
+ * `locks`: como a sondagem vê os locks do fixture (arquivos vazios que ninguém trava). 'held' (padrão) = Windows/Linux
+ * com a trava segura; 'exists' = macOS/Docker (só a existência, estado 'unknown'). `ctx.locks.set` muda uma thread.
+ */
+function setup(opts: { names?: string[]; noLocks?: boolean; locks?: 'held' | 'exists'; env?: (dirs: string[]) => NodeJS.ProcessEnv } = {}) {
+  const locks = fakeLockProber(opts.locks === 'exists' ? 'exists' : 'win32');
   const homes = (opts.names ?? ['.codex']).map((n) => codexHome(n));
   const home = homes[0];
   cleanups.push(...homes.map((h) => h.cleanup));
@@ -42,7 +49,7 @@ function setup(opts: { names?: string[]; noLocks?: boolean; env?: (dirs: string[
   });
   late.office = office;
   const dirs = homes.map((h) => h.dir);
-  const source = new CodexSource({ accounts, office, dirs, env: opts.env?.(dirs) ?? {}, home: home.home, now, watch: false });
+  const source = new CodexSource({ accounts, office, dirs, env: opts.env?.(dirs) ?? {}, home: home.home, now, watch: false, lockProber: locks.prober });
   // Para antes de apagar as pastas (nenhum ciclo agendado roda depois).
   cleanups.unshift(() => source.stop());
   const notices: Notice[] = [];
@@ -53,6 +60,7 @@ function setup(opts: { names?: string[]; noLocks?: boolean; env?: (dirs: string[
     office,
     source,
     notices,
+    locks,
     advance(ms: number) {
       clock += ms;
     },
@@ -115,11 +123,14 @@ describe('fonte do Codex: presença pelos locks', () => {
     expect(ctx.agent()?.status).toBe('idle');
     expect(ctx.agent()?.activity?.kind).toBe('done');
 
-    // Sem lock: fecha (depois da folga).
+    // Sem lock: fecha (depois da graça de 5 s do principal).
     ctx.home.unlock(T);
     ctx.poll();
     expect(ctx.agent()?.status).toBe('idle');
-    ctx.advance(2_000);
+    ctx.advance(4_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    ctx.advance(1_000);
     ctx.poll();
     expect(ctx.agent()?.status).toBe('offline');
     expect(ctx.notices.some((n) => n.text.includes('encerrou'))).toBe(true);
@@ -147,8 +158,8 @@ describe('fonte do Codex: presença pelos locks', () => {
     expect(ctx.agent()?.status).toBe('idle');
   });
 
-  it('lock velho de crash (rollout parado há mais de 12 h, sem hook) fica fora; escrita nova reabre', () => {
-    const ctx = setup();
+  it('só existência (macOS/Docker): lock velho de crash (última linha há mais de 12 h, sem hook) fica fora; escrita nova reabre', () => {
+    const ctx = setup({ locks: 'exists' });
     const old = ctx.now() - 13 * 3600_000;
     const path = ctx.home.rollout(T, [R.meta(T, { at: old }), R.taskStarted('t', old), R.user(T, 't', 'u', 'oi', old)], { mtime: old });
     ctx.home.lock(T, old);
@@ -160,8 +171,8 @@ describe('fonte do Codex: presença pelos locks', () => {
     expect(ctx.agent()).toMatchObject({ status: 'working' });
   });
 
-  it('thread antigo retomado agora (lock novo, rollout parado há dias) aparece', () => {
-    const ctx = setup();
+  it('só existência (macOS/Docker): thread antigo retomado agora (lock novo, rollout parado há dias) aparece', () => {
+    const ctx = setup({ locks: 'exists' });
     const old = ctx.now() - 3 * 86_400_000;
     ctx.home.rollout(T, [R.meta(T, { at: old, cwd: '/projetos/velho' }), R.user(T, 't', 'u', 'antigo', old), R.taskComplete('t', old + 10)], { mtime: old });
     ctx.home.lock(T, ctx.now() - 30_000);
@@ -216,6 +227,193 @@ describe('fonte do Codex: presença pelos locks', () => {
     ctx.home.rollout(C, [R.meta(C, { at: old }), R.user(C, 't', 'u', 'velha', old)], { mtime: old });
     ctx.source.boot();
     expect(ctx.agents().map((a) => a.id)).toEqual([KEY]);
+  });
+});
+
+describe('fonte do Codex: sondagem da trava, leitura até a fronteira e mtime fora das decisões', () => {
+  it('readLocks devolve o estado da sondagem de cada lock (o .coordination.lock fica de fora); sem a pasta, null', () => {
+    const ctx = setup();
+    ctx.home.lock(T, ctx.now() - 60_000);
+    ctx.home.lock(C, ctx.now() - 30_000);
+    writeFileSync(join(ctx.home.dir, 'thread-writer-locks', '.coordination.lock'), '');
+    ctx.locks.set(C, 'free');
+    const locks = readLocks(ctx.home.dir, ctx.locks.prober);
+    expect(Object.fromEntries([...locks!].map(([id, l]) => [id, l.state]))).toEqual({ [T]: 'held', [C]: 'free' });
+    rmSync(join(ctx.home.dir, 'thread-writer-locks'), { recursive: true });
+    expect(readLocks(ctx.home.dir, ctx.locks.prober)).toBeNull();
+  });
+
+  it('trava segura (held): sessão aberta há mais de 12 h, com o rollout e o mtime parados há 13 h, continua presente', () => {
+    const ctx = setup();
+    const old = ctx.now() - 13 * 3600_000;
+    ctx.home.rollout(T, [R.meta(T, { at: old, cwd: '/projetos/desktop' }), R.taskStarted('t', old), R.user(T, 't', 'u', 'oi', old), R.taskComplete('t', old + 1_000)], { mtime: old + 1_000 });
+    ctx.home.lock(T, old);
+    ctx.source.boot();
+    expect(ctx.agent()).toMatchObject({ roomId: '/projetos/desktop', status: 'idle' });
+    ctx.advance(60_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+  });
+
+  it('trava órfã (free: o arquivo existe e ninguém segura) sai como lock sumido, depois da graça de 5 s do principal', () => {
+    const ctx = setup();
+    const at = ctx.now() - 60_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t', at), R.user(T, 't', 'u', 'oi', at)]);
+    ctx.home.rollout(C, [R.meta(C, { at }), R.user(C, 't', 'u', 'órfã desde o boot', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.locks.set(C, 'free');
+    ctx.source.boot();
+    // Órfã no boot: nem entra.
+    expect(ctx.agent(`.codex:${C}`)).toBeUndefined();
+    expect(ctx.agent()?.status).toBe('working');
+    ctx.locks.set(T, 'free');
+    ctx.poll();
+    ctx.advance(4_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    ctx.advance(1_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('offline');
+    expect(ctx.notices.some((n) => n.text.includes('encerrou'))).toBe(true);
+  });
+
+  it('trava segura e turno aberto: 31 min sem escrever continua trabalhando (sem o "concluiu" falso)', () => {
+    const ctx = setup();
+    const at = ctx.now() - 60_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t', at), R.user(T, 't', 'u', 'rode a migração longa', at)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()?.status).toBe('working');
+    ctx.advance(31 * 60_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    expect(ctx.notices.some((n) => n.text.includes('concluiu'))).toBe(false);
+  });
+
+  it('trava segura: boot com o turno aberto e a última linha de 40 min atrás sai trabalhando', () => {
+    const ctx = setup();
+    const at = ctx.now() - 40 * 60_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t', at), R.user(T, 't', 'u', 'compile tudo', at)], { mtime: at });
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()?.status).toBe('working');
+  });
+
+  it('só existência (macOS/Docker): sem como saber se o processo vive, o corte de 30 min sem escrita continua (no boot e ao vivo)', () => {
+    const ctx = setup({ locks: 'exists' });
+    const old = ctx.now() - 40 * 60_000;
+    const at = ctx.now() - 60_000;
+    ctx.home.rollout(T, [R.meta(T, { at: old }), R.taskStarted('t', old), R.user(T, 't', 'u', 'compile tudo', old)], { mtime: old });
+    ctx.home.rollout(C, [R.meta(C, { at }), R.taskStarted('t', at), R.user(C, 't', 'u', 'rode a migração', at)]);
+    ctx.home.lock(T, old);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    expect(ctx.agent()?.status).toBe('idle');
+    expect(ctx.agent(`.codex:${C}`)?.status).toBe('working');
+    ctx.advance(31 * 60_000);
+    ctx.poll();
+    expect(ctx.agent(`.codex:${C}`)?.status).toBe('idle');
+  });
+
+  it('só existência: lock de 13 h com o turno aberto e a última linha de 13 h fica fora, mesmo com o mtime de agora', () => {
+    const ctx = setup({ locks: 'exists' });
+    const old = ctx.now() - 13 * 3600_000;
+    // O mtime é o de agora (o arquivo acabou de ser gravado): não pode segurar o órfão.
+    ctx.home.rollout(T, [R.meta(T, { at: old }), R.taskStarted('t', old), R.user(T, 't', 'u', 'oi', old + 1_000)]);
+    ctx.home.lock(T, old);
+    ctx.source.boot();
+    expect(ctx.agent()).toBeUndefined();
+    ctx.advance(1_000);
+    ctx.poll();
+    expect(ctx.agent()).toBeUndefined();
+  });
+
+  it('só existência: lock de 13 h com o mtime parado há 13 h e a última linha de 20 min continua presente', () => {
+    const ctx = setup({ locks: 'exists' });
+    const old = ctx.now() - 13 * 3600_000;
+    const recent = ctx.now() - 20 * 60_000;
+    ctx.home.rollout(
+      T,
+      [
+        R.meta(T, { at: old, cwd: '/projetos/desktop' }),
+        R.taskStarted('t1', old),
+        R.taskComplete('t1', old + 1_000),
+        R.taskStarted('t2', recent - 1_000),
+        R.user(T, 't2', 'u2', 'e agora?', recent - 1_000),
+        R.taskComplete('t2', recent),
+      ],
+      { mtime: old },
+    );
+    ctx.home.lock(T, old);
+    ctx.source.boot();
+    expect(ctx.agent()).toMatchObject({ roomId: '/projetos/desktop', status: 'idle' });
+  });
+
+  it('boot no meio de um turno de mais de 1 MB: principal e subagente trabalhando (a leitura vai até o task_started)', async () => {
+    const ctx = setup();
+    const start = ctx.now() - 20 * 60_000;
+    // Última linha uns 17 min atrás: a regra do legacy (escreveu há menos de 90 s) não salvaria.
+    const parent = bigTurn(T, 'p1', 1_200_000, start + 2_000);
+    ctx.home.rollout(T, [R.meta(T, { at: start, cwd: '/projetos/loja' }), R.taskStarted('p1', start), R.user(T, 'p1', 'u', 'Refatore o módulo de pedidos', start + 1_000), ...parent]);
+    const sub = bigTurn(C, 's1', 1_100_000, start + 5_000);
+    ctx.home.rollout(C, [
+      R.meta(C, { at: start + 3_000, sessionId: T, source: SOURCES.sub(T, 'worker') }),
+      R.taskStarted('s1', start + 3_000),
+      R.user(C, 's1', 'su', 'Ajuste os testes de pedidos', start + 4_000),
+      ...sub,
+    ]);
+    ctx.home.lock(T, start);
+    ctx.home.lock(C, start + 3_000);
+    ctx.source.boot();
+    expect(ctx.agent()).toMatchObject({ status: 'working', title: 'Refatore o módulo de pedidos', roomId: '/projetos/loja' });
+    expect(ctx.agent(`.codex:${C}`)).toMatchObject({ kind: 'sub', parentId: KEY, status: 'working' });
+    // O começo (antes da varredura) chega em segundo plano sem contar nada duas vezes.
+    await ctx.source.idle();
+    expect(ctx.agent()?.stats.toolCalls).toBe(parent.length);
+  });
+
+  it('attach com a última linha pela metade: sem exceção, e a atividade sai uma vez só quando a linha completa chega', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [
+      R.meta(T, { at }),
+      R.taskStarted('t1', at),
+      R.user(T, 't1', 'u1', 'Gere o build', at + 1_000),
+      R.command(T, 't1', 'call_1', 'npm test', { at: at + 2_000, output: 'ok' }),
+    ]);
+    const last = R.command(T, 't1', 'call_2', 'npm run build', { at: ctx.now() - 1_000, output: 'pronto' });
+    const cut = Math.floor(last.length / 2);
+    appendRaw(path, last.slice(0, cut));
+    ctx.home.lock(T, at);
+    expect(() => ctx.source.boot()).not.toThrow();
+    const build = () => ctx.office.detail(KEY)!.history.filter((a) => a.id === `${KEY}#call_2`);
+    expect(ctx.agent()?.status).toBe('working');
+    expect(ctx.office.detail(KEY)!.history.some((a) => a.id === `${KEY}#call_1`)).toBe(true);
+    expect(build()).toHaveLength(0);
+    ctx.advance(500);
+    ctx.poll();
+    expect(build()).toHaveLength(0);
+    appendRaw(path, `${last.slice(cut)}\n`);
+    ctx.advance(500);
+    ctx.poll();
+    expect(build()).toHaveLength(1);
+    ctx.advance(500);
+    ctx.poll();
+    expect(build()).toHaveLength(1);
+  });
+
+  it('sem thread-writer-locks/: o mtime só escolhe o que abrir; rollout com a última linha de 2 h fica fora até crescer', () => {
+    const ctx = setup({ noLocks: true });
+    const old = ctx.now() - 2 * 3600_000;
+    // mtime de agora, conteúdo de 2 h atrás.
+    const path = ctx.home.rollout(T, [R.meta(T, { at: old }), R.user(T, 't', 'u', 'velha', old)]);
+    ctx.source.boot();
+    expect(ctx.agent()).toBeUndefined();
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.taskStarted('t2', ctx.now()), R.user(T, 't2', 'u2', 'voltei', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'working' });
   });
 });
 
@@ -444,7 +642,7 @@ describe('fonte do Codex: eventos de hook', () => {
     expect(ctx.agent()?.status).toBe('idle');
     ctx.advance(31_000);
     ctx.poll();
-    ctx.advance(2_000);
+    ctx.advance(5_000);
     ctx.poll();
     expect(ctx.agent()?.status).toBe('offline');
     // De novo, agora com lock: SessionEnd fecha quando o lock some (ou depois de 5 s).
@@ -469,7 +667,7 @@ describe('fonte do Codex: eventos de hook', () => {
     expect(ctx.agent()?.status).toBe('working');
     ctx.advance(61_000);
     ctx.poll();
-    ctx.advance(2_000);
+    ctx.advance(5_000);
     ctx.poll();
     expect(ctx.agent()?.status).toBe('offline');
   });
