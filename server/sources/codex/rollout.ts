@@ -319,6 +319,86 @@ export function planTasks(args: Rec): TaskItem[] | undefined {
   return out;
 }
 
+const PLAN_CALL = 'tools.update_plan(';
+/** Maior literal lido no argumento do tools.update_plan (o resto do script não importa). */
+const PLAN_LITERAL_MAX = 20_000;
+const JS_WORD = /[A-Za-z_$][\w$]*/y;
+const JS_COLON = /\s*:/y;
+
+/**
+ * Argumento do último `tools.update_plan({...})` do JavaScript do code mode (`exec`): parse tolerante do literal
+ * (aspas simples, crase, chaves sem aspas, vírgula final), SEM executar nada. undefined = sem chamada, argumento que
+ * não é literal (variável, função) ou literal ilegível.
+ */
+function planFromScript(js: string): Rec | undefined {
+  const at = js.lastIndexOf(PLAN_CALL);
+  if (at < 0) return undefined;
+  const from = at + PLAN_CALL.length;
+  const open = js.indexOf('{', from);
+  if (open < 0 || js.slice(from, open).trim()) return undefined;
+  const literal = balancedLiteral(js, open);
+  if (!literal) return undefined;
+  try {
+    return rec(JSON.parse(looseJson(literal)));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Trecho `{…}` que começa em `start`, respeitando strings ('…', "…", `…`); undefined se não fechar dentro do limite. */
+function balancedLiteral(text: string, start: number): string | undefined {
+  let depth = 0;
+  let quote = '';
+  const end = Math.min(text.length, start + PLAN_LITERAL_MAX);
+  for (let i = start; i < end; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = '';
+    } else if (c === '"' || c === "'" || c === '`') quote = c;
+    else if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return undefined;
+}
+
+/** Literal de objeto JS → JSON: aspas simples e crase viram duplas, chaves sem aspas ganham aspas, vírgula final sai. */
+function looseJson(literal: string): string {
+  let out = '';
+  for (let i = 0; i < literal.length; i++) {
+    const c = literal[i];
+    if (c === '"' || c === "'" || c === '`') {
+      let s = '';
+      for (i++; i < literal.length && literal[i] !== c; i++) {
+        const ch = literal[i];
+        if (ch === '\\' && i + 1 < literal.length) {
+          const next = literal[++i];
+          s += next === "'" || next === '`' ? next : `\\${next}`;
+        } else if (ch === '"') s += '\\"';
+        else if (ch === '\n') s += '\\n';
+        else if (ch === '\r') s += '\\r';
+        else if (ch === '\t') s += '\\t';
+        else s += ch;
+      }
+      out += `"${s}"`;
+      continue;
+    }
+    JS_WORD.lastIndex = i;
+    const word = JS_WORD.exec(literal)?.[0];
+    if (word) {
+      JS_COLON.lastIndex = i + word.length;
+      out += JS_COLON.test(literal) ? `"${word}"` : word;
+      i += word.length - 1;
+      continue;
+    }
+    out += c;
+  }
+  return out.replace(/,(\s*[}\]])/g, '$1');
+}
+
 /**
  * Atividade de uma ferramenta do Codex pelo nome que ela tem no rollout, no hook ou no app (exec_command, shell,
  * Bash, apply_patch, mcp__…, spawn_agent, exec do code mode...). `name` volta normalizado (Bash, Edit, Write,
@@ -922,12 +1002,12 @@ class RolloutLineParser {
           this.s.stats.toolCalls++;
           this.changed();
         }
-        if (name === 'update_plan') {
-          const tasks = planTasks(input);
-          if (tasks) {
-            this.s.tasks = tasks;
-            this.changed();
-          }
+        // update_plan direto ou tools.update_plan({...}) no JS do code mode (só o literal é lido; nada é executado).
+        const planArgs = name === 'update_plan' ? input : name === 'exec' && typeof p.input === 'string' ? planFromScript(p.input) : undefined;
+        const tasks = planArgs && planTasks(planArgs);
+        if (tasks) {
+          this.s.tasks = tasks;
+          this.changed();
         }
         // Atividade em andamento: o item concluído (paginated) chega depois com o mesmo id e não duplica.
         const { desc, tool } = describeCodexTool(name, input, str(p.namespace));

@@ -555,3 +555,41 @@ describe('request_user_input: o agente espera você (P9)', () => {
     expect(quiet.flatMap((r) => r.activities)).toEqual([]);
   });
 });
+
+describe('update_plan dentro do exec do code mode (P10)', () => {
+  const marker = '__habblaudExecutou';
+  /** custom_tool_call `exec` (code mode) com o JS dado. */
+  const codeMode = (callId: string, js: string) => R.customToolCall(callId, 'exec', js, AT);
+
+  it('tools.update_plan({...}) no JS vira as tarefas: literal tolerante (aspas simples, crase, chaves sem aspas, vírgula final), sem executar nada', () => {
+    const js = [
+      'const r = await tools.exec_command({ cmd: "npm test" });',
+      "await tools.update_plan({ plan: [ { step: 'Ler o código', status: 'completed' }, { step: \"Escrever o teste\", status: 'in_progress', }, { step: `Rodar a suíte`, status: 'pending' }, ], explanation: `um 'teste'`, });",
+      `globalThis.${marker} = true;`,
+    ].join('\n');
+    const { state, results } = feed([R.meta(T), codeMode('call_js', js)]);
+    expect(state.tasks).toEqual([
+      { id: '1', title: 'Ler o código', status: 'completed' },
+      { id: '2', title: 'Escrever o teste', status: 'in_progress' },
+      { id: '3', title: 'Rodar a suíte', status: 'pending' },
+    ]);
+    expect(results[1].changed).toBe(true);
+    // Só a atividade do exec (o plano não ganha atividade própria); nada do JS rodou.
+    expect(ids(results)).toEqual(['acc:t#call_js']);
+    expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
+  });
+
+  it('vale a última chamada do script; título mascarado; argumento que não é literal, literal ilegível ou script sem plano não mexem nas tarefas', () => {
+    const two = "tools.update_plan({ plan: [{ step: 'Velho', status: 'completed' }] });\n" + `tools.update_plan({ plan: [{ step: 'Configurar o ${GHP}', status: 'in_progress' }] });`;
+    const { state, results } = feed([
+      R.meta(T),
+      codeMode('c1', two),
+      codeMode('c2', 'const passos = []; tools.update_plan({ plan: passos });'),
+      codeMode('c3', "tools.update_plan({ plan: [{ step: 'quebrado', status: 'pending' }"),
+      codeMode('c4', 'await tools.exec_command({ cmd: "ls" });'),
+      codeMode('c5', 'tools.update_plan(planoMontado);'),
+    ]);
+    expect(state.tasks).toEqual([{ id: '1', title: 'Configurar o gh*_***', status: 'in_progress' }]);
+    expect(results.slice(2).map((r) => r.changed)).toEqual([false, false, false, false]);
+  });
+});
