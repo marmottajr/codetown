@@ -364,7 +364,8 @@ export class CodexSource implements AgentSource, CodexLive {
 
   poll(boot = false): void {
     const now = (this.lastPollAt = this.now());
-    const seen = new Set<string>();
+    /** Threads presentes neste ciclo, e por quê. */
+    const seen = new Map<string, 'lock' | 'recent' | 'hook'>();
     for (const acc of this.accs) {
       const present = this.presentThreads(acc, now);
       for (const [threadId, via] of present) {
@@ -379,7 +380,7 @@ export class CodexSource implements AgentSource, CodexLive {
         } catch (err) {
           log.warnOnce(`codex-thread:${key}:${errMsg(err)}`, `Codex: thread ${key}: ${errMsg(err)}`);
         }
-        seen.add(key);
+        seen.set(key, via);
       }
     }
     for (const [key, t] of [...this.threads]) {
@@ -394,9 +395,18 @@ export class CodexSource implements AgentSource, CodexLive {
       if (t.kind !== 'main') this.dropShells(t.key, this.treeKey(t), now);
       else if (this.shellTrees.delete(key)) this.opts.office.setShells(key, []);
     }
-    // Subagentes de novo, depois das entradas e saídas deste ciclo: o que ficou para depois entra (o pai entrou agora)
-    // e o neto ligado ao principal sai se o principal fechou agora (o closeMain não o alcança pelo pai direto).
-    for (const t of this.threads.values()) if (t.kind === 'sub' && seen.has(t.key)) this.reconcile(t, now);
+    // Subagentes presentes, depois de todos os threads lidos e das entradas e saídas deste ciclo, o pai antes do neto: a
+    // ligação do neto (pai direto ou principal) não depende da ordem do readdir, e o neto ligado ao principal sai se o
+    // principal fechou agora (o closeMain não o alcança pelo pai direto).
+    const subs = [...this.threads.values()].filter((t) => t.kind === 'sub' && seen.has(t.key));
+    const depth = new Map(subs.map((t) => [t, this.depthOf(t)]));
+    for (const t of subs.sort((a, b) => depth.get(a)! - depth.get(b)!)) {
+      try {
+        this.reconcile(t, now, seen.get(t.key));
+      } catch (err) {
+        log.warnOnce(`codex-thread:${t.key}:${errMsg(err)}`, `Codex: thread ${t.key}: ${errMsg(err)}`);
+      }
+    }
     // Shells de cada árvore, a cada ciclo: expiração, o de quem entregou ou fechou passa ao principal, e o status.
     for (const [root, tree] of [...this.shellTrees]) {
       if (!tree.size && !this.threads.has(root)) this.shellTrees.delete(root);
@@ -477,11 +487,15 @@ export class CodexSource implements AgentSource, CodexLive {
     };
   }
 
-  /** Um ciclo de um thread presente: acha/lê o rollout e decide se ele está (ou continua) no escritório. */
+  /**
+   * Um ciclo de um thread presente: acha/lê o rollout e decide se ele está (ou continua) no escritório. O subagente é
+   * decidido no fim do ciclo (poll), depois de todos os threads lidos.
+   */
   private syncThread(t: ThreadTracker, via: 'lock' | 'recent' | 'hook', now: number, boot: boolean): void {
     delete t.missingSince;
     if (t.inOffice && !this.opts.office.has(t.key)) t.inOffice = false; // saiu do escritório (graça encerrada)
     this.pump(t, boot);
+    if (t.kind === 'sub') return;
     this.reconcile(t, now, via);
     if (t.inOffice && t.kind === 'main') {
       this.quietCheck(t, now);
@@ -543,15 +557,35 @@ export class CodexSource implements AgentSource, CodexLive {
   }
 
   /**
-   * Pai do subagente no escritório: o pai direto enquanto ele está lá e não entregou; senão (neto cujo pai já concluiu
-   * ou saiu) o principal da árvore, se estiver lá. Sem nenhum dos dois, o pai direto (o sub espera).
+   * Pai do subagente no escritório: o pai direto enquanto ele está lá e não entregou, ou enquanto ele ainda pode entrar
+   * (o sub espera por ele); senão (neto cujo pai já concluiu ou saiu) o principal da árvore, se estiver lá. Sem nenhum
+   * dos dois, o pai direto (o sub espera).
    */
   private parentKey(t: ThreadTracker): string | undefined {
     if (!t.parentThreadId) return undefined;
     const direct = `${t.acc.id}:${t.parentThreadId}`;
-    if (this.activeInOffice(direct)) return direct;
+    if (this.activeInOffice(direct) || !this.parentDone(direct)) return direct;
     const root = this.rootKey(t);
     return root && root !== direct && this.opts.office.has(root) ? root : direct;
+  }
+
+  /**
+   * O pai direto já entregou ou saiu: sem tracker (fechou), entregue ou encerrado no escritório, ou lido e ocioso fora
+   * dele (concluiu antes de entrar). Um pai presente que ainda pode entrar (trabalhando, ou com o rollout ainda não lido)
+   * não conta como concluído.
+   */
+  private parentDone(key: string): boolean {
+    const p = this.threads.get(key);
+    if (!p) return true;
+    if (this.opts.office.has(key)) return this.opts.office.isSubDone(key);
+    return p.subDone || (p.meta !== undefined && p.status === 'idle');
+  }
+
+  /** Ancestrais do subagente entre os threads conhecidos (1 = filho do principal, 2 = neto); o pai vem antes do neto. */
+  private depthOf(t: ThreadTracker): number {
+    let depth = 0;
+    for (let p: ThreadTracker | undefined = t; p?.parentThreadId && depth < 8; depth++) p = this.threads.get(`${p.acc.id}:${p.parentThreadId}`);
+    return depth;
   }
 
   /** Principal da árvore: session_meta.session_id (o thread raiz), do próprio sub ou do pai dele. */

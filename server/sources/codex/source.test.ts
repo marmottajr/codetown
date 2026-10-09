@@ -13,7 +13,7 @@ import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
 import { B, commandParsed, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { readLocks } from './files';
-import { CodexSource, MAIN_GONE_GRACE_MS, scanPrefix, SHELL_EXPIRE_MS, USAGE_RESCAN_MS } from './source';
+import { CodexSource, LOCK_SETTLE_MS, MAIN_GONE_GRACE_MS, scanPrefix, SHELL_EXPIRE_MS, USAGE_RESCAN_MS } from './source';
 
 setQuiet(true);
 
@@ -1080,11 +1080,25 @@ describe('fonte do Codex: título do filho pelo spawn_agent (P11)', () => {
 });
 
 describe('fonte do Codex: neto (P13)', () => {
-  const G = threadId(5);
-  const SUB = `.codex:${C}`;
-  const NETO = `.codex:${G}`;
+  /**
+   * Ids do principal (T), do pai (C) e do neto (G) em todas as ordens de nome: no NTFS o readdir dos locks segue o nome
+   * (é a ordem em que a fonte processa os threads); no ext4 a ordem vem do hash. O resultado não pode depender dela.
+   */
+  const ORDERS: Array<[string, number, number, number]> = [
+    ['T-C-G', 1, 2, 3],
+    ['T-G-C', 1, 3, 2],
+    ['C-T-G', 2, 1, 3],
+    ['G-T-C', 2, 3, 1],
+    ['C-G-T', 3, 1, 2],
+    ['G-C-T', 3, 2, 1],
+  ];
+  function tree(t: number, c: number, g: number) {
+    const ids = { T: threadId(t), C: threadId(c), G: threadId(g) };
+    return { ...ids, MAIN: `.codex:${ids.T}`, SUB: `.codex:${ids.C}`, NETO: `.codex:${ids.G}` };
+  }
 
-  it('neto (depth 2) trabalhando com o pai já concluído entra ligado ao principal da árvore', () => {
+  it.each(ORDERS)('neto (depth 2) trabalhando com o pai já concluído entra ligado ao principal da árvore (nomes %s)', (_, t, c, g) => {
+    const { T, C, G, MAIN, SUB, NETO } = tree(t, c, g);
     const ctx = setup();
     const at = ctx.now() - 10_000;
     ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at)]);
@@ -1095,10 +1109,29 @@ describe('fonte do Codex: neto (P13)', () => {
     ctx.home.lock(G, at);
     ctx.source.boot();
     expect(ctx.agent(SUB)).toBeUndefined();
-    expect(ctx.agent(NETO)).toMatchObject({ kind: 'sub', parentId: KEY, status: 'working', title: 'Conte as linhas de src' });
+    expect(ctx.agent(NETO)).toMatchObject({ kind: 'sub', parentId: MAIN, status: 'working', title: 'Conte as linhas de src' });
   });
 
-  it('neto presente não vira done quando o pai conclui, segue depois que o pai sai do escritório e sai quando o principal fecha', () => {
+  it.each(ORDERS)('pai e neto que aparecem juntos com o principal aberto: o neto entra ligado ao pai que trabalha (nomes %s)', (_, t, c, g) => {
+    const { T, C, G, MAIN, SUB, NETO } = tree(t, c, g);
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent(MAIN)?.status).toBe('working');
+    ctx.home.rollout(C, [R.meta(C, { at: ctx.now(), sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', ctx.now())]);
+    ctx.home.rollout(G, [R.meta(G, { at: ctx.now() + 100, sessionId: T, source: grandchildSource(C) }), R.taskStarted('g1', ctx.now() + 100)]);
+    ctx.home.lock(C, ctx.now());
+    ctx.home.lock(G, ctx.now());
+    ctx.advance(LOCK_SETTLE_MS + 100);
+    ctx.poll();
+    expect(ctx.agent(SUB)).toMatchObject({ kind: 'sub', parentId: MAIN, status: 'working' });
+    expect(ctx.agent(NETO)).toMatchObject({ kind: 'sub', parentId: SUB, status: 'working' });
+  });
+
+  it.each(ORDERS)('neto presente não vira done quando o pai conclui, segue depois que o pai sai do escritório e sai quando o principal fecha (nomes %s)', (_, t, c, g) => {
+    const { T, C, G, MAIN, SUB, NETO } = tree(t, c, g);
     const ctx = setup();
     const at = ctx.now() - 10_000;
     ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at)]);
@@ -1125,7 +1158,7 @@ describe('fonte do Codex: neto (P13)', () => {
     ctx.poll();
     ctx.advance(MAIN_GONE_GRACE_MS);
     ctx.poll();
-    expect(ctx.agent()?.status).toBe('offline');
+    expect(ctx.agent(MAIN)?.status).toBe('offline');
     expect(ctx.agent(NETO)?.status).toBe('done');
   });
 });
