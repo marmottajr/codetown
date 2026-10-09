@@ -25,7 +25,8 @@
 // escrita" é o crescimento do arquivo visto pelo tail ou o `timestamp` da última linha.
 // Subagentes (spawn_agent) são threads próprios, com lock e rollout: o session_meta aponta o pai. Entram como
 // subagentes do pai enquanto trabalham e entregam ao concluir o turno (ou ao sumir); threads internos (guardian,
-// revisão, compactação, memória) ficam de fora.
+// revisão, compactação, memória) ficam de fora. O título do filho é a tarefa do spawn_agent do pai (sinal 'spawn' com
+// o id do filho, guardado até ele entrar), senão o 1º texto do próprio filho.
 //
 // Status: aplicado por bordas (início/fim de turno no rollout, eventos de hook), a informação mais nova vence; um
 // rollout relido nunca sobrescreve o 'waiting' de um PermissionRequest mais novo. Um request_user_input sem output é
@@ -93,6 +94,8 @@ const PREFIX_HISTORY = 120;
 const BACKLOG_MAX = 400;
 /** Conta sem sessão aberta ao subir: quantos rollouts recentes tentar até achar um com o uso do plano. */
 const SEED_USAGE_FILES = 8;
+/** Títulos de filhos (sinal spawn) guardados até o filho aparecer. */
+const SPAWN_TITLES_MAX = 256;
 const MAIN_ROLE = 'Agente principal (Codex)';
 const SUB_ROLE = 'Subagente (Codex)';
 /** Motivo da espera de um request_user_input aberto (o mesmo texto que o registro usa para uma pergunta). */
@@ -208,6 +211,8 @@ export class CodexSource implements AgentSource, CodexLive {
   private entries: readonly AccountEntry[] = [];
   private detected: DetectedAccount[] = [];
   private threads = new Map<string, ThreadTracker>();
+  /** Título de cada filho pelo spawn_agent do pai ("<conta>:<thread do filho>" → título), até o filho aparecer. */
+  private spawnTitles = new Map<string, string>();
   private dirWatchers = new Map<string, FSWatcher>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private kick: ReturnType<typeof setTimeout> | null = null;
@@ -519,7 +524,8 @@ export class CodexSource implements AgentSource, CodexLive {
         parentId: parent,
         sessionId: t.threadId,
         role: roleOf(t.meta?.agentRole ?? t.hookRole),
-        title: t.state.title,
+        // A tarefa que o pai deu no spawn_agent; sem ela, o 1º texto do próprio filho.
+        title: this.spawnTitles.get(t.key) ?? t.state.title,
         background: false,
         startedAt: t.meta?.startedAt ?? t.state.firstAt ?? now,
       });
@@ -712,6 +718,15 @@ export class CodexSource implements AgentSource, CodexLive {
         case 'answered':
           // Só a espera da pergunta sai com a resposta (a de aprovação continua até o comando andar).
           if (t.status === 'waiting' && t.waitingFor === QUESTION_WAIT) this.decide(t, 'working', r.at, undefined, live);
+          break;
+        case 'spawn':
+          // Título do filho: vale quando ele entrar no escritório (sem o id dele não há como casar).
+          if (sig.childThreadId) {
+            const key = `${t.acc.id}:${sig.childThreadId.toLowerCase()}`;
+            this.spawnTitles.delete(key);
+            this.spawnTitles.set(key, sig.title);
+            if (this.spawnTitles.size > SPAWN_TITLES_MAX) this.spawnTitles.delete(this.spawnTitles.keys().next().value as string);
+          }
           break;
         default:
           break;

@@ -9,7 +9,7 @@ import { NameStore } from '../../model/names';
 import { Office } from '../../model/office';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
-import { Q } from '../../test/codex-fixtures-source-ii';
+import { Q, S } from '../../test/codex-fixtures-source-ii';
 import { readLocks } from './files';
 import { CodexSource } from './source';
 
@@ -885,5 +885,45 @@ describe('fonte do Codex: pergunta do request_user_input (P9)', () => {
     ctx.home.append(path, [R.taskComplete('turn1', ctx.now())]);
     ctx.poll();
     expect(ctx.agent()?.status).toBe('idle');
+  });
+});
+
+describe('fonte do Codex: título do filho pelo spawn_agent (P11)', () => {
+  const SUB = `.codex:${C}`;
+
+  it('o filho que aparece depois do spawn ganha o título do spawn_agent do pai (mais que o 1º texto dele), mascarado', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const token = 'gh' + 'p_' + 'A1'.repeat(18);
+    ctx.home.rollout(T, [
+      R.meta(T, { at }),
+      R.taskStarted('p1', at),
+      S.spawnAgent('call_sp', `Revise os testes de soma ${token}`, at + 1_000, 'revisar_testes'),
+      S.started(T, 'p1', 'call_sp', C, at + 1_100, 'revisar_testes'),
+    ]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)).toBeUndefined();
+    // O filho aparece (lock e rollout dele): o 1º texto dele é outro, mas vale a tarefa que o pai deu.
+    ctx.home.rollout(C, [R.meta(C, { at: at + 1_200, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', at + 1_200), R.user(C, 's1', 'su', 'Texto do próprio filho', at + 1_300)]);
+    ctx.home.lock(C, at + 1_200);
+    ctx.advance(3_100);
+    ctx.poll();
+    expect(ctx.agent(SUB)).toMatchObject({ kind: 'sub', parentId: KEY, title: 'Revise os testes de soma gh*_***', status: 'working' });
+  });
+
+  it('boot com pai e filho juntos: o filho entra com o título do spawn; filho sem spawn com o id dele fica com o próprio texto', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const C3 = threadId(3);
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), S.spawnAgent('call_sp', 'Documente o módulo de soma', at + 1_000), S.started(T, 'p1', 'call_sp', C, at + 1_100)]);
+    ctx.home.rollout(C, [R.meta(C, { at: at + 1_200, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', at + 1_200), R.user(C, 's1', 'su', 'Outro texto', at + 1_300)]);
+    ctx.home.rollout(C3, [R.meta(C3, { at: at + 1_200, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s3', at + 1_200), R.user(C3, 's3', 'su3', 'Liste os arquivos de src', at + 1_300)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.home.lock(C3, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)?.title).toBe('Documente o módulo de soma');
+    expect(ctx.agent(`.codex:${C3}`)?.title).toBe('Liste os arquivos de src');
   });
 });
