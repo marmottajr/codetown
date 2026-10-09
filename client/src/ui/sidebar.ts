@@ -7,6 +7,7 @@ import { plural, shortPath } from './format';
 import { ICONS } from './icons';
 import { groupRooms, type AgentNode, type RoomGroup } from './model';
 import { officeIsEmpty } from './overlays';
+import { ProjectPicker } from './projectpicker';
 import { createAgentRow, updateAgentRow } from './rows';
 import { createAccountChip, createProgress, updateAccountChip, updateProgress } from './widgets';
 
@@ -24,6 +25,8 @@ interface RoomRefs {
 
 interface NodeRefs {
   row: HTMLButtonElement;
+  /** Atalho para a janela de terminal do agente. */
+  term: HTMLButtonElement;
   subsWrap: HTMLElement;
   subsCaption: HTMLElement;
   subs: KeyedList<AgentInfo>;
@@ -39,6 +42,9 @@ export class Sidebar implements UiComponent {
   private rooms: KeyedList<RoomGroup>;
   private roomRefs = new WeakMap<HTMLElement, RoomRefs>();
   private nodeRefs = new WeakMap<HTMLElement, NodeRefs>();
+  /** "Abrir projeto": escolher uma pasta do computador e abrir o Claude Code nela (terminal interativo). */
+  private openProject: HTMLButtonElement;
+  private picker: ProjectPicker | null = null;
   private empty: HTMLElement;
   private emptyText: HTMLElement;
   private clearBtn: HTMLButtonElement;
@@ -116,12 +122,28 @@ export class Sidebar implements UiComponent {
     this.scroller.append(this.empty);
 
     const close = iconButton(ICONS.close, 'Fechar painel lateral', () => ctx.togglePanel('sidebar', false), 'ui-side__close');
+    this.openProject = h('button', {
+      class: 'ui-btn ui-btn--sm ui-side__open',
+      type: 'button',
+      title: 'Escolher uma pasta do computador e abrir o Claude Code nela',
+      on: { click: () => this.showPicker() },
+    });
+    this.openProject.innerHTML = ICONS.folder;
+    this.openProject.append(h('span', { text: 'Abrir projeto' }));
     this.el = h(
       'aside',
       { class: 'ui-panel ui-sidebar', attrs: { 'aria-label': 'Salas e agentes', id: 'ui-sidebar' } },
-      h('div', { class: 'ui-side__head' }, h('div', { class: 'ui-side__title' }, h('h2', { text: 'Escritório' }), close), search, this.filters),
+      h('div', { class: 'ui-side__head' }, h('div', { class: 'ui-side__title' }, h('h2', { text: 'Escritório' }), h('span', { class: 'ui-side__title-actions' }, this.openProject, close)), search, this.filters),
       this.scroller,
     );
+  }
+
+  private showPicker(): void {
+    if (!this.picker) {
+      this.picker = new ProjectPicker(this.ctx);
+      this.ctx.root.append(this.picker.el);
+    }
+    this.picker.show(this.openProject);
   }
 
   focusSearch(): void {
@@ -130,6 +152,7 @@ export class Sidebar implements UiComponent {
   }
 
   render(): void {
+    setHidden(this.openProject, !this.ctx.terminals?.interactiveEnabled);
     const snap = this.ctx.store.snapshot;
     const accounts = snap?.accounts ?? [];
     const hidden = new Set(this.ctx.prefs.hiddenAccounts);
@@ -252,19 +275,42 @@ export class Sidebar implements UiComponent {
     const subsCaption = h('span', { class: 'ui-subs__caption' });
     const subsList = h('ul', { class: 'ui-subs__list' });
     const subsWrap = h('div', { class: 'ui-subs', hidden: true }, subsCaption, subsList);
-    const li = h('li', { class: 'ui-node' }, row, subsWrap);
+    // Botão irmão da linha (não dentro dela: botão dentro de botão não vale), sobre o status à direita: aparece com
+    // o mouse em cima (ou foco) e fica aceso enquanto o terminal do agente estiver aberto.
+    const term = h('button', { class: 'ui-node__term', type: 'button' });
+    term.innerHTML = ICONS.terminal;
+    term.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = row.dataset.id;
+      if (id) this.ctx.terminals?.toggle(id, term);
+    });
+    const head = h('div', { class: 'ui-node__head' }, row, term);
+    const li = h('li', { class: 'ui-node' }, head, subsWrap);
     const subs = new KeyedList<AgentInfo>(subsList, {
       key: (a) => a.id,
       create: (a) => h('li', { class: 'ui-subs__item' }, createAgentRow(a, (id) => this.pick(id), 'sm')),
       update: (li2, a) => this.updateRow(li2.firstElementChild as HTMLElement, a),
     });
-    this.nodeRefs.set(li, { row, subsWrap, subsCaption, subs });
+    this.nodeRefs.set(li, { row, term, subsWrap, subsCaption, subs });
     return li;
   }
 
   private updateNode(li: HTMLElement, n: AgentNode): void {
     const r = this.nodeRefs.get(li)!;
     this.updateRow(r.row, n.agent);
+    const router = this.ctx.terminals;
+    const a = n.agent;
+    const canTerm = !!router?.available && a.status !== 'offline';
+    setHidden(r.term, !canTerm);
+    if (canTerm && router) {
+      const open = router.openAgentId === a.id;
+      const live = router.interactive(a.id);
+      r.term.classList.toggle('is-on', open);
+      r.term.classList.toggle('is-live', live);
+      const what = live ? 'interativo' : 'ao vivo';
+      setTitle(r.term, open ? 'Fechar o terminal' : `Abrir o terminal de ${a.name} (${what})`);
+      setAttr(r.term, 'aria-label', open ? `Fechar o terminal de ${a.name}` : `Abrir o terminal de ${a.name}`);
+    }
     const has = n.subTotal > 0;
     setHidden(r.subsWrap, !has);
     if (has) {
@@ -281,6 +327,9 @@ export class Sidebar implements UiComponent {
 
   private pick(id: string): void {
     this.ctx.select({ type: 'agent', id }, { focus: true });
+    // Com um terminal aberto, clicar noutro agente troca o terminal para o dele.
+    const t = this.ctx.terminals;
+    if (t && t.openAgentId !== null && t.openAgentId !== id && this.ctx.agent(id)) t.open(id);
     if (this.ctx.isNarrow()) this.ctx.togglePanel('sidebar', false);
   }
 }

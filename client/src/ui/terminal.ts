@@ -14,6 +14,10 @@ import type { UiComponent, UiContext } from './context';
 import { copyText, h, iconButton, prefersReducedMotion, setAttr, setHidden, setText, setTitle, setVariant } from './dom';
 import { calendarDayDiff, formatClock, formatDateTime, formatDuration, formatElapsed, relativeTime } from './format';
 import { ICONS } from './icons';
+import { maximizeButton, Movable } from './movable';
+import type { PtyControl } from './pty';
+import { TermActions } from './termactions';
+import { TermTabs } from './termtabs';
 import { renderMarkdown } from './markdown';
 import { roleLabel, shellWaitIn } from './model';
 import { providerOf } from './provider';
@@ -636,10 +640,19 @@ export class TerminalPanel implements UiComponent, TerminalControl {
   private glyph: HTMLElement;
   private statusText: HTMLElement;
   private statusTime: HTMLElement;
+  /** "Assumir daqui" e "Encerrar" (terminal interativo ligado) e as abas dos agentes do projeto. */
+  private actions: TermActions | null;
+  private tabs: TermTabs;
+  private movable: Movable;
   /** Caixa de mensagem do rodapé (só a sessão ao vivo de um agente principal). */
   private composer: MessageComposer;
 
-  constructor(private ctx: UiContext) {
+  constructor(
+    private ctx: UiContext,
+    pty?: PtyControl,
+  ) {
+    this.actions = pty ? new TermActions(ctx, pty, true) : null;
+    this.tabs = new TermTabs(ctx);
     const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
     const findKey = mac ? '⌘F' : 'Ctrl+F';
     const icon = h('span', { class: 'ui-term__icon', attrs: { 'aria-hidden': 'true' } });
@@ -663,6 +676,8 @@ export class TerminalPanel implements UiComponent, TerminalControl {
       h('div', { class: 'ui-term__who' }, this.accEl, this.nameEl, this.provEl, this.roleEl, this.roomEl),
       this.reconnEl,
       this.findBtn,
+      ...(this.actions ? [this.actions.el] : []),
+      maximizeButton(() => this.movable),
       close,
     );
 
@@ -727,11 +742,14 @@ export class TerminalPanel implements UiComponent, TerminalControl {
       'section',
       { class: 'ui-term', role: 'dialog', hidden: true, tabIndex: -1, attrs: { 'aria-label': 'Terminal' } },
       bar,
+      this.tabs.el,
       tools,
       h('div', { class: 'ui-term__body' }, this.alertEl, this.scroll, this.newBtn),
       h('div', { class: 'ui-term__foot' }, this.status, this.composer.el),
     );
     this.el.addEventListener('keydown', (e) => this.onKey(e));
+    // Arrastar pela barra solta a janela (ui/movable.ts).
+    this.movable = new Movable(this.el, bar, { key: 'habblaud.move.term', enabled: () => !ctx.isNarrow() });
     this.renderFilter();
     // Janela redimensionada: quem está no fim continua vendo o fim.
     if (typeof ResizeObserver === 'function') new ResizeObserver(() => this.follow && this.scrollToEnd()).observe(this.scroll);
@@ -789,6 +807,9 @@ export class TerminalPanel implements UiComponent, TerminalControl {
     if (this.id === null) return;
     if (this.session) this.renderSessionHead(this.session);
     else this.renderAgentHead();
+    const live = this.session ? null : (this.ctx.agent(this.id) ?? null);
+    this.actions?.render(live);
+    this.tabs.render(live ? live.id : null);
     this.renderFooter();
     this.renderState();
     // Mensagens só para a sessão ao vivo (no histórico, a caixa diz que a sessão foi encerrada).
@@ -813,6 +834,7 @@ export class TerminalPanel implements UiComponent, TerminalControl {
     this.follow = true;
     this.unread = 0;
     this.lastEntryAt = 0;
+    if (this.el.hidden) this.movable.restore();
     this.el.hidden = false;
     this.el.classList.toggle('is-session', !!session);
     this.connect();
