@@ -28,7 +28,9 @@
 // revisão, compactação, memória) ficam de fora.
 //
 // Status: aplicado por bordas (início/fim de turno no rollout, eventos de hook), a informação mais nova vence; um
-// rollout relido nunca sobrescreve o 'waiting' de um PermissionRequest mais novo. Com a trava segura o turno aberto
+// rollout relido nunca sobrescreve o 'waiting' de um PermissionRequest mais novo. Um request_user_input sem output é
+// 'waiting' ("responder uma pergunta") até a resposta ou o fim do turno, sem trocar uma espera por aprovação que já
+// esteja valendo (a resposta só tira a espera da pergunta). Com a trava segura o turno aberto
 // continua 'working' sem prazo; sem sondagem, 'working' sem nenhuma escrita por WORKING_QUIET_MS vira 'idle'. Ao abrir
 // um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos `tailBytes` e até a fronteira de turno
 // (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de onde a varredura parou e o começo
@@ -93,6 +95,8 @@ const BACKLOG_MAX = 400;
 const SEED_USAGE_FILES = 8;
 const MAIN_ROLE = 'Agente principal (Codex)';
 const SUB_ROLE = 'Subagente (Codex)';
+/** Motivo da espera de um request_user_input aberto (o mesmo texto que o registro usa para uma pergunta). */
+const QUESTION_WAIT = 'responder uma pergunta';
 
 const HOOK_EVENTS = new Set([
   'SessionStart',
@@ -670,9 +674,12 @@ export class CodexSource implements AgentSource, CodexLive {
     if (s.turnOpen !== undefined) status = s.turnOpen ? 'working' : 'idle';
     else status = s.lastAt !== undefined && this.now() - s.lastAt < LEGACY_WORKING_MS ? 'working' : 'idle';
     if (status === 'working' && !this.lockHeld(t) && this.now() - Math.max(t.lastWriteAt ?? 0, at) > WORKING_QUIET_MS) status = 'idle';
-    t.status = status;
+    // Turno aberto com request_user_input sem output: espera você responder.
+    const asking = status === 'working' && s.asking.size > 0;
+    t.status = asking ? 'waiting' : status;
     t.statusAt = at;
-    delete t.waitingFor;
+    if (asking) t.waitingFor = QUESTION_WAIT;
+    else delete t.waitingFor;
   }
 
   /** Aplica um resultado de linha: ao vivo vai direto ao escritório; na carga inicial, fica no backlog. */
@@ -692,7 +699,19 @@ export class CodexSource implements AgentSource, CodexLive {
           this.decide(t, 'idle', r.at, undefined, live);
           break;
         case 'progress':
-          if (t.status === 'waiting') this.decide(t, 'working', r.at, undefined, live);
+          // Algo andou: sai a espera por aprovação; com uma pergunta ainda aberta, volta a esperar a resposta.
+          if (t.status === 'waiting' && t.waitingFor !== QUESTION_WAIT) {
+            if (t.state.asking.size) this.decide(t, 'waiting', r.at, QUESTION_WAIT, live);
+            else this.decide(t, 'working', r.at, undefined, live);
+          }
+          break;
+        case 'asking':
+          // Não troca uma espera por aprovação (hook PermissionRequest) que já esteja valendo.
+          if (t.status !== 'waiting' || t.waitingFor === QUESTION_WAIT) this.decide(t, 'waiting', r.at, QUESTION_WAIT, live);
+          break;
+        case 'answered':
+          // Só a espera da pergunta sai com a resposta (a de aprovação continua até o comando andar).
+          if (t.status === 'waiting' && t.waitingFor === QUESTION_WAIT) this.decide(t, 'working', r.at, undefined, live);
           break;
         default:
           break;

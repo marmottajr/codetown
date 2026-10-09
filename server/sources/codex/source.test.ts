@@ -9,6 +9,7 @@ import { NameStore } from '../../model/names';
 import { Office } from '../../model/office';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
+import { Q } from '../../test/codex-fixtures-source-ii';
 import { readLocks } from './files';
 import { CodexSource } from './source';
 
@@ -792,5 +793,97 @@ describe('fonte do Codex: contas', () => {
     // Sem o rollout legível não há projeto: fica fora (um hook com o cwd o traria).
     expect(ctx.agent()).toBeUndefined();
     expect(ctx.source.transcriptPathOf(KEY)).toBeUndefined();
+  });
+});
+
+describe('fonte do Codex: pergunta do request_user_input (P9)', () => {
+  const QUESTION = 'responder uma pergunta';
+  const perm = (extra: Record<string, unknown> = {}) => ({
+    hook_event_name: 'PermissionRequest',
+    session_id: T,
+    cwd: '/projetos/loja',
+    transcript_path: null,
+    turn_id: 'turn1',
+    tool_name: 'Bash',
+    tool_input: { command: 'rm -rf dist' },
+    ...extra,
+  });
+
+  it('pergunta sem output: o principal espera você ("responder uma pergunta"); a resposta volta a trabalhar', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('turn1', at), R.user(T, 'turn1', 'u1', 'Arrume o build', at + 100)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()?.status).toBe('working');
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.ask('call_ask', 'Posso apagar a pasta dist?', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: QUESTION });
+    expect(ctx.notices.some((n) => n.text.includes(QUESTION))).toBe(true);
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.answer('call_ask', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    expect(ctx.agent()?.waitingFor).toBeUndefined();
+  });
+
+  it('boot no meio de uma pergunta: o principal e o subagente que pergunta já saem esperando', () => {
+    const ctx = setup();
+    const at = ctx.now() - 60_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), Q.ask('call_p', 'Qual banco usar?', at + 1_000)]);
+    ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', at), Q.ask('call_s', 'Sigo com o Postgres?', at + 2_000)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: QUESTION });
+    expect(ctx.agent(`.codex:${C}`)).toMatchObject({ kind: 'sub', status: 'waiting', waitingFor: QUESTION });
+  });
+
+  it('a pergunta não atropela a espera por aprovação do hook, e a resposta não a tira; o comando andar tira', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('turn1', at)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.hook(perm())).toBe(true);
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.ask('call_ask', 'Posso apagar a pasta dist?', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.answer('call_ask', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.command(T, 'turn1', 'call_rm', 'rm -rf dist', { at: ctx.now() })]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+  });
+
+  it('com a pergunta aberta, um pedido de aprovação vale por cima; a resposta da pergunta não tira essa espera, e o comando andar volta à pergunta se ela seguir aberta', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('turn1', at), Q.ask('call_a', 'Qual banco usar?', at + 1_000), Q.ask('call_b', 'Posso migrar?', at + 1_100)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: QUESTION });
+    ctx.hook(perm());
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.answer('call_a', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: 'aprovar um comando' });
+    // Aprovado: o comando concluiu, mas a outra pergunta continua sem resposta.
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.command(T, 'turn1', 'call_rm', 'rm -rf dist', { at: ctx.now() })]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: QUESTION });
+    // Fim do turno com a pergunta aberta: ninguém mais espera a resposta.
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.taskComplete('turn1', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
   });
 });
