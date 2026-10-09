@@ -64,6 +64,43 @@ function maskedCut(text: string, max?: number): string {
   return max === undefined ? masked : truncate(masked, max);
 }
 
+/**
+ * Entradas das descrições compartilhadas (`describeTool`, `SPECIAL`): o shared/activity.ts corta o texto que recebe
+ * (`truncate(q, 28)`, `slice(0, 368)`, `slice(0, 1200)`...) ANTES de mascarar, então o texto livre do modelo tem de
+ * chegar já mascarado. Só texto livre: caminhos e URLs passam como vieram.
+ */
+function maskedText(v: unknown): string | undefined {
+  return typeof v === 'string' ? maskedCut(v) : undefined;
+}
+
+const maskedValue = (v: unknown): unknown => (typeof v === 'string' ? maskedCut(v) : v);
+
+/** `questions` de um AskUserQuestion com pergunta, cabeçalho e opções (rótulo e descrição) mascarados; as posições ficam. */
+function maskedQuestions(raw: unknown): unknown {
+  if (!Array.isArray(raw)) return raw;
+  return raw.map((q) => {
+    const question = rec(q);
+    if (!question) return q;
+    const options = Array.isArray(question.options)
+      ? question.options.map((o) => {
+          const option = rec(o);
+          return option ? { ...option, label: maskedValue(option.label), description: maskedValue(option.description) } : o;
+        })
+      : question.options;
+    return { ...question, question: maskedValue(question.question), header: maskedValue(question.header), options };
+  });
+}
+
+/** Chaves cujo valor é caminho ou URL (não é texto livre). */
+const PATH_KEYS = new Set(['file_path', 'notebook_path', 'path', 'url']);
+
+/** Entrada de uma ferramenta que cai no `describeTool` pelo nome: cada texto livre (1º nível) e as perguntas, mascarados. */
+function maskedInput(input: Rec): Rec {
+  const out: Rec = {};
+  for (const [key, value] of Object.entries(input)) out[key] = key === 'questions' ? maskedQuestions(value) : PATH_KEYS.has(key) ? value : maskedValue(value);
+  return out;
+}
+
 function toMs(v: unknown): number | undefined {
   if (typeof v !== 'string') return undefined;
   const t = Date.parse(v);
@@ -456,7 +493,7 @@ function webDesc(action: unknown, query?: string): { desc: ActivityDescription; 
   const url = str(a.url);
   if ((a.type === 'open_page' || a.type === 'find_in_page') && url) return { desc: describeTool('WebFetch', { url }), tool: 'WebFetch' };
   const q = str(a.query) ?? (Array.isArray(a.queries) ? str(a.queries[0]) : undefined) ?? query;
-  return { desc: describeTool('WebSearch', { query: q }), tool: 'WebSearch' };
+  return { desc: describeTool('WebSearch', { query: maskedText(q) }), tool: 'WebSearch' };
 }
 
 /** web::run: a 1ª busca de `search_query[]` ({q} ou texto) ou a 1ª página de `open[]` ({ref_id}/{url} ou texto). */
@@ -468,7 +505,7 @@ function webRunDesc(input: Rec): { desc: ActivityDescription; tool: string } {
     return o ? keys.map((k) => str(o[k])).find((x) => x !== undefined) : undefined;
   };
   const query = first(input.search_query, ['q', 'query']);
-  if (query) return { desc: describeTool('WebSearch', { query }), tool: 'WebSearch' };
+  if (query) return { desc: describeTool('WebSearch', { query: maskedText(query) }), tool: 'WebSearch' };
   const url = first(input.open, ['ref_id', 'url']);
   if (url) return { desc: describeTool('WebFetch', { url }), tool: 'WebFetch' };
   return { desc: describeTool('WebSearch', {}), tool: 'WebSearch' };
@@ -490,7 +527,7 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
     case 'exec_command':
     case 'container.exec': {
       const command = commandText(input.cmd ?? input.command);
-      return { desc: describeTool('Bash', { command, description: input.description }), tool: 'Bash' };
+      return { desc: describeTool('Bash', { command: maskedCut(command), description: maskedText(input.description) }), tool: 'Bash' };
     }
     case 'write_stdin':
       return { desc: { kind: 'run', icon: '⌨️', text: 'Interagindo com um comando' }, tool: name };
@@ -515,12 +552,12 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
     }
     case 'web_search':
     case 'web_search_preview':
-      return { desc: describeTool('WebSearch', { query: input.query }), tool: 'WebSearch' };
+      return { desc: describeTool('WebSearch', { query: maskedText(input.query) }), tool: 'WebSearch' };
     case 'spawn_agent':
     case 'Agent': {
       const prompt = str(input.message) ?? str(input.prompt) ?? str(input.task);
       const description = prompt ? maskedCut(prompt, 60) : undefined;
-      return { desc: describeTool('Agent', { description, subagent_type: input.agent_type }), tool: 'Agent' };
+      return { desc: describeTool('Agent', { description, subagent_type: maskedText(input.agent_type) }), tool: 'Agent' };
     }
     case 'wait':
     case 'wait_agent':
@@ -535,13 +572,13 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
       return { desc: { kind: 'wait', icon: '🔐', text: 'Pedindo permissões' }, tool: name };
     case 'request_user_input':
       // Pergunta síncrona: o turno para até você responder (kind 'ask': o escritório não sobrepõe o "Precisa de você").
-      return { desc: { ...describeTool('AskUserQuestion', { questions: input.questions }), text: 'Esperando você responder' }, tool: name };
+      return { desc: { ...describeTool('AskUserQuestion', { questions: maskedQuestions(input.questions) }), text: 'Esperando você responder' }, tool: name };
     case 'web.run':
       return webRunDesc(input);
     case 'clock.sleep':
       return { desc: sleepDesc(), tool: name };
     default:
-      return { desc: describeTool(name, input), tool: name };
+      return { desc: describeTool(name, maskedInput(input)), tool: name };
   }
 }
 
@@ -834,7 +871,7 @@ class RolloutLineParser {
         if (this.paginated()) return;
         this.s.mode ??= 'legacy';
         const text = str(p.message);
-        if (text) this.push(SPECIAL.respond(text));
+        if (text) this.push(SPECIAL.respond(maskedCut(text)));
         this.progress();
         return;
       }
@@ -953,7 +990,7 @@ class RolloutLineParser {
       case 'AgentMessage': {
         this.sawPaginated();
         const text = contentText(item.content).text.trim();
-        if (text) this.push(SPECIAL.respond(text), { key: id });
+        if (text) this.push(SPECIAL.respond(maskedCut(text)), { key: id });
         this.progress();
         return;
       }
@@ -981,7 +1018,7 @@ class RolloutLineParser {
         this.s.stats.toolCalls++;
         this.changed();
         this.done(id);
-        this.push(describeTool('WebSearch', { query: item.query }), { key: id, tool: 'WebSearch', callId: id });
+        this.push(describeTool('WebSearch', { query: maskedText(item.query) }), { key: id, tool: 'WebSearch', callId: id });
         return;
       case 'ImageView': {
         this.sawPaginated();
@@ -1107,7 +1144,7 @@ class RolloutLineParser {
     // O function_call (ou o hook PreToolUse) de mesmo id já pôs no escritório a heurística do Bash: o tipo vindo do
     // parsed_cmd pede para substituí-la (sem isso o escritório fica com a primeira).
     const parsed = parsedCmdActivity(c.parsed);
-    this.push(parsed ?? describeTool('Bash', { command }), { key, tool: 'Bash', callId: c.id, replace: parsed !== undefined });
+    this.push(parsed ?? describeTool('Bash', { command: maskedCut(command) }), { key, tool: 'Bash', callId: c.id, replace: parsed !== undefined });
     if (c.status === 'declined') {
       this.push(SPECIAL.rejected('Bash'), { key: `${key}:r` });
       return;
@@ -1144,7 +1181,7 @@ class RolloutLineParser {
     // Code mode: a mensagem para você é a resposta (a mesma chave da entrega gravada como response_item).
     const said = userMessagingText(server, tool, input);
     if (said) {
-      this.push(SPECIAL.respond(said), { key });
+      this.push(SPECIAL.respond(maskedCut(said)), { key });
       return;
     }
     this.push(describeTool(name, input), { key, tool: name, callId: id });
@@ -1165,7 +1202,7 @@ class RolloutLineParser {
         // Só a resposta entregue no code mode (as outras mensagens são o contexto mandado ao modelo).
         const delivered = deliveredMessage(this.j);
         if (delivered) {
-          this.push(SPECIAL.respond(delivered.text), { key: delivered.id });
+          this.push(SPECIAL.respond(maskedCut(delivered.text)), { key: delivered.id });
           this.progress();
         }
         return;
@@ -1204,7 +1241,7 @@ class RolloutLineParser {
           this.s.stats.toolCalls++;
           this.changed();
         }
-        this.push(describeTool('Bash', { command: commandText(rec(p.action)?.command) }), { key: callId, tool: 'Bash', callId });
+        this.push(describeTool('Bash', { command: maskedCut(commandText(rec(p.action)?.command)) }), { key: callId, tool: 'Bash', callId });
         return;
       }
       case 'function_call_output':
@@ -1226,7 +1263,7 @@ class RolloutLineParser {
       }
       case 'web_search_call':
         if (this.paginated()) return;
-        this.push(describeTool('WebSearch', { query: rec(p.action)?.query }), { tool: 'WebSearch' });
+        this.push(describeTool('WebSearch', { query: maskedText(rec(p.action)?.query) }), { tool: 'WebSearch' });
         return;
       case 'agent_message': {
         // Multiagente v2: a 1ª mensagem endereçada a um subagente (recipient /root/<tarefa>; fica no rollout dele) é a

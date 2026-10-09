@@ -891,3 +891,71 @@ describe('segredos mascarados antes de qualquer corte, com um teto alto e fixo (
     expect(feed(turn('a'.repeat(40_000))).state.title?.length).toBeLessThanOrEqual(90);
   });
 });
+
+describe('texto livre entregue às descrições compartilhadas chega mascarado (C8, complemento)', () => {
+  // Montados em partes: nenhum token inteiro no código.
+  const ghp = 'gh' + 'p_' + 'Z9'.repeat(20);
+  const jwt = 'ey' + 'J' + 'a'.repeat(20) + '.' + 'b'.repeat(245) + '.' + 'c'.repeat(30);
+  const GHP_LEAK = 'gh' + 'p_Z';
+  const JWT_LEAK = 'ey' + 'Ja';
+  const respItem = (payload: Record<string, unknown>) => JSON.stringify({ timestamp: new Date(AT).toISOString(), type: 'response_item', payload });
+
+  // O shared/activity.ts corta antes de mascarar (truncate(q, 28), slice(0, 368), slice(0, 1200)...). O token começa
+  // 10 caracteres antes desse corte: cortado ali, sobram 6 depois do prefixo (a máscara exige 16) e o começo apareceria
+  // no texto visível. Corte curto: o texto à frente aparece. Corte longo: brancos à frente, que colapsam.
+  const small = (cut: number) => `${'x'.repeat(cut - 11)} ${ghp}`;
+  const viaGhp = (cut: number) => `${' '.repeat(cut - 10)}${ghp} resto`;
+  const viaJwt = (cut: number) => `${' '.repeat(cut - 273)}${jwt} resto`;
+  /** Textos que atravessam `cut` (já descontado o que a função compartilhada põe à frente). */
+  const builds = (cut: number): Array<[string, string]> => (cut < 100 ? [['ghp', small(cut)]] : cut < 300 ? [['ghp', viaGhp(cut)]] : [['ghp', viaGhp(cut)], ['JWT', viaJwt(cut)]]);
+
+  type Row = { name: string; cuts: number[]; shift?: number; run: (text: string) => Array<string | undefined> };
+  const textAndDetail = (r: ReturnType<typeof describeCodexTool>) => [r.desc.text, r.desc.detail];
+  const pushed = (lines: string[]) => acts(feed(lines).results).flatMap((a) => [a.text, a.detail]);
+  const ask =(field: 'question' | 'header' | 'label' | 'description') => (text: string) => {
+    const option = { label: field === 'label' ? text : 'A', ...(field === 'description' ? { description: text } : {}) };
+    const { desc } = describeCodexTool('request_user_input', { questions: [{ id: 'q', header: field === 'header' ? text : 'X', question: field === 'question' ? text : 'Qual?', options: [option] }] });
+    return [desc.detail, ...(desc.questions ?? []).flatMap((q) => [q.question, q.header, ...q.options.flatMap((o) => [o.label, o.description])])];
+  };
+  const PT = 'Conferindo a saída do teste ';
+
+  const rows: Row[] = [
+    { name: 'Bash: comando (exec_command)', cuts: [1_200], shift: 5, run: (t) => textAndDetail(describeCodexTool('exec_command', { cmd: `echo ${t}` })) },
+    // O 'a' à frente: a description é aparada (trim) antes de ir para o detalhe e os brancos iniciais sumiriam.
+    { name: 'Bash: description em inglês, no detalhe', cuts: [1_200], shift: 1, run: (t) => textAndDetail(describeCodexTool('exec_command', { cmd: 'frobnicate --x', description: `a${t}` })) },
+    { name: 'Bash: description em português, no texto', cuts: [368], shift: PT.length, run: (t) => textAndDetail(describeCodexTool('exec_command', { cmd: 'frobnicate --x', description: `${PT}${t}` })) },
+    { name: 'Bash: CommandExecution', cuts: [1_200], shift: 5, run: (t) => pushed([R.meta(T, { at: AT }), R.command(T, 't1', 'c1', `echo ${t}`, { at: AT })]) },
+    { name: 'Bash: local_shell_call', cuts: [1_200], shift: 5, run: (t) => pushed([R.meta(T, { at: AT }), respItem({ type: 'local_shell_call', call_id: 'l1', action: { command: ['bash', '-lc', `echo ${t}`] } })]) },
+    { name: 'WebSearch: web_search', cuts: [28, 1_200], run: (t) => textAndDetail(describeCodexTool('web_search', { query: t })) },
+    { name: 'WebSearch: web.run', cuts: [28, 1_200], run: (t) => textAndDetail(describeCodexTool('run', { search_query: [{ q: t }] }, 'web')) },
+    { name: 'WebSearch: Extension web.search', cuts: [28, 1_200], run: (t) => pushed([R.meta(T, { at: AT }), itemLine(T, 't', { type: 'Extension', kind: 'web.search', id: 'w1', query: t, action: { type: 'search', query: t } }, AT)]) },
+    { name: 'WebSearch: item WebSearch', cuts: [28, 1_200], run: (t) => pushed([R.meta(T, { at: AT }), itemLine(T, 't', { type: 'WebSearch', id: 'w1', query: t }, AT)]) },
+    { name: 'WebSearch: web_search_call (legacy)', cuts: [28, 1_200], run: (t) => pushed([R.meta(T, { at: AT, history: null }), respItem({ type: 'web_search_call', action: { type: 'search', query: t } })]) },
+    { name: 'Agent: subagent_type', cuts: [1_200], run: (t) => textAndDetail(describeCodexTool('spawn_agent', { message: 'Revise os testes', agent_type: t })) },
+    { name: 'AskUserQuestion: pergunta', cuts: [1_200], run: ask('question') },
+    { name: 'AskUserQuestion: cabeçalho', cuts: [120], run: ask('header') },
+    { name: 'AskUserQuestion: rótulo da opção', cuts: [320], run: ask('label') },
+    { name: 'AskUserQuestion: descrição da opção', cuts: [800], run: ask('description') },
+    { name: 'AskUserQuestion: pelo nome (caminho genérico)', cuts: [1_200], run: (t) => textAndDetail(describeCodexTool('AskUserQuestion', { questions: [{ question: t, options: [] }] })) },
+    { name: 'resposta: agent_message (legacy)', cuts: [1_200], run: (t) => pushed([R.meta(T, { at: AT, history: null }), R.legacyAgent(t, AT)]) },
+    // O 'a' à frente: o texto do AgentMessage é aparado (trim) e os brancos iniciais sumiriam.
+    { name: 'resposta: AgentMessage', cuts: [1_200], shift: 1, run: (t) => pushed([R.meta(T, { at: AT }), R.taskStarted('t1', AT), R.agent(T, 't1', 'a1', `a${t}`, AT)]) },
+    { name: 'resposta: user_messaging.send_message', cuts: [1_200], run: (t) => pushed([R.meta(T, { at: AT }), R.mcp(T, 't1', 'm1', 'user_messaging', 'send_message', { text: t }, { at: AT })]) },
+    { name: 'resposta: entrega do code mode', cuts: [1_200], run: (t) => pushed([R.meta(T, { at: AT }), R.delivered('m2', t, AT)]) },
+    { name: 'genérico: Glob (pattern)', cuts: [30, 1_200], run: (t) => textAndDetail(describeCodexTool('Glob', { pattern: t })) },
+    { name: 'genérico: Skill', cuts: [368], shift: 15, run: (t) => textAndDetail(describeCodexTool('Skill', { skill: t })) },
+    { name: 'genérico: SendMessage', cuts: [1_200], run: (t) => textAndDetail(describeCodexTool('SendMessage', { message: t })) },
+  ];
+
+  const cases = rows.flatMap((r) => r.cuts.flatMap((cut) => builds(cut - (r.shift ?? 0)).map(([token, text]) => [r.name, cut, token, r.run, text] as const)));
+
+  it.each(cases)('%s — corte %i, token %s: nenhum pedaço sem máscara no texto visível', (_name, _cut, token, run, text) => {
+    const shown = run(text).filter((s): s is string => s !== undefined);
+    expect(shown.length).toBeGreaterThan(0);
+    for (const s of shown) {
+      expect(s).not.toContain(JWT_LEAK);
+      expect(s).not.toContain(GHP_LEAK);
+    }
+    expect(shown.join('\n')).toContain(token === 'ghp' ? 'gh*_***' : 'eyJ***');
+  });
+});
