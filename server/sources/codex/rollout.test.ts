@@ -806,3 +806,88 @@ describe('Extension (web.search, clock.sleep, image_gen) e web::run (P12)', () =
     expect(state.mode).toBe('legacy');
   });
 });
+
+describe('segredos mascarados antes de qualquer corte, com um teto alto e fixo (C8)', () => {
+  // Montados em partes: nenhum token inteiro no código.
+  const jwt = 'ey' + 'J' + 'a'.repeat(20) + '.' + 'b'.repeat(245) + '.' + 'c'.repeat(30);
+  const ghp = 'gh' + 'p_' + 'Z9'.repeat(20);
+  const JWT_LEAK = 'ey' + 'Ja';
+  const GHP_LEAK = 'gh' + 'p_Z';
+  const CHILD = threadId(20);
+
+  // O 2º token começa antes do corte antigo e o atravessa: cortado ali, sobraria menos do que a máscara exige (6
+  // caracteres depois do ghp_, 3 no último trecho do JWT) e o começo dele apareceria no texto visível. Os brancos
+  // entre um e outro colapsam na hora do corte visível.
+  const crossings: Array<[string, (cut: number) => string]> = [
+    ['ghp atravessa o corte, depois de um JWT de ~300 caracteres', (cut) => `${jwt}${' '.repeat(cut - jwt.length - 10)}${ghp} resto`],
+    ['JWT atravessa o corte, depois de um ghp', (cut) => `${ghp}${' '.repeat(cut - ghp.length - 273)}${jwt} resto`],
+  ];
+
+  const turn = (text: string) => [R.meta(T, { at: AT }), R.taskStarted('t1', AT), R.user(T, 't1', 'u1', text, AT + 1)];
+  const promptActs = (text: string) => acts(feed(turn(text)).results).filter((a) => a.kind === 'prompt');
+  const ask = (text: string) =>
+    feed([R.meta(T, { at: AT }), R.taskStarted('t1', AT), R.functionCall('c1', 'request_user_input', { questions: [{ id: 'q', header: 'X', question: text, options: [] }] }, AT), R.functionOutput('c1', '{"answers":{}}', AT + 1_000)]).results;
+
+  /** [ponto, tamanho do corte antigo, texto visível que sai de um texto com o token atravessando o corte] */
+  const paths: Array<[string, number, (text: string) => Array<string | undefined>]> = [
+    ['prompt: texto de 34', 1_000, (text) => promptActs(text).map((a) => a.text)],
+    ['prompt: detalhe', 1_200, (text) => promptActs(text).map((a) => a.detail)],
+    ['título da sessão', 1_000, (text) => [feed(turn(text)).state.title]],
+    [
+      'título do filho (spawn)',
+      1_000,
+      (text) =>
+        signalsOf(feed([itemLine(T, 't', { type: 'CollabAgentToolCall', id: 'sp1', tool: 'spawn_agent', status: 'completed', sender_thread_id: T, receiver_thread_ids: [CHILD], receiver_agents: [], agents_states: {}, prompt: text }, AT)]).results).flatMap((s) =>
+          s.type === 'spawn' ? [s.title] : [],
+        ),
+    ],
+    ['plano', 480, (text) => feed([R.meta(T), R.functionCall('p1', 'update_plan', { plan: [{ step: text, status: 'pending' }] }, AT)]).state.tasks.map((t) => t.title)],
+    ['spawn_agent', 600, (text) => [describeCodexTool('spawn_agent', { message: text }).desc.text]],
+    [
+      'pergunta (request_user_input)',
+      960,
+      (text) => {
+        const results = ask(text);
+        const asking = signalsOf(results).flatMap((s) => (s.type === 'asking' ? [s.questions] : []));
+        return [...asking, ...acts(results).filter((a) => a.id.endsWith(':ans')).map((a) => a.detail)];
+      },
+    ],
+    ['image_gen', 1_200, (text) => acts(feed([R.meta(T), itemLine(T, 't', { type: 'Extension', kind: 'image_gen.generation', id: 'img1', status: 'completed', revisedPrompt: text }, AT)]).results).map((a) => a.detail)],
+    ['erro de comando (firstLine)', 1_120, (text) => acts(feed([execItem('c1', ['bash', '-lc', 'npm run deploy'], { exit: 1, output: `${text}\nlinha 2` })]).results).filter((a) => a.kind === 'error').map((a) => a.detail)],
+    [
+      'busca do parsed_cmd',
+      600,
+      (text) => acts(feed([execItem('s1', ['pwsh.exe', '-Command', 'Select-String x'], { parsed: [{ type: 'search', cmd: 'Select-String x', query: text }] })]).results).flatMap((a) => [a.text, a.detail]),
+    ],
+  ];
+
+  const cases = paths.flatMap(([name, cut, run]) => crossings.map(([how, build]) => [name, how, cut, run, build] as const));
+
+  it.each(cases)('%s — %s: nenhum pedaço de token sem máscara no texto visível', (_name, _how, cut, run, build) => {
+    const shown = run(build(cut)).filter((s): s is string => s !== undefined);
+    expect(shown.length).toBeGreaterThan(0);
+    for (const s of shown) {
+      expect(s).not.toContain(JWT_LEAK);
+      expect(s).not.toContain(GHP_LEAK);
+    }
+    const all = shown.join('\n');
+    expect(all).toContain('eyJ***');
+    expect(all).toContain('gh*_***');
+  });
+
+  it('teto de 16 KiB: o corte vai no último espaço antes dele, então o token que cruza o teto some inteiro em vez de aparecer pela metade', () => {
+    const ceiling = 16 * 1024;
+    const text = `${jwt}${' '.repeat(ceiling - jwt.length - 10)}${ghp} resto`;
+    const [prompt] = promptActs(text);
+    expect(prompt.text).toBe('Recebeu “eyJ***”');
+    expect(prompt.detail).toBe('eyJ***');
+    expect(feed(turn(text)).state.title).toBe('eyJ***');
+  });
+
+  it('texto enorme sem nenhum espaço: corta no teto e continua dentro dos limites visíveis', () => {
+    const [prompt] = promptActs('a'.repeat(40_000));
+    expect(prompt.text.length).toBeLessThanOrEqual(46);
+    expect(prompt.detail?.length).toBeLessThanOrEqual(300);
+    expect(feed(turn('a'.repeat(40_000))).state.title?.length).toBeLessThanOrEqual(90);
+  });
+});

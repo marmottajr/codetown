@@ -38,6 +38,32 @@ function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
+/**
+ * Teto (em caracteres) do texto que passa pela máscara antes de qualquer corte visível. É alto e fixo de propósito: o
+ * que aparece na tela vem de muito além do tamanho visível (a máscara encolhe um token de 300 caracteres para 6 e os
+ * brancos colapsam), então um recorte "proporcional" ao tamanho visível deixaria um pedaço de token sem máscara.
+ */
+const MASK_CEILING = 16 * 1024;
+const BLANK = /\s/;
+
+/**
+ * O único caminho do texto livre do rollout até a tela: mascara os segredos ANTES de qualquer corte (um token cortado
+ * ao meio não casa com a máscara e o começo dele vazaria) e só então trunca para o tamanho visível `max`; sem `max`,
+ * devolve o texto mascarado inteiro, para quem corta adiante. O recorte prévio só evita rodar as expressões sobre
+ * blocos enormes: acima do teto vai no último espaço em branco antes dele (não deixa um token pela metade no fim);
+ * sem nenhum espaço, corta no próprio teto.
+ */
+function maskedCut(text: string, max?: number): string {
+  let head = text;
+  if (text.length > MASK_CEILING) {
+    let end = MASK_CEILING;
+    while (end > 0 && !BLANK.test(text[end])) end--;
+    head = text.slice(0, end > 0 ? end : MASK_CEILING);
+  }
+  const masked = maskSecrets(head);
+  return max === undefined ? masked : truncate(masked, max);
+}
+
 function toMs(v: unknown): number | undefined {
   if (typeof v !== 'string') return undefined;
   const t = Date.parse(v);
@@ -208,7 +234,7 @@ function parsedCmdActivity(parsed: unknown): ActivityDescription | undefined {
   if (first.type === 'read' && path) return describeTool('Read', { file_path: path });
   if (first.type === 'list_files') return describeTool('LS', { path: path ?? '' });
   // Mascara antes: o Grep corta a busca em 26 antes da máscara e o começo de um token vazaria no texto.
-  if (first.type === 'search') return describeTool('Grep', { pattern: maskSecrets((str(first.query) ?? '').slice(0, 600)) });
+  if (first.type === 'search') return describeTool('Grep', { pattern: maskedCut(str(first.query) ?? '') });
   return undefined;
 }
 
@@ -316,8 +342,9 @@ export function deliveredMessage(line: Rec): { id?: string; text: string } | und
 
 /** Atividade de uma instrução recebida pelo Codex: "Recebeu “…”" (kind 'prompt', a base do "Concluiu em X"). */
 export function describeCodexPrompt(text: string): ActivityDescription {
-  const shown = truncate(maskSecrets(text.slice(0, 1_000)), 34);
-  return { ...describePrompt(text), text: truncate(`Recebeu “${shown}”`, 46) };
+  // O detalhe sai do describePrompt, que corta antes de mascarar: ele recebe o texto já mascarado.
+  const masked = maskedCut(text);
+  return { ...describePrompt(masked), text: truncate(`Recebeu “${truncate(masked, 34)}”`, 46) };
 }
 
 const PLAN_STATUS = new Set<string>(['pending', 'in_progress', 'completed']);
@@ -331,7 +358,7 @@ export function planTasks(args: Rec): TaskItem[] | undefined {
     const title = str(p?.step);
     if (!p || !title) return;
     const status = typeof p.status === 'string' && PLAN_STATUS.has(p.status) ? (p.status as TaskStatus) : 'pending';
-    out.push({ id: String(i + 1), title: truncate(maskSecrets(title.slice(0, 480)), 120), status });
+    out.push({ id: String(i + 1), title: maskedCut(title, 120), status });
   });
   return out;
 }
@@ -492,8 +519,7 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
     case 'spawn_agent':
     case 'Agent': {
       const prompt = str(input.message) ?? str(input.prompt) ?? str(input.task);
-      // Mascara antes do corte: um token cortado ao meio não casa com a máscara (e o texto mascarado encolhe).
-      const description = prompt ? truncate(maskSecrets(prompt.slice(0, 600)), 60) : undefined;
+      const description = prompt ? maskedCut(prompt, 60) : undefined;
       return { desc: describeTool('Agent', { description, subagent_type: input.agent_type }), tool: 'Agent' };
     }
     case 'wait':
@@ -601,12 +627,12 @@ const ASK_SUMMARY_MAX = 120;
 /** Resumo das perguntas de um request_user_input ("Qual banco? · Posso apagar dist?"), mascarado ANTES do corte. */
 function askSummary(raw: unknown): string {
   const questions = Array.isArray(raw) ? raw.map((q) => str(rec(q)?.question)).filter((q): q is string => q !== undefined) : [];
-  return truncate(maskSecrets(questions.join(' · ').slice(0, ASK_SUMMARY_MAX * 8)), ASK_SUMMARY_MAX);
+  return maskedCut(questions.join(' · '), ASK_SUMMARY_MAX);
 }
 
 /** Título (da sessão ou de um subagente) a partir de um texto livre: mascarado ANTES do corte. */
 function titleText(text: string): string {
-  return truncate(maskSecrets(text.slice(0, 1_000)), TITLE_MAX);
+  return maskedCut(text, TITLE_MAX);
 }
 
 /** 1º texto de um conteúdo: o próprio texto ou o 1º bloco {text} da lista (o agent_message traz um bloco cifrado junto). */
@@ -676,12 +702,11 @@ function outputOf(raw: unknown): { text: string; exitCode?: number } {
 }
 
 /**
- * 1ª linha não vazia (detalhe de erro), mascarada ANTES do corte: um token cortado ao meio não casa com a máscara e
- * vazaria o começo. O recorte prévio (bem maior que o limite) só evita rodar as expressões sobre linhas enormes.
+ * 1ª linha não vazia (detalhe de erro), mascarada ANTES do corte (ver `maskedCut`).
  */
 function firstLine(s: string, max = 140): string | undefined {
   const line = s.split('\n').find((l) => l.trim());
-  return line ? truncate(maskSecrets(line.slice(0, max * 8)), max) : undefined;
+  return line ? maskedCut(line, max) : undefined;
 }
 
 class RolloutLineParser {
@@ -908,7 +933,7 @@ class RolloutLineParser {
     const text = promptText(raw) || (images ? '[imagem]' : '');
     if (!text) return;
     if (this.s.title === undefined) {
-      this.s.title = truncate(maskSecrets(text.slice(0, 1_000)), TITLE_MAX);
+      this.s.title = titleText(text);
       this.changed();
     }
     this.push(describeCodexPrompt(text), { key });
@@ -1058,7 +1083,7 @@ class RolloutLineParser {
     else if (kind.startsWith('image_gen')) {
       const prompt = str(item.revisedPrompt);
       const desc: ActivityDescription = { kind: 'other', icon: '🎨', text: 'Gerando imagem' };
-      if (prompt) desc.detail = truncate(maskSecrets(prompt.slice(0, 1_200)), 300);
+      if (prompt) desc.detail = maskedCut(prompt, 300);
       d = { desc, tool: 'image_gen' };
     } else return;
     if (this.s.mode !== 'legacy') {
