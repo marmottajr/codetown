@@ -32,7 +32,11 @@
 // Status: aplicado por bordas (início/fim de turno no rollout, eventos de hook), a informação mais nova vence; um
 // rollout relido nunca sobrescreve o 'waiting' de um PermissionRequest mais novo. Um request_user_input sem output é
 // 'waiting' ("responder uma pergunta") até a resposta ou o fim do turno, sem trocar uma espera por aprovação que já
-// esteja valendo (a resposta só tira a espera da pergunta). Com a trava segura o turno aberto
+// esteja valendo (a resposta só tira a espera da pergunta). Comandos em segundo plano (shells.ts: exec_command com
+// "Process running with session ID N", célula do code mode com "Script running with cell ID N") ficam no agente que os
+// rodou (ou no principal, depois que ele entrega); o principal ocioso com algum vivo fica 'shell'. O fim vem do
+// write_stdin/wait ou do CommandExecution com o process_id ('ShellDone'); o próximo task_started do dono, o thread
+// fechar ou SHELL_EXPIRE_MS depois do fim do turno encerram a espera sem 'ShellDone'. Com a trava segura o turno aberto
 // continua 'working' sem prazo; sem sondagem, 'working' sem nenhuma escrita por WORKING_QUIET_MS vira 'idle'. Ao abrir
 // um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos `tailBytes` e até a fronteira de turno
 // (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de onde a varredura parou e o começo
@@ -40,12 +44,13 @@
 // `finally`.
 import { createReadStream, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { AccountUsage, Activity, AgentStatus, SourceInfo } from '../../../shared/types';
+import type { AccountUsage, Activity, AgentStatus, ShellJob, SourceInfo } from '../../../shared/types';
 import type { DetectedAccount } from '../../accounts/detect';
 import type { AccountEntry, AccountsService } from '../../accounts/service';
 import { detectDocker } from '../../config';
 import { errMsg, log } from '../../log';
-import type { Office, TranscriptSummary } from '../../model/office';
+import type { Office, ShellDoneInput, TranscriptSummary } from '../../model/office';
+import { ShellTracker, toShellJob, type ShellFinish } from '../shells';
 import type { AgentSource } from '../source';
 import { FileTail } from '../tail';
 import type { TerminalParser } from '../terminal';
@@ -63,6 +68,7 @@ import {
   type CodexState,
   type RolloutMeta,
 } from './rollout';
+import { createShellScan, scanShellLine, type CodexShellScan } from './shells';
 import { createCodexTerminalParser } from './terminal';
 
 /** Idade mínima do lock para valer como sessão aberta (os locks de manutenção duram menos). */
@@ -102,6 +108,11 @@ const SEED_USAGE_FILES = 8;
 export const USAGE_RESCAN_MS = 60_000;
 /** Títulos de filhos (sinal spawn) guardados até o filho aparecer. */
 const SPAWN_TITLES_MAX = 256;
+/**
+ * Espera pelo shell depois do fim do turno: o Codex quase nunca grava o fim de um processo que sobreviveu ao turno
+ * (e o fim não acorda o agente), então a espera vale por este tempo, contado do fim do turno do dono.
+ */
+export const SHELL_EXPIRE_MS = 30 * 60_000;
 const MAIN_ROLE = 'Agente principal (Codex)';
 const SUB_ROLE = 'Subagente (Codex)';
 /** Motivo da espera de um request_user_input aberto (o mesmo texto que o registro usa para uma pergunta). */
@@ -173,6 +184,8 @@ interface ThreadTracker {
   nextResolveAt: number;
   tail?: FileTail;
   state: CodexState;
+  /** Chamadas de shell (exec_command, write_stdin, exec, wait) ainda sem saída, para achar os processos em segundo plano. */
+  shellScan: CodexShellScan;
   /** Resultados lidos antes de o agente entrar no escritório (vão como histórico, sem feed). */
   backlog: CodexLineResult[];
   inOffice: boolean;
@@ -221,6 +234,8 @@ export class CodexSource implements AgentSource, CodexLive {
   private threads = new Map<string, ThreadTracker>();
   /** Título de cada filho pelo spawn_agent do pai ("<conta>:<thread do filho>" → título), até o filho aparecer. */
   private spawnTitles = new Map<string, string>();
+  /** Processos em segundo plano de cada árvore (principal e subagentes), pela chave do principal. */
+  private shellTrees = new Map<string, ShellTracker>();
   private dirWatchers = new Map<string, FSWatcher>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private kick: ReturnType<typeof setTimeout> | null = null;
@@ -375,10 +390,18 @@ export class CodexSource implements AgentSource, CodexLive {
       this.leave(t);
       this.unwatch(t);
       this.threads.delete(key);
+      // Thread fechado: os processos dele morrem junto (a sessão do Codex encerra os terminais em segundo plano).
+      if (t.kind !== 'main') this.dropShells(t.key, this.treeKey(t), now);
+      else if (this.shellTrees.delete(key)) this.opts.office.setShells(key, []);
     }
     // Subagentes de novo, depois das entradas e saídas deste ciclo: o que ficou para depois entra (o pai entrou agora)
     // e o neto ligado ao principal sai se o principal fechou agora (o closeMain não o alcança pelo pai direto).
     for (const t of this.threads.values()) if (t.kind === 'sub' && seen.has(t.key)) this.reconcile(t, now);
+    // Shells de cada árvore, a cada ciclo: expiração, o de quem entregou ou fechou passa ao principal, e o status.
+    for (const [root, tree] of [...this.shellTrees]) {
+      if (!tree.size && !this.threads.has(root)) this.shellTrees.delete(root);
+      else this.refreshShells(root);
+    }
     if (!boot) this.rescanUsage(now);
   }
 
@@ -445,6 +468,7 @@ export class CodexSource implements AgentSource, CodexLive {
       kind: 'main',
       nextResolveAt: 0,
       state: createCodexState(),
+      shellScan: createShellScan(),
       backlog: [],
       inOffice: false,
       status: 'idle',
@@ -564,8 +588,8 @@ export class CodexSource implements AgentSource, CodexLive {
       });
       t.inOffice = office.has(t.key);
       if (!t.inOffice) return;
-      // Reaberta dentro do período de graça: o status pode ter mudado enquanto esteve fora.
-      office.setStatus(t.key, t.status, t.waitingFor);
+      // Reaberta dentro do período de graça: o status pode ter mudado enquanto esteve fora (e pode haver shell vivo).
+      this.statusToOffice(t);
     } else {
       const parent = this.parentKey(t)!;
       const added = office.addSub({
@@ -600,12 +624,18 @@ export class CodexSource implements AgentSource, CodexLive {
     t.inOffice = false;
   }
 
-  /** Leva o status do tracker ao escritório (o subagente entrega ao ficar ocioso e volta ao trabalhar). */
+  /**
+   * Leva o status do tracker ao escritório (o subagente entrega ao ficar ocioso e volta ao trabalhar). O principal
+   * ocioso com shell em segundo plano vivo vai direto para 'shell' (nunca 'idle' e depois 'shell': sairia o "concluiu");
+   * os shells vão antes do status (o aviso usa o rótulo deles) e o balão de espera depois.
+   */
   private statusToOffice(t: ThreadTracker): void {
     if (!t.inOffice) return;
     const office = this.opts.office;
     if (t.kind === 'main') {
-      office.setStatus(t.key, t.status, t.waitingFor);
+      const shell = this.publishShells(t.key);
+      office.setStatus(t.key, t.status === 'idle' && shell ? 'shell' : t.status, t.waitingFor);
+      office.fillShellActivity(t.key);
       return;
     }
     if (t.kind !== 'sub') return;
@@ -621,7 +651,110 @@ export class CodexSource implements AgentSource, CodexLive {
     if (!t.subDone) office.setStatus(t.key, t.status, t.waitingFor);
   }
 
+  // ---------------------------------------------------------------- shells
+
+  /** Árvore dos processos de um thread: o principal dele (session_meta.session_id), senão o pai, senão ele mesmo. */
+  private treeKey(t: ThreadTracker): string {
+    if (t.kind !== 'sub') return t.key;
+    return this.rootKey(t) ?? (t.parentThreadId ? `${t.acc.id}:${t.parentThreadId}` : t.key);
+  }
+
+  /**
+   * Shells de uma linha do rollout (antes dos sinais dela: o fim do turno já encontra o processo). O task_started
+   * encerra a espera pelos processos do próprio thread. Devolve os términos, ou undefined se nada mudou.
+   */
+  private trackShells(t: ThreadTracker, line: string, r: CodexLineResult): ShellFinish[] | undefined {
+    if (t.kind === 'internal') return undefined;
+    const root = this.treeKey(t);
+    const dropped = r.signals.some((s) => s.type === 'turnStart') && this.dropShells(t.key, root, r.at);
+    const events = scanShellLine(t.shellScan, line, { historyStart: t.state.meta?.historyStart });
+    if (!events.length) return dropped ? [] : undefined;
+    let tree = this.shellTrees.get(root);
+    if (!tree) this.shellTrees.set(root, (tree = new ShellTracker()));
+    const fins: ShellFinish[] = [];
+    for (const ev of events) {
+      if (ev.type === 'start') {
+        tree.start(t.key, { toolUseId: ev.callId, label: ev.label, ...(ev.command ? { command: ev.command } : {}), background: true, kind: 'shell', at: r.at });
+        tree.result(ev.callId, { taskId: ev.taskId, error: false, at: r.at });
+        continue;
+      }
+      const fin = tree.notify({ taskId: ev.taskId, status: ev.status, summary: ev.summary, at: r.at });
+      if (fin) fins.push(fin);
+    }
+    return fins;
+  }
+
+  /** Tira, sem ShellDone, os processos de um dono (novo turno ou thread fechado). */
+  private dropShells(owner: string, root: string, at: number): boolean {
+    const tree = this.shellTrees.get(root);
+    if (!tree) return false;
+    let changed = false;
+    for (const job of tree.list()) {
+      if (job.owner !== owner) continue;
+      tree.stop(job.taskId ?? job.toolUseId, at);
+      changed = true;
+    }
+    return changed;
+  }
+
+  /** Tira, sem ShellDone, os processos cujo dono terminou o turno há mais de SHELL_EXPIRE_MS. */
+  private expireShells(tree: ShellTracker, now: number): void {
+    for (const job of tree.list()) {
+      const owner = this.threads.get(job.owner);
+      if (owner && owner.status !== 'idle') continue; // turno aberto: o processo pode acabar a qualquer momento
+      if (now - Math.max(job.startedAt, owner?.statusAt ?? 0) > SHELL_EXPIRE_MS) tree.stop(job.taskId ?? job.toolUseId, now);
+    }
+  }
+
+  /**
+   * Publica os shells de uma árvore: cada subagente ativo mostra os dele; os de quem entregou ou saiu continuam rodando
+   * e passam ao principal. Devolve se o principal tem algum.
+   */
+  private publishShells(root: string): boolean {
+    const tree = this.shellTrees.get(root);
+    if (!tree) return false;
+    this.expireShells(tree, this.now());
+    const office = this.opts.office;
+    const byOwner = new Map<string, ShellJob[]>();
+    for (const job of tree.list()) {
+      const owner = job.owner !== root && this.activeInOffice(job.owner) ? job.owner : root;
+      byOwner.set(owner, [...(byOwner.get(owner) ?? []), toShellJob(job)]);
+    }
+    office.setShells(root, byOwner.get(root) ?? []);
+    for (const t of this.threads.values()) if (t.kind === 'sub' && t.inOffice && this.treeKey(t) === root) office.setShells(t.key, byOwner.get(t.key) ?? []);
+    return byOwner.has(root);
+  }
+
+  /** Reaplica os shells de uma árvore (e o status do principal, que depende deles). */
+  private refreshShells(root: string): void {
+    const main = this.threads.get(root);
+    if (main?.kind === 'main' && main.inOffice) this.statusToOffice(main);
+    else this.publishShells(root);
+  }
+
+  /** Um processo em segundo plano terminou: 'ShellDone' no dono (ou no principal, se o dono já entregou ou saiu). */
+  private reportShellDone(root: string, fin: ShellFinish): void {
+    const job = fin.job;
+    const owner = this.activeInOffice(job.owner) ? job.owner : root;
+    const exit = fin.summary ? /exit code (-?\d+)/i.exec(fin.summary)?.[1] : undefined;
+    const detail = [exit !== undefined ? `Código de saída ${exit}` : undefined, job.command].filter(Boolean).join(' — ') || fin.summary;
+    const input: ShellDoneInput = { id: job.taskId ?? job.toolUseId, label: job.label, startedAt: job.startedAt };
+    if (job.command) input.command = job.command;
+    this.opts.office.shellDone(owner, input, fin.outcome, fin.at, detail ? { live: true, summary: detail } : { live: true });
+  }
+
   // ---------------------------------------------------------------- rollout
+
+  /** Uma linha do rollout: shells, sinais e atividades; ao vivo, o fim de um processo vira 'ShellDone'. */
+  private take(t: ThreadTracker, line: string, live: boolean): void {
+    const r = parseRolloutLine(t.state, line, { idPrefix: t.key, now: this.now() });
+    const fins = this.trackShells(t, line, r);
+    this.apply(t, r, live);
+    if (!live || !fins) return;
+    const root = this.treeKey(t);
+    for (const fin of fins) this.reportShellDone(root, fin);
+    this.refreshShells(root);
+  }
 
   /** Acha o rollout (sem pressa: no máximo a cada 3 s por thread) e lê o que for novo. */
   private pump(t: ThreadTracker, boot: boolean): void {
@@ -665,7 +798,7 @@ export class CodexSource implements AgentSource, CodexLive {
         this.load(t, t.tail.path);
         return;
       }
-      for (const line of r.lines) this.apply(t, parseRolloutLine(t.state, line, { idPrefix: t.key, now: this.now() }), true);
+      for (const line of r.lines) this.take(t, line, true);
       if (r.lines.length) this.applySummary(t);
       if (!r.more) break;
     }
@@ -688,9 +821,10 @@ export class CodexSource implements AgentSource, CodexLive {
     t.rolloutPath = path;
     t.sizeSeen = tail.size;
     t.state = createCodexState(head.meta);
+    t.shellScan = createShellScan();
     if (head.title) t.state.title = head.title;
     t.backlog = [];
-    for (const line of scan.lines) this.apply(t, parseRolloutLine(t.state, line, { idPrefix: t.key, now: this.now() }), false);
+    for (const line of scan.lines) this.take(t, line, false);
     t.lastWriteAt = lastLineAt(scan.lines) ?? t.state.lastAt;
     this.settleStatus(t);
     if (t.inOffice) {

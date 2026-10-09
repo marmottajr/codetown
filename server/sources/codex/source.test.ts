@@ -2,6 +2,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { describeShellJob } from '../../../shared/activity';
 import type { AgentInfo, Notice } from '../../../shared/types';
 import { AccountsService } from '../../accounts/service';
 import { setQuiet } from '../../log';
@@ -9,9 +10,9 @@ import { NameStore } from '../../model/names';
 import { DONE_GRACE_MS, Office } from '../../model/office';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
-import { grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
+import { B, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { readLocks } from './files';
-import { CodexSource, MAIN_GONE_GRACE_MS, USAGE_RESCAN_MS } from './source';
+import { CodexSource, MAIN_GONE_GRACE_MS, SHELL_EXPIRE_MS, USAGE_RESCAN_MS } from './source';
 
 setQuiet(true);
 
@@ -1015,5 +1016,151 @@ describe('fonte do Codex: neto (P13)', () => {
     ctx.poll();
     expect(ctx.agent()?.status).toBe('offline');
     expect(ctx.agent(NETO)?.status).toBe('done');
+  });
+});
+
+describe('fonte do Codex: comandos em segundo plano (P12)', () => {
+  const SUB = `.codex:${C}`;
+  const DEV = describeShellJob('Bash', { command: 'npm run dev' }).label;
+  const said = (ctx: ReturnType<typeof setup>, re: RegExp) => ctx.notices.some((n) => re.test(n.text));
+
+  /** Principal trabalhando (boot) que acabou de subir o dev server em segundo plano (sessão 7 do unified exec). */
+  function devServer() {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('turn1', at), R.user(T, 'turn1', 'u1', 'Suba o servidor', at + 100)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    ctx.advance(1_000);
+    ctx.home.append(path, [B.exec('call_dev', 'npm run dev', ctx.now()), B.running('call_dev', 7, ctx.now() + 10)]);
+    ctx.poll();
+    return { ctx, path };
+  }
+
+  it('o turno acaba com o dev server rodando: "shell" (aviso de espera, sem "concluiu"); o fim dele depois do turno dá ShellDone e volta a idle', () => {
+    const { ctx, path } = devServer();
+    expect(ctx.agent()).toMatchObject({ status: 'working', shells: [{ id: 'proc:7', label: DEV, command: 'npm run dev', background: true, kind: 'shell' }] });
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.agent(T, 'turn1', 'a1', 'Servidor no ar', ctx.now()), R.taskComplete('turn1', ctx.now() + 1)]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('shell');
+    expect(ctx.agent()?.activity?.text).toBe(`Esperando o shell: ${DEV}`);
+    expect(said(ctx, /esperando o shell/)).toBe(true);
+    expect(said(ctx, /concluiu/)).toBe(false);
+    // O processo termina depois do turno (item_completed CommandExecution com o process_id).
+    ctx.advance(60_000);
+    ctx.home.append(path, [B.procDone(T, 'turn1', 'call_dev', 7, 0, ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    expect(ctx.agent()?.shells).toBeUndefined();
+    expect(ctx.agent()?.activity?.text).toMatch(/^Shell terminou: /);
+    expect(said(ctx, /shell terminou/)).toBe(true);
+    expect(said(ctx, /concluiu/)).toBe(false);
+  });
+
+  it('dentro do turno: o write_stdin que ainda vê o processo não muda nada; o que vê "Process exited with code 1" dá "Shell falhou" com o código de saída; o fim do turno conclui', () => {
+    const { ctx, path } = devServer();
+    ctx.advance(1_000);
+    ctx.home.append(path, [B.stdin('call_poll', 7, ctx.now()), B.running('call_poll', 7, ctx.now() + 10)]);
+    ctx.poll();
+    expect(ctx.agent()?.shells).toHaveLength(1);
+    ctx.advance(1_000);
+    ctx.home.append(path, [B.stdin('call_end', 7, ctx.now()), B.exited('call_end', 1, ctx.now() + 10)]);
+    ctx.poll();
+    expect(ctx.agent()?.shells).toBeUndefined();
+    expect(ctx.agent()?.activity).toMatchObject({ text: `Shell falhou: ${DEV}`, detail: 'Código de saída 1 — npm run dev' });
+    expect(said(ctx, /shell falhou/)).toBe(true);
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.taskComplete('turn1', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    expect(said(ctx, /concluiu/)).toBe(true);
+  });
+
+  it('code mode: a célula que segue rodando deixa o agente em "shell"; o próximo task_started encerra a espera sem ShellDone', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('turn1', at)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    ctx.advance(1_000);
+    ctx.home.append(path, [
+      B.code('call_js', 'await tools.exec_command({ cmd: "npm run dev" });', ctx.now()),
+      B.codeOutput('call_js', 'Script running with cell ID 3\nWall time: 10.0 seconds', ctx.now() + 10),
+      R.taskComplete('turn1', ctx.now() + 20),
+    ]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'cell:3', label: 'Rodando script' }] });
+    ctx.advance(60_000);
+    ctx.home.append(path, [R.taskStarted('turn2', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    expect(ctx.agent()?.shells).toBeUndefined();
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.taskComplete('turn2', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    expect(said(ctx, /shell (terminou|falhou)/)).toBe(false);
+  });
+
+  it('a espera expira SHELL_EXPIRE_MS depois do fim do turno (não do início do processo), sem aviso', () => {
+    const { ctx, path } = devServer();
+    // Turno longo: 40 min depois de o servidor subir, o turno acaba e a espera começa agora.
+    ctx.advance(40 * 60_000);
+    ctx.home.append(path, [R.taskComplete('turn1', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('shell');
+    ctx.advance(SHELL_EXPIRE_MS - 1_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('shell');
+    ctx.advance(2_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    expect(ctx.agent()?.shells).toBeUndefined();
+    expect(said(ctx, /shell (terminou|falhou)|concluiu/)).toBe(false);
+  });
+
+  it('boot: turno acabado há pouco com o processo vivo sai em "shell"; acabado há mais de SHELL_EXPIRE_MS sai idle', () => {
+    const ctx = setup();
+    const C3 = threadId(3);
+    const at = ctx.now() - 5 * 60_000;
+    const old = ctx.now() - SHELL_EXPIRE_MS - 5 * 60_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('turn1', at), B.exec('call_dev', 'npm run dev', at + 1_000), B.running('call_dev', 7, at + 2_000), R.taskComplete('turn1', at + 3_000)]);
+    ctx.home.rollout(C3, [R.meta(C3, { at: old }), R.taskStarted('turn1', old), B.exec('call_dev', 'npm run dev', old + 1_000), B.running('call_dev', 9, old + 2_000), R.taskComplete('turn1', old + 3_000)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C3, old);
+    ctx.source.boot();
+    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'proc:7' }] });
+    expect(ctx.agent(`.codex:${C3}`)?.status).toBe('idle');
+    expect(ctx.agent(`.codex:${C3}`)?.shells).toBeUndefined();
+  });
+
+  it('o shell de um subagente que entregou passa para o principal ocioso ("shell"); o subagente fechar encerra a espera', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.taskComplete('p1', at + 500)]);
+    const sub = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', at + 600)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)?.status).toBe('working');
+    ctx.advance(1_000);
+    ctx.home.append(sub, [B.exec('call_w', 'npm run watch', ctx.now()), B.running('call_w', 11, ctx.now() + 10)]);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.shells).toMatchObject([{ id: 'proc:11' }]);
+    expect(ctx.agent()).toMatchObject({ status: 'idle' });
+    expect(ctx.agent()?.shells).toBeUndefined();
+    ctx.advance(1_000);
+    ctx.home.append(sub, [R.taskComplete('s1', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    expect(ctx.agent()).toMatchObject({ status: 'shell', shells: [{ id: 'proc:11' }] });
+    // O subagente fecha (lock solto): o processo vai junto.
+    ctx.home.unlock(C);
+    ctx.poll();
+    ctx.advance(2_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    expect(ctx.agent()?.shells).toBeUndefined();
   });
 });
