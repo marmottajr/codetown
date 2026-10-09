@@ -7,7 +7,10 @@
 // Sem shell (execFile), com prazo, e nunca com -c, --enable, --disable nem --no-daemon (mudariam a configuração ou o
 // servidor da sessão). Retorno 0 ("Queued message <id> for thread <thread>.") = entrou na fila — mesmo que ninguém
 // esteja com o thread aberto agora; outro retorno = falhou, e a 1ª linha do stderr diz por quê ("Error: ... no rollout
-// found for thread id ..."). Se o servidor compartilhado do Codex (daemon) não estiver no ar, o próprio comando o sobe.
+// found for thread id ..."). O comando não sobe o servidor compartilhado do Codex (daemon): só sonda o socket dele e,
+// sem daemon no ar, usa um app-server embutido no próprio processo. De um jeito ou de outro, é o Codex gravando o
+// estado da conta (o SQLite em CODEX_HOME): a única escrita em CODEX_HOME que o Habblaud provoca, e só quando você
+// manda uma mensagem.
 // Node puro e sem dependências: também é importado pelo auxiliar do host (via tsx).
 import { execFile } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
