@@ -3,7 +3,7 @@
 //   npm run dev    -> tsx server/index.ts --dev (Vite em middleware mode, HMR no mesmo servidor)
 //   npm start      -> node dist/server/index.js (serve dist/client)
 import http from 'node:http';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { codexDirsRefused } from './accounts/detect';
 import { AccountsService } from './accounts/service';
 import { loadConfig, messagesOffReason, terminalOffReason } from './config';
@@ -24,6 +24,7 @@ import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
 import { PermissionRegistry } from './permissions/registry';
 import { codexAccountOf } from './codex/http';
+import { HOOK_KEY_FILE, loadHookKey } from './codex/key';
 import { createCodexQueueRunner, findCodexBin } from './messages/codex';
 import { createMessageRoutes } from './messages/http';
 import { MessageRegistry } from './messages/registry';
@@ -94,6 +95,23 @@ if (codex) agents.add(codex);
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
 const codexLive: CodexLive | undefined = codex;
+// Chave local do hook do Codex (codex/key.ts), só com o Codex no escritório: a prova das chamadas do hook que não vêm
+// pelo loopback (no Docker, todas). Fora do Docker, ~/.habblaud/codex-hook.key (a pasta do codex-hook.json que o hook lê),
+// criada se faltar, depois da migração do ~/.codetown lá em cima; no Docker, só lida do arquivo que o docker:up monta
+// (HABBLAUD_CODEX_HOOK_KEY, terminado em codex-hook.key).
+function loadCodexHookKey(): Buffer | undefined {
+  if (!config.inDocker) return loadHookKey(join(config.home, '.habblaud'), { create: true });
+  const file = process.env.HABBLAUD_CODEX_HOOK_KEY?.trim();
+  return file && basename(file) === HOOK_KEY_FILE ? loadHookKey(dirname(file)) : undefined;
+}
+const codexHookKey = codex ? loadCodexHookKey() : undefined;
+if (codex && !codexHookKey) {
+  log.warn(
+    config.inDocker
+      ? 'Codex: sem a chave do hook (HABBLAUD_CODEX_HOOK_KEY); os eventos do hook do Codex vão ser recusados no container. Rode o npm run docker:up de novo.'
+      : `Codex: não consegui ler nem criar ${join(config.home, '.habblaud', HOOK_KEY_FILE)} (precisa ter 32 bytes; apague para recriar); as chamadas do hook do Codex só valem pelo loopback.`,
+  );
+}
 late.office = office;
 late.agents = agents;
 const hub = new Hub(office);
@@ -181,6 +199,7 @@ const api = createApiHandler({
   permissions: permissions ? createPermissionRoutes(permissions) : undefined,
   messages: messages ? createMessageRoutes(messages) : undefined,
   codexLive,
+  codexHookKey,
   stats,
   updates,
 });
