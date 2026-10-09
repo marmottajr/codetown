@@ -6,12 +6,12 @@ import type { AgentInfo, Notice } from '../../../shared/types';
 import { AccountsService } from '../../accounts/service';
 import { setQuiet } from '../../log';
 import { NameStore } from '../../model/names';
-import { Office } from '../../model/office';
+import { DONE_GRACE_MS, Office } from '../../model/office';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
-import { Q, S } from '../../test/codex-fixtures-source-ii';
+import { grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { readLocks } from './files';
-import { CodexSource } from './source';
+import { CodexSource, MAIN_GONE_GRACE_MS } from './source';
 
 setQuiet(true);
 
@@ -925,5 +925,56 @@ describe('fonte do Codex: título do filho pelo spawn_agent (P11)', () => {
     ctx.source.boot();
     expect(ctx.agent(SUB)?.title).toBe('Documente o módulo de soma');
     expect(ctx.agent(`.codex:${C3}`)?.title).toBe('Liste os arquivos de src');
+  });
+});
+
+describe('fonte do Codex: neto (P13)', () => {
+  const G = threadId(5);
+  const SUB = `.codex:${C}`;
+  const NETO = `.codex:${G}`;
+
+  it('neto (depth 2) trabalhando com o pai já concluído entra ligado ao principal da árvore', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at)]);
+    ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', at), R.taskComplete('s1', at + 500)]);
+    ctx.home.rollout(G, [R.meta(G, { at: at + 100, sessionId: T, source: grandchildSource(C) }), R.taskStarted('g1', at + 100), R.user(G, 'g1', 'gu', 'Conte as linhas de src', at + 200)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.home.lock(G, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)).toBeUndefined();
+    expect(ctx.agent(NETO)).toMatchObject({ kind: 'sub', parentId: KEY, status: 'working', title: 'Conte as linhas de src' });
+  });
+
+  it('neto presente não vira done quando o pai conclui, segue depois que o pai sai do escritório e sai quando o principal fecha', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at)]);
+    const child = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', at)]);
+    ctx.home.rollout(G, [R.meta(G, { at: at + 100, sessionId: T, source: grandchildSource(C) }), R.taskStarted('g1', at + 100)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.home.lock(G, at);
+    ctx.source.boot();
+    expect(ctx.agent(NETO)).toMatchObject({ parentId: SUB, status: 'working' });
+    // O pai conclui o turno: entrega; o neto continua trabalhando.
+    ctx.advance(1_000);
+    ctx.home.append(child, [R.taskComplete('s1', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    expect(ctx.agent(NETO)?.status).toBe('working');
+    // O pai sai do escritório (fim da graça de quem entregou): o neto fica.
+    ctx.advance(DONE_GRACE_MS + 1_000);
+    ctx.poll();
+    expect(ctx.agent(SUB)).toBeUndefined();
+    expect(ctx.agent(NETO)?.status).toBe('working');
+    // O principal fecha: o neto sai junto.
+    ctx.home.unlock(T);
+    ctx.poll();
+    ctx.advance(MAIN_GONE_GRACE_MS);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('offline');
+    expect(ctx.agent(NETO)?.status).toBe('done');
   });
 });

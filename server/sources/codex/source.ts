@@ -26,7 +26,8 @@
 // Subagentes (spawn_agent) são threads próprios, com lock e rollout: o session_meta aponta o pai. Entram como
 // subagentes do pai enquanto trabalham e entregam ao concluir o turno (ou ao sumir); threads internos (guardian,
 // revisão, compactação, memória) ficam de fora. O título do filho é a tarefa do spawn_agent do pai (sinal 'spawn' com
-// o id do filho, guardado até ele entrar), senão o 1º texto do próprio filho.
+// o id do filho, guardado até ele entrar), senão o 1º texto do próprio filho. Um neto (depth 2) cujo pai já entregou
+// ou saiu fica ligado ao principal da árvore (session_meta.session_id): entra assim e não sai quando o pai conclui.
 //
 // Status: aplicado por bordas (início/fim de turno no rollout, eventos de hook), a informação mais nova vence; um
 // rollout relido nunca sobrescreve o 'waiting' de um PermissionRequest mais novo. Um request_user_input sem output é
@@ -365,8 +366,9 @@ export class CodexSource implements AgentSource, CodexLive {
       this.unwatch(t);
       this.threads.delete(key);
     }
-    // Subagentes que ficaram para depois (o pai entrou neste ciclo).
-    for (const t of this.threads.values()) if (t.kind === 'sub' && !t.inOffice && seen.has(t.key)) this.reconcile(t, now);
+    // Subagentes de novo, depois das entradas e saídas deste ciclo: o que ficou para depois entra (o pai entrou agora)
+    // e o neto ligado ao principal sai se o principal fechou agora (o closeMain não o alcança pelo pai direto).
+    for (const t of this.threads.values()) if (t.kind === 'sub' && seen.has(t.key)) this.reconcile(t, now);
   }
 
   /**
@@ -469,7 +471,7 @@ export class CodexSource implements AgentSource, CodexLive {
     if (t.kind === 'main' && !this.cwdOf(t)) return false;
     if (t.kind === 'sub') {
       const parent = this.parentKey(t);
-      if (!parent || !this.opts.office.has(parent) || this.opts.office.isSubDone(parent) || this.opts.office.get(parent)?.status === 'offline') return false;
+      if (!parent || !this.activeInOffice(parent)) return false;
       // Subagente só aparece trabalhando (ou recém-criado pelo hook); depois de entregar, sai.
       if (!t.inOffice && t.status !== 'working' && t.status !== 'waiting' && !t.hookSpawned) return false;
     }
@@ -487,10 +489,28 @@ export class CodexSource implements AgentSource, CodexLive {
     return t.acc.locks?.get(t.threadId)?.state === 'held';
   }
 
+  /**
+   * Pai do subagente no escritório: o pai direto enquanto ele está lá e não entregou; senão (neto cujo pai já concluiu
+   * ou saiu) o principal da árvore, se estiver lá. Sem nenhum dos dois, o pai direto (o sub espera).
+   */
   private parentKey(t: ThreadTracker): string | undefined {
     if (!t.parentThreadId) return undefined;
     const direct = `${t.acc.id}:${t.parentThreadId}`;
-    return direct;
+    if (this.activeInOffice(direct)) return direct;
+    const root = this.rootKey(t);
+    return root && root !== direct && this.opts.office.has(root) ? root : direct;
+  }
+
+  /** Principal da árvore: session_meta.session_id (o thread raiz), do próprio sub ou do pai dele. */
+  private rootKey(t: ThreadTracker): string | undefined {
+    const parent = t.parentThreadId ? this.threads.get(`${t.acc.id}:${t.parentThreadId}`) : undefined;
+    const root = t.meta?.sessionId ?? parent?.meta?.sessionId;
+    return root ? `${t.acc.id}:${root.toLowerCase()}` : undefined;
+  }
+
+  /** No escritório e ainda ativo (nem concluído, nem encerrado). */
+  private activeInOffice(key: string): boolean {
+    return this.opts.office.has(key) && !this.opts.office.isSubDone(key);
   }
 
   /** Projeto conhecido do thread (session_meta ou hook). */
