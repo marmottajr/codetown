@@ -6,7 +6,7 @@ import http from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { codexDirsRefused } from './accounts/detect';
 import { AccountsService } from './accounts/service';
-import { loadConfig, messagesOffReason, terminalOffReason } from './config';
+import { codexAppServerOffReason, loadConfig, messagesOffReason, terminalOffReason } from './config';
 import { createApiHandler, sendJson } from './http/app';
 import { createRequestGuard } from './http/guard';
 import { Hub } from './http/sse';
@@ -28,6 +28,7 @@ import { HOOK_KEY_FILE, loadHookKey } from './codex/key';
 import { createCodexQueueRunner, findCodexBin } from './messages/codex';
 import { createMessageRoutes } from './messages/http';
 import { MessageRegistry } from './messages/registry';
+import { CodexAppServerService } from './sources/codex/appserver/service';
 import type { CodexLive } from './sources/codex/live';
 import { ClaudeWatcher } from './sources/watcher';
 import { discoverCodexDirs } from './sources/codex/accounts';
@@ -146,6 +147,21 @@ const permissions = config.terminal
     })
   : undefined;
 late.permissions = permissions;
+// Aprovação do codex no terminal pelo escritório (canal paralelo, sources/codex/appserver/service.ts): junta-se ao daemon
+// do app-server que o TUI já subiu em cada conta Codex (nunca o inicia). Mesma trava do terminal, fora do Docker e
+// HABBLAUD_CODEX_APPSERVER=0 desliga (config.codexAppServer). O binário é procurado aqui, à parte do das mensagens (que só
+// é procurado com elas ligadas).
+const codexAppServerBin = codex && config.codexAppServer ? findCodexBin(process.env) : undefined;
+const codexAppServer =
+  permissions && codex && config.codexAppServer
+    ? new CodexAppServerService({
+        accounts: () => accounts.entriesOf('codex').map((e) => ({ id: e.id, home: e.detected.configDir })),
+        registry: permissions,
+        codexBin: codexAppServerBin,
+        version: config.version,
+      })
+    : undefined;
+permissions?.setParallelSink(codexAppServer);
 // Mensagens pelo escritório (plugin habblaud-mensagens): entram na sessão como se você as tivesse digitado, então
 // seguem a mesma trava (e HABBLAUD_MENSAGENS=0 desliga só elas). Ao Codex vão por `codex queue` (messages/codex.ts):
 // fora do Docker o próprio servidor roda o comando (HABBLAUD_CODEX_BIN ou `codex` do PATH); no Docker, o auxiliar do
@@ -174,6 +190,7 @@ if (timeline) {
   timeline.ingest(hub.current());
 }
 permissions?.start();
+codexAppServer?.start();
 messages?.start();
 stats.start();
 updates.start();
@@ -273,6 +290,9 @@ server.listen(config.port, config.host, () => {
     for (const a of codexAccounts) {
       log.info(`   Conta ${a.detected.short} do Codex (${a.id}): uso: ${accounts.usageView(a.id).status} · ${a.detected.configDir}`);
     }
+    // Sem o binário, o próprio serviço já avisou no start().
+    if (!codexAppServer) log.info(`   Aprovação do codex no terminal pelo escritório: desligada (${codexAppServerOffReason(process.env, config.host, config.inDocker)}).`);
+    else if (codexAppServerBin) log.info(`   Aprovação do codex no terminal pelo escritório: pelo daemon do app-server, quando o codex o deixar no ar (${codexAppServerBin}).`);
   } else {
     log.info(`   Codex: ${config.codex ? 'nenhuma pasta do Codex encontrada (defina HABBLAUD_CODEX_DIRS)' : 'desligado (HABBLAUD_CODEX=0)'}.`);
   }
@@ -314,6 +334,7 @@ function shutdown(signal: string): void {
   hub.stop();
   terminals?.stop();
   timeline?.stop();
+  codexAppServer?.stop();
   permissions?.stop();
   messages?.stop();
   updates.stop();
