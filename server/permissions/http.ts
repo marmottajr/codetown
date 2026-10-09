@@ -2,10 +2,12 @@
 // conferida em http/app.ts; o guard (http/guard.ts) já exigiu JSON e Origin local nos POST (contra CSRF).
 //
 //   POST /api/permissions                 (hook)    registra o pedido: 201 {id, expiresAt} ou 200 {skip}
-//                                                   (o hook do Codex manda também provider: "codex", account e codexHome)
+//                                                   (o hook do Codex manda também provider: "codex", account e codexHome;
+//                                                   numa thread do canal paralelo: 200 {skip: "parallel"})
 //   GET  /api/permissions/:id/wait        (hook)    long-poll: {status: pending | decided | released}
 //   GET  /api/permissions/:id             (página)  detalhe com os argumentos (comando, diff...)
-//   POST /api/permissions/:id/decision    (página)  {behavior: allow | deny | terminal | answer, message?, answers?, ...}
+//   POST /api/permissions/:id/decision    (página)  {behavior: allow | deny | terminal | answer, message?, answers?, forSession?, ...}
+//                                                   (pedido 'parallel': a decisão vai ao app-server do Codex; 503 = canal fora)
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { InvalidRequest, parseDecision, WAIT_MAX_MS, type PermissionRegistry } from './registry';
@@ -58,9 +60,9 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
   const decide = async (req: IncomingMessage, res: ServerResponse, id: string) => {
     const d = parseDecision(await readJson(req));
     if (!d) {
-      throw new HttpError(400, 'esperado {behavior: "allow" | "deny" | "terminal", message?, interrupt?, suggestion?} ou {behavior: "answer", answers: [{question, options?, other?}]}');
+      throw new HttpError(400, 'esperado {behavior: "allow" | "deny" | "terminal", message?, interrupt?, suggestion?, forSession?} ou {behavior: "answer", answers: [{question, options?, other?}]}');
     }
-    switch (registry.decide(id, d)) {
+    switch (await registry.decide(id, d)) {
       case 'ok':
         return sendJson(res, 200, { ok: true });
       case 'not-found':
@@ -68,11 +70,13 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
       case 'conflict':
         return sendJson(res, 409, { error: 'este pedido já foi respondido' });
       case 'invalid':
-        return sendJson(res, 400, { error: 'sugestão de regra desconhecida para este pedido' });
+        return sendJson(res, 400, { error: 'sugestão de regra desconhecida (ou "nesta sessão") para este pedido' });
       case 'invalid-answer':
         return sendJson(res, 400, { error: 'resposta que não serve para este pedido: pergunta se responde com "answer" (cada pergunta uma vez, com as opções dela); os outros pedidos, com "allow" ou "deny"' });
       case 'unsupported':
-        return sendJson(res, 400, { error: 'o Codex não aceita interromper nem "sempre permitir" pelo Habblaud: aprove, recuse (com um motivo, se quiser) ou responda no terminal' });
+        return sendJson(res, 400, { error: 'o Codex não aceita esta resposta pelo Habblaud (interromper, "sempre permitir" ou uma decisão que o pedido não oferece): aprove, recuse ou responda no terminal' });
+      case 'unavailable':
+        return sendJson(res, 503, { error: 'o canal com o Codex não está disponível agora: responda no terminal' });
     }
   };
 

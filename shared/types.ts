@@ -564,7 +564,14 @@ export interface PermissionRequestInfo {
   createdAt: number;
   /** Quando o hook desiste de esperar e o pedido passa a valer só no terminal. */
   expiresAt: number;
+  /** 'parallel' = pedido do canal do app-server (vale a 1ª resposta, escritório ou terminal); ausente = como hoje. */
+  mode?: 'blocking' | 'parallel';
+  /** Decisões que o canal oferece (só 'parallel'). */
+  decisions?: CodexDecision[];
 }
+
+/** Decisão de um pedido de aprovação do app-server do Codex (pedidos 'parallel'). */
+export type CodexDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel';
 
 /**
  * Resposta a uma pergunta do AskUserQuestion, por POSIÇÃO (AskQuestion.index e o `index` das opções): o hook troca
@@ -594,6 +601,8 @@ export interface PermissionDecision {
   suggestion?: number;
   /** Resposta (`answer`): uma por pergunta do pedido. */
   answers?: PermissionAnswer[];
+  /** Aprovação: vale para a sessão inteira (acceptForSession). */
+  forSession?: boolean;
 }
 
 // ------------------------------------------------------------------ mensagens pelo escritório
