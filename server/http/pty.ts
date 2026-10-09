@@ -3,11 +3,13 @@
 //   POST /api/pty                      {cwd, account?, cols?, rows?}: sessão nova do Claude Code
 //   GET  /api/pty/:id/stream           SSE: reset (tela guardada) | data | exit
 //   POST /api/pty/:id/input|resize|close
+//   GET  /api/pty/dirs?path=           subpastas de uma pasta ("Abrir projeto"; pty/dirs.ts)
 //   POST /api/agents/:id/stop          encerra o agente (aqui ou noutro terminal)
 //   POST /api/agents/:id/takeover      assume a sessão: encerra lá e retoma aqui
 // Quem controla um terminal destes executa comandos na máquina: só conexões do próprio computador, com Host
 // local e (quando o navegador manda) Origin da mesma origem. A borda (http/guard.ts) já exige JSON nos POST.
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { DirError, listDirs } from '../pty/dirs';
 import { PtyError, type PtyManager } from '../pty/manager';
 import { HttpError, readJson, sendJson } from './app';
 import { isLoopbackHost } from './guard';
@@ -78,6 +80,16 @@ export function createPtyRoutes(ptys: PtyManager): (req: IncomingMessage, res: S
         return noContent(res);
       }
       return sendJson(res, 201, await ptys.takeover(id, { cols: body?.cols, rows: body?.rows }));
+    }
+    if (path === '/api/pty/dirs') {
+      if (method !== 'GET') return notAllowed(res, 'GET');
+      const q = new URL(req.url ?? '/', 'http://localhost').searchParams.get('path');
+      try {
+        return sendJson(res, 200, listDirs(q));
+      } catch (err) {
+        if (err instanceof DirError) throw new HttpError(400, err.message);
+        throw err;
+      }
     }
     const [rawId, act] = path.slice('/api/pty'.length).split('/').filter(Boolean);
     if (!rawId) {

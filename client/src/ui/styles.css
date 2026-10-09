@@ -7761,3 +7761,151 @@ html.is-replay #world {
 .ui-ttab.is-drop-after::after {
   right: -2px;
 }
+
+/* "Abrir projeto" (ui/projectpicker.ts): botão no topo da lista lateral e a janela de escolher pasta. */
+.ui-side__title-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ui-side__open svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ui-pick {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(5, 7, 12, 0.55);
+}
+
+.ui-pick[hidden] {
+  display: none;
+}
+
+.ui-pick__box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(640px, 100%);
+  max-height: min(640px, calc(100vh - 32px));
+  padding: 16px;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--ui-bg-solid);
+  box-shadow: 0 28px 70px rgba(5, 7, 12, 0.62);
+}
+
+.ui-pick__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ui-pick__head h2 {
+  font: 600 16px/1 var(--font-px);
+}
+
+.ui-pick__nav {
+  display: flex;
+  gap: 8px;
+}
+
+.ui-pick__path {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--ui-text);
+  font: 12.5px/1 var(--font-mono);
+}
+
+.ui-pick__shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ui-chip-btn {
+  padding: 3px 9px;
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ui-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ui-chip-btn:hover {
+  border-color: var(--ui-accent);
+}
+
+.ui-pick__list {
+  flex: 1;
+  min-height: 160px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.ui-pick__dir {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ui-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-pick__dir:hover,
+.ui-pick__dir:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.ui-pick__icon {
+  display: grid;
+  color: #f0c36b;
+}
+
+.ui-pick__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ui-pick__empty {
+  padding: 8px;
+}
+
+.ui-pick__msg {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ui-muted);
+}
+
+.ui-pick__msg.is-error {
+  color: #ff8a80;
+}
+
+.ui-pick__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -7,6 +7,7 @@ import { plural, shortPath } from './format';
 import { ICONS } from './icons';
 import { groupRooms, type AgentNode, type RoomGroup } from './model';
 import { officeIsEmpty } from './overlays';
+import { ProjectPicker } from './projectpicker';
 import { createAgentRow, updateAgentRow } from './rows';
 import { createAccountChip, createProgress, updateAccountChip, updateProgress } from './widgets';
 
@@ -41,6 +42,9 @@ export class Sidebar implements UiComponent {
   private rooms: KeyedList<RoomGroup>;
   private roomRefs = new WeakMap<HTMLElement, RoomRefs>();
   private nodeRefs = new WeakMap<HTMLElement, NodeRefs>();
+  /** "Abrir projeto": escolher uma pasta do computador e abrir o Claude Code nela (terminal interativo). */
+  private openProject: HTMLButtonElement;
+  private picker: ProjectPicker | null = null;
   private empty: HTMLElement;
   private emptyText: HTMLElement;
   private clearBtn: HTMLButtonElement;
@@ -118,12 +122,28 @@ export class Sidebar implements UiComponent {
     this.scroller.append(this.empty);
 
     const close = iconButton(ICONS.close, 'Fechar painel lateral', () => ctx.togglePanel('sidebar', false), 'ui-side__close');
+    this.openProject = h('button', {
+      class: 'ui-btn ui-btn--sm ui-side__open',
+      type: 'button',
+      title: 'Escolher uma pasta do computador e abrir o Claude Code nela',
+      on: { click: () => this.showPicker() },
+    });
+    this.openProject.innerHTML = ICONS.folder;
+    this.openProject.append(h('span', { text: 'Abrir projeto' }));
     this.el = h(
       'aside',
       { class: 'ui-panel ui-sidebar', attrs: { 'aria-label': 'Salas e agentes', id: 'ui-sidebar' } },
-      h('div', { class: 'ui-side__head' }, h('div', { class: 'ui-side__title' }, h('h2', { text: 'Escritório' }), close), search, this.filters),
+      h('div', { class: 'ui-side__head' }, h('div', { class: 'ui-side__title' }, h('h2', { text: 'Escritório' }), h('span', { class: 'ui-side__title-actions' }, this.openProject, close)), search, this.filters),
       this.scroller,
     );
+  }
+
+  private showPicker(): void {
+    if (!this.picker) {
+      this.picker = new ProjectPicker(this.ctx);
+      this.ctx.root.append(this.picker.el);
+    }
+    this.picker.show(this.openProject);
   }
 
   focusSearch(): void {
@@ -132,6 +152,7 @@ export class Sidebar implements UiComponent {
   }
 
   render(): void {
+    setHidden(this.openProject, !this.ctx.terminals?.interactiveEnabled);
     const snap = this.ctx.store.snapshot;
     const accounts = snap?.accounts ?? [];
     const hidden = new Set(this.ctx.prefs.hiddenAccounts);
