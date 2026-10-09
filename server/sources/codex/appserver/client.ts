@@ -8,11 +8,9 @@
 // de token, atestado, elicitação MCP, aprovações v1) NUNCA recebe resposta: a primeira resposta vence, e uma
 // resposta do Habblaud quebraria a sessão do TUI.
 import { EventEmitter } from 'node:events';
+import type { CodexDecision } from '../../../../shared/types';
 import { RpcError, RpcPeer } from './rpc';
 import { WsConnection } from './ws';
-
-/** Decisão de aprovação do app-server (contrato C4). A Tarefa 14 troca esta declaração pelo import de `shared/types`. */
-type CodexDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel';
 
 /** Notificações que o Habblaud não usa (deltas de texto, saída de comandos, áudio): o app-server nem as manda. */
 export const OPT_OUT_NOTIFICATIONS: readonly string[] = [
