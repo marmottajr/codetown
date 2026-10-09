@@ -3,7 +3,8 @@
 // falso liga o stdio ao FakeAppServer). Cobre: pré-filtro pela pasta app-server-control/ e `daemon version` antes de
 // abrir o proxy, assinatura (loaded/list, thread/started, resume sem overrides; no-rollout tenta de novo, not-daemon fica
 // com o hook), pedidos de comando/arquivo virando 'parallel' com o id original na resposta, resolved, a queda do daemon
-// com pedido aberto (Review Focus #3) e a corrida com o hook (Review Focus #4). Ids e caminhos sintéticos.
+// com pedido aberto (Review Focus #3), a corrida com o hook (Review Focus #4), o resume só de thread carregada e o
+// desassinar depois do turno fechado (setTurnOpen), o comando desembrulhado e as decisões do pedido. Ids e caminhos sintéticos.
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,7 +15,7 @@ import { NameStore } from '../../../model/names';
 import { Office } from '../../../model/office';
 import { PermissionRegistry, type ParallelRequestInput } from '../../../permissions/registry';
 import { FakeAppServer, rpcFail, until } from '../../../test/codex-fixtures-appserver';
-import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, CodexAppServerService, daemonRunning, DISCOVERY_MS, RESUME_RETRY_MS, spawnCodexProxy, type CodexProxy } from './service';
+import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, CodexAppServerService, daemonRunning, DISCOVERY_MS, RESUME_RETRY_MS, spawnCodexProxy, UNSUBSCRIBE_AFTER_MS, type CodexProxy } from './service';
 
 setQuiet(true);
 
@@ -264,7 +265,7 @@ describe('CodexAppServerService: daemon e conexão', () => {
 });
 
 describe('CodexAppServerService: threads', () => {
-  it('no-rollout tenta o resume de novo depois de RESUME_RETRY_MS; not-daemon (outro escritor) fica com o hook para sempre', async () => {
+  it('no-rollout tenta o resume de novo depois de RESUME_RETRY_MS; not-daemon (outro escritor) fica com o hook para sempre, mesmo com o turno aberto', async () => {
     // Arrange
     const s = setup();
     const fake = server([THREAD, OTHER]);
@@ -291,11 +292,15 @@ describe('CodexAppServerService: threads', () => {
     s.clock.advance(RESUME_RETRY_MS);
     s.svc.tick();
     await until(() => s.svc.owns(ACCOUNT, THREAD));
+    s.svc.setTurnOpen(ACCOUNT, OTHER, true);
+    await until(() => fake.calls('thread/loaded/list').length === 3);
+    await flush();
     s.clock.advance(DISCOVERY_MS);
     s.svc.tick();
     await flush();
     expect(fake.calls('thread/resume').map((m) => (m.params as { threadId: string }).threadId)).toEqual([THREAD, OTHER, THREAD]);
     expect(s.svc.owns(ACCOUNT, OTHER)).toBe(false);
+    expect(fake.calls('thread/loaded/list')).toHaveLength(3);
   });
 
   it('thread/loaded/list que falha com a conexão de pé: avisa uma vez e lista de novo depois de DISCOVERY_MS, sem derrubar a conexão', async () => {
@@ -347,6 +352,188 @@ describe('CodexAppServerService: threads', () => {
     await until(() => pendingOf(s).length === 0);
     expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
     expect(fake.calls('thread/resume').map((m) => m.params)).toEqual([{ threadId: THREAD, excludeTurns: true }]);
+  });
+});
+
+describe('CodexAppServerService: o Habblaud não segura thread que o usuário fechou (C1)', () => {
+  /** Fecha o turno, passa o prazo e espera o thread/unsubscribe. */
+  async function released(s: Setup, fake: FakeAppServer): Promise<void> {
+    s.svc.setTurnOpen(ACCOUNT, THREAD, false);
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS);
+    s.svc.tick();
+    await until(() => fake.calls('thread/unsubscribe').length === 1);
+  }
+
+  it('retry não assina thread que saiu do thread/loaded/list: lista de novo antes e desiste dela', async () => {
+    // Arrange: a thread ainda não tem rollout (antes do 1º turno).
+    const s = setup();
+    const threads = [THREAD];
+    const fake = server(threads);
+    fake.handlers.set('thread/resume', () => rpcFail(-32600, `no rollout found for thread id ${THREAD}`));
+    s.queue.push(fake);
+    s.svc.tick();
+    await until(() => fake.calls('thread/resume').length === 1);
+    await flush();
+
+    // Act: o TUI fechou antes da nova tentativa (o daemon descarregou a thread).
+    threads.splice(0);
+    s.clock.advance(RESUME_RETRY_MS);
+    s.svc.tick();
+    await until(() => fake.calls('thread/loaded/list').length === 2);
+    await flush();
+    s.clock.advance(DISCOVERY_MS);
+    s.svc.tick();
+    await flush();
+
+    // Assert
+    expect(fake.calls('thread/resume')).toHaveLength(1);
+    expect(fake.calls('thread/loaded/list')).toHaveLength(2);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+  });
+
+  it('turno fechado há 60 s: desassina, owns fica falso, o cartão aberto da thread fecha e o próximo pedido volta ao hook', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+    fake.request(11, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-11', command: 'npm test' });
+    await until(() => pendingOf(s).length === 1);
+
+    // Act
+    s.svc.setTurnOpen(ACCOUNT, THREAD, false);
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS - 1);
+    s.svc.tick();
+    await flush();
+
+    // Assert
+    expect(fake.calls('thread/unsubscribe')).toEqual([]);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(true);
+    expect(pendingOf(s)).toHaveLength(1);
+    s.clock.advance(1);
+    s.svc.tick();
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    expect(pendingOf(s)).toEqual([]);
+    await until(() => fake.calls('thread/unsubscribe').length === 1);
+    expect(fake.calls('thread/unsubscribe')[0].params).toEqual({ threadId: THREAD });
+    expect(s.registry.register(codexHook())).toHaveProperty('id');
+  });
+
+  it('turno reaberto antes de 60 s: continua assinada, sem unsubscribe', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+
+    // Act
+    s.svc.setTurnOpen(ACCOUNT, THREAD, false);
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS - 1);
+    s.svc.tick();
+    s.svc.setTurnOpen(ACCOUNT, THREAD, true);
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS);
+    s.svc.tick();
+    await flush();
+
+    // Assert
+    expect(fake.calls('thread/unsubscribe')).toEqual([]);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(true);
+    expect(fake.calls('thread/resume')).toHaveLength(1);
+  });
+
+  it('turno reaberto com a thread carregada e não assinada: lista de novo e assina', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+    await released(s, fake);
+
+    // Act
+    s.svc.setTurnOpen(ACCOUNT, THREAD, true);
+
+    // Assert
+    await until(() => s.svc.owns(ACCOUNT, THREAD));
+    expect(fake.calls('thread/loaded/list')).toHaveLength(2);
+    expect(fake.calls('thread/resume')).toHaveLength(2);
+  });
+
+  it('turno reaberto com a thread fora do thread/loaded/list: nenhum resume (o Habblaud nunca faz o daemon carregar a thread)', async () => {
+    // Arrange
+    const threads = [THREAD];
+    const s = setup({ threads });
+    const fake = await connected(s);
+    await released(s, fake);
+    threads.splice(0);
+
+    // Act
+    s.svc.setTurnOpen(ACCOUNT, THREAD, true);
+    s.svc.setTurnOpen(ACCOUNT, OTHER, true);
+    await until(() => fake.calls('thread/loaded/list').length >= 2);
+    await flush();
+    s.clock.advance(DISCOVERY_MS);
+    s.svc.tick();
+    await flush();
+
+    // Assert
+    expect(fake.calls('thread/resume')).toHaveLength(1);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    expect(s.svc.owns(ACCOUNT, OTHER)).toBe(false);
+  });
+
+  it('turno fechado e a conexão caindo antes dos 60 s: a conexão nova assina e desassina no prazo', async () => {
+    // Arrange
+    const s = setup();
+    await connected(s);
+    s.svc.setTurnOpen(ACCOUNT, THREAD, false);
+
+    // Act
+    s.proxies[0].die();
+    s.clock.advance(BACKOFF_MIN_MS);
+    s.svc.tick();
+    await until(() => s.proxies.length === 2 && s.svc.owns(ACCOUNT, THREAD));
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS - BACKOFF_MIN_MS);
+    s.svc.tick();
+
+    // Assert
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    await until(() => s.proxies[1].fake.calls('thread/unsubscribe').length === 1);
+  });
+
+  it('turno fechado há 60 s sem conexão: a reconexão lista a thread e não a assina até um cliente carregá-la de novo (thread/started)', async () => {
+    // Arrange
+    const s = setup();
+    await connected(s);
+    s.proxies[0].die();
+
+    // Act
+    s.svc.setTurnOpen(ACCOUNT, THREAD, false);
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS);
+    s.svc.tick();
+    await until(() => s.proxies.length === 2 && s.proxies[1].fake.calls('thread/loaded/list').length === 1);
+    await flush();
+
+    // Assert
+    expect(s.proxies[1].fake.calls('thread/resume')).toEqual([]);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    s.proxies[1].fake.notify('thread/started', { thread: { id: THREAD, source: 'cli' } });
+    await until(() => s.svc.owns(ACCOUNT, THREAD));
+  });
+
+  it('turno fechado de thread que o daemon descarregou deixa de valer: carregada de novo, a próxima conexão assina', async () => {
+    // Arrange: desassinada pelo turno fechado; a reconexão lista sem ela (o daemon a descarregou).
+    const threads = [THREAD];
+    const s = setup({ threads });
+    await released(s, await connected(s));
+    threads.splice(0);
+    s.proxies[0].die();
+    s.clock.advance(BACKOFF_MIN_MS);
+    s.svc.tick();
+    await until(() => s.proxies.length === 2 && s.proxies[1].fake.calls('thread/loaded/list').length === 1);
+    await flush();
+
+    // Act: carregada de novo, e a conexão cai e volta.
+    threads.push(THREAD);
+    s.proxies[1].die();
+    s.clock.advance(BACKOFF_MIN_MS);
+    s.svc.tick();
+
+    // Assert
+    await until(() => s.proxies.length === 3 && s.svc.owns(ACCOUNT, THREAD));
   });
 });
 
@@ -439,7 +626,7 @@ describe('CodexAppServerService: pedidos de aprovação', () => {
     expect(s.svc.owns(ACCOUNT, CHILD)).toBe(true);
   });
 
-  it('comando com o invólucro do shell: o cartão recebe o comando desembrulhado', async () => {
+  it('comando com o invólucro do shell e sem availableDecisions: o registro recebe o comando desembrulhado e as quatro decisões', async () => {
     // Arrange
     const s = setup();
     const fake = await connected(s);
@@ -450,18 +637,6 @@ describe('CodexAppServerService: pedidos de aprovação', () => {
 
     // Assert
     expect(s.seen.map((r) => r.input)).toEqual([{ command: 'git status' }]);
-  });
-
-  it('sem availableDecisions: o registro recebe as quatro decisões', async () => {
-    // Arrange
-    const s = setup();
-    const fake = await connected(s);
-
-    // Act
-    fake.request(10, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-10', command: 'npm test' });
-    await until(() => pendingOf(s).length === 1);
-
-    // Assert
     expect(s.seen.map((r) => r.decisions)).toEqual([['accept', 'acceptForSession', 'decline', 'cancel']]);
     expect(pendingOf(s)[0].decisions).toEqual(['accept', 'acceptForSession', 'decline', 'cancel']);
   });

@@ -13,6 +13,10 @@
 // - owns(): a thread foi assinada nesta conexão (resume 'ok', ou um pedido dela chegou: o app-server só manda pedidos a
 //   quem assina a thread, e assina sozinho os subagentes que nascem com a conexão aberta). 'not-daemon' (outro escritor,
 //   ou guardian) fica com o hook; 'no-rollout' (antes do 1º turno) tenta de novo depois de RESUME_RETRY_MS.
+// - Nunca segura uma thread que o usuário fechou (assinada, a thread fica carregada no daemon com a trava de escritor
+//   presa): só assina thread que está no thread/loaded/list atual ou que acabou de chegar em thread/started (o resume de
+//   uma thread descarregada faria o daemon carregá-la), e desassina UNSUBSCRIBE_AFTER_MS depois de o turno dela fechar
+//   (setTurnOpen), até o turno reabrir.
 import { execFile, spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +33,8 @@ export const BACKOFF_MIN_MS = 1_000;
 export const BACKOFF_MAX_MS = 30_000;
 /** Thread ainda sem rollout (antes do primeiro turno): tenta o resume de novo depois disto. */
 export const RESUME_RETRY_MS = 5_000;
+/** Turno fechado (setTurnOpen false): desassina a thread depois disto, se o turno não reabrir antes. */
+export const UNSUBSCRIBE_AFTER_MS = 60_000;
 const DAEMON_CHECK_TIMEOUT_MS = 5_000;
 const TICK_MS = 1_000;
 /** Pedido sem `availableDecisions`: o escritório oferece as quatro. */
@@ -150,6 +156,8 @@ interface AccountState {
 
 export class CodexAppServerService implements ParallelSink {
   private readonly states = new Map<string, AccountState>();
+  /** Turnos fechados (setTurnOpen false), por conta: thread → quando fechou. Fora da conexão: sobrevive à reconexão. */
+  private readonly closedTurns = new Map<string, Map<string, number>>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private readonly now: () => number;
@@ -177,6 +185,7 @@ export class CodexAppServerService implements ParallelSink {
     this.timer = null;
     for (const st of [...this.states.values()]) if (st.conn) this.drop(st, st.conn, 'fechada pelo Habblaud');
     this.states.clear();
+    this.closedTurns.clear();
   }
 
   /** Um ciclo: contas novas/sumidas, conferência do daemon e novas tentativas de resume. Público para os testes. */
@@ -191,6 +200,7 @@ export class CodexAppServerService implements ParallelSink {
         if (ids.has(st.id)) continue;
         if (st.conn) this.drop(st, st.conn, 'a conta saiu da lista');
         this.states.delete(st.id);
+        this.closedTurns.delete(st.id);
       }
       for (const a of accounts) {
         let st = this.states.get(a.id);
@@ -223,6 +233,29 @@ export class CodexAppServerService implements ParallelSink {
   owns(account: string, threadId: string): boolean {
     const conn = this.states.get(account)?.conn;
     return !!conn && conn.ready && !conn.closed && conn.owned.has(threadId);
+  }
+
+  /**
+   * O turno da thread abriu ou fechou (`account` = o id da conta, o mesmo da chave `<conta>:<requestId>` e do id do
+   * agente). Fechado: desassina UNSUBSCRIBE_AFTER_MS depois (no tick; os pedidos abertos dela fecham e os novos voltam ao
+   * hook). Aberto: cancela o desassinar; se a thread não está assinada, lista de novo e só a assina se ainda estiver
+   * carregada no daemon. Vale também sem conexão (a próxima conexão respeita).
+   */
+  setTurnOpen(account: string, threadId: string, open: boolean): void {
+    if (this.stopped) return;
+    const closed = this.closedTurns.get(account) ?? new Map<string, number>();
+    if (!open) {
+      if (!closed.has(threadId)) closed.set(threadId, this.now());
+      this.closedTurns.set(account, closed);
+      return;
+    }
+    this.turnReopened(account, threadId);
+    const st = this.states.get(account);
+    const conn = st?.conn;
+    if (!st || !conn?.ready || conn.closed || conn.owned.has(threadId) || conn.resuming.has(threadId)) return;
+    // Nova tentativa vencida: a próxima listagem decide (assina se estiver carregada; senão desiste).
+    conn.retry.set(threadId, this.now());
+    this.guard(() => this.listLoaded(st, conn));
   }
 
   // ---------------------------------------------------------------- conexão
@@ -280,7 +313,13 @@ export class CodexAppServerService implements ParallelSink {
     client.on('close', (reason: string) => this.drop(st, conn, reason));
     client.on('approval', (req: ApprovalRequest) => this.guard(() => this.onApproval(st, conn, req)));
     client.on('approvalResolved', (r: { requestId: string | number }) => this.guard(() => this.onResolved(st, conn, r.requestId)));
-    client.on('threadStarted', (threadId: string) => this.guard(() => this.resume(conn, threadId)));
+    client.on('threadStarted', (threadId: string) =>
+      this.guard(() => {
+        // Um cliente acabou de carregar a thread: um turno fechado antes disso não vale mais.
+        this.turnReopened(st.id, threadId);
+        this.resume(st, conn, threadId);
+      }),
+    );
     client.on('threadClosed', (threadId: string) => this.guard(() => this.forget(conn, threadId)));
     client.start().then(
       () => this.guard(() => this.onReady(st, conn)),
@@ -298,16 +337,19 @@ export class CodexAppServerService implements ParallelSink {
     this.listLoaded(st, conn);
   }
 
-  /** Conexão pronta, a cada tick: novas tentativas de resume e a descoberta que falhou. */
+  /** Conexão pronta, a cada tick: desassina as threads de turno fechado e lista de novo (descoberta que falhou, novas tentativas vencidas). */
   private maintain(st: AccountState, conn: Conn, now: number): void {
-    this.retryResumes(conn, now);
-    if (!conn.discovered && now >= conn.listAt) this.listLoaded(st, conn);
+    for (const threadId of [...conn.owned]) if (this.idle(st.id, threadId, now)) this.release(conn, threadId);
+    if (now < conn.listAt) return;
+    if (!conn.discovered || [...conn.retry.values()].some((at) => now >= at)) this.listLoaded(st, conn);
   }
 
   /**
-   * Descoberta: thread/loaded/list (um por vez) e resume de cada thread carregada. Falha com a conexão de pé (prazo do
-   * pedido no RpcPeer, erro do daemon): avisa uma vez por conexão e lista de novo depois de DISCOVERY_MS, sem derrubar a
-   * conexão (com um método desconhecido, reconectar não adiantaria). Se a conexão caiu no meio, a reconexão lista de novo.
+   * thread/loaded/list (um por vez) e resume do que está carregado: tudo na descoberta; depois, só as novas tentativas
+   * vencidas. Nova tentativa de thread que não está mais carregada: desiste (o resume faria o daemon carregá-la). Falha com
+   * a conexão de pé (prazo do pedido no RpcPeer, erro do daemon): avisa uma vez por conexão e lista de novo depois de
+   * DISCOVERY_MS, sem perder as novas tentativas e sem derrubar a conexão (com um método desconhecido, reconectar não
+   * adiantaria). Se a conexão caiu no meio, a reconexão lista de novo.
    */
   private listLoaded(st: AccountState, conn: Conn): void {
     if (conn.listing || conn.closed) return;
@@ -317,9 +359,17 @@ export class CodexAppServerService implements ParallelSink {
         this.guard(() => {
           conn.listing = false;
           if (conn.closed) return;
+          const now = this.now();
+          const loaded = new Set(ids);
+          const all = !conn.discovered;
           conn.discovered = true;
           conn.listAt = 0;
-          for (const id of ids) this.resume(conn, id);
+          this.forgetUnloaded(st.id, loaded);
+          for (const [threadId, at] of [...conn.retry]) {
+            if (!loaded.has(threadId)) conn.retry.delete(threadId);
+            else if (now >= at) this.resume(st, conn, threadId);
+          }
+          if (all) for (const id of ids) this.resume(st, conn, id);
         }),
       (err) =>
         this.guard(() => {
@@ -366,10 +416,15 @@ export class CodexAppServerService implements ParallelSink {
 
   // ---------------------------------------------------------------- threads
 
-  private resume(conn: Conn, threadId: string): void {
-    if (conn.closed || conn.owned.has(threadId) || conn.resuming.has(threadId) || conn.notDaemon.has(threadId)) return;
-    conn.resuming.add(threadId);
+  /** Assina uma thread carregada (só quem chama sabe: veio do thread/loaded/list atual ou de thread/started). */
+  private resume(st: AccountState, conn: Conn, threadId: string): void {
+    // Sai das novas tentativas antes de qualquer saída: uma tentativa vencida que sobrasse (thread já assinada, de outro
+    // escritor ou de turno fechado) faria listar a cada tick.
     conn.retry.delete(threadId);
+    if (conn.closed || conn.owned.has(threadId) || conn.resuming.has(threadId) || conn.notDaemon.has(threadId)) return;
+    // Turno fechado há UNSUBSCRIBE_AFTER_MS: não segura a thread (assina de novo quando o turno reabrir).
+    if (this.idle(st.id, threadId, this.now())) return;
+    conn.resuming.add(threadId);
     void conn.client.resumeThread(threadId).then((r) =>
       this.guard(() => {
         // Fora de `resuming` = a thread fechou (ou a conexão caiu) no meio: o resultado não vale mais.
@@ -381,16 +436,40 @@ export class CodexAppServerService implements ParallelSink {
     );
   }
 
-  private retryResumes(conn: Conn, now: number): void {
-    for (const [threadId, at] of [...conn.retry]) if (now >= at) this.resume(conn, threadId);
-  }
-
   /** thread/closed: a assinatura acabou (o cliente já fechou os pedidos abertos dela pelo approvalResolved). */
   private forget(conn: Conn, threadId: string): void {
     conn.owned.delete(threadId);
     conn.resuming.delete(threadId);
     conn.retry.delete(threadId);
     conn.notDaemon.delete(threadId);
+  }
+
+  /** Turno fechado há UNSUBSCRIBE_AFTER_MS: sai da thread (o cliente fecha os pedidos abertos dela pelo approvalResolved). */
+  private release(conn: Conn, threadId: string): void {
+    this.forget(conn, threadId);
+    void conn.client.unsubscribe(threadId);
+  }
+
+  /** O turno fechou há UNSUBSCRIBE_AFTER_MS ou mais (e não reabriu): o Habblaud não assina nem segura a thread. */
+  private idle(account: string, threadId: string, now: number): boolean {
+    const at = this.closedTurns.get(account)?.get(threadId);
+    return at !== undefined && now - at >= UNSUBSCRIBE_AFTER_MS;
+  }
+
+  /** O turno reabriu (ou a thread foi carregada de novo): cancela o desassinar. */
+  private turnReopened(account: string, threadId: string): void {
+    const closed = this.closedTurns.get(account);
+    if (!closed) return;
+    closed.delete(threadId);
+    if (closed.size === 0) this.closedTurns.delete(account);
+  }
+
+  /** Turnos fechados de threads que o daemon já descarregou não valem mais (uma nova carga vem com thread/started). */
+  private forgetUnloaded(account: string, loaded: ReadonlySet<string>): void {
+    const closed = this.closedTurns.get(account);
+    if (!closed) return;
+    for (const threadId of [...closed.keys()]) if (!loaded.has(threadId)) closed.delete(threadId);
+    if (closed.size === 0) this.closedTurns.delete(account);
   }
 
   // ---------------------------------------------------------------- pedidos
