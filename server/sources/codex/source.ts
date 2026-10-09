@@ -93,8 +93,13 @@ const LEGACY_WORKING_MS = 90_000;
 const PREFIX_HISTORY = 120;
 /** Resultados guardados ao ler um rollout antes de o agente entrar no escritório. */
 const BACKLOG_MAX = 400;
-/** Conta sem sessão aberta ao subir: quantos rollouts recentes tentar até achar um com o uso do plano. */
+/** Conta sem sessão aberta (ao subir e na releitura): quantos rollouts recentes tentar até achar um com o uso do plano. */
 const SEED_USAGE_FILES = 8;
+/**
+ * Conta sem sessão aberta: o uso do plano é relido dos rollouts a cada tanto (uma sessão curta, como um `codex exec`,
+ * pode ter rodado e sido arquivada entre dois ciclos sem nunca entrar no escritório).
+ */
+export const USAGE_RESCAN_MS = 60_000;
 /** Títulos de filhos (sinal spawn) guardados até o filho aparecer. */
 const SPAWN_TITLES_MAX = 256;
 const MAIN_ROLE = 'Agente principal (Codex)';
@@ -149,6 +154,8 @@ interface CodexAccount {
   /** Modo sem locks: candidatos a abrir (rollouts com mtime recente), revistos a cada 10 s. */
   recent: Set<string>;
   recentAt: number;
+  /** Última leitura do uso pelos rollouts (boot ou releitura de USAGE_RESCAN_MS). */
+  usageScanAt: number;
   usage?: AccountUsage;
   plan?: string;
   error?: string;
@@ -255,7 +262,7 @@ export class CodexSource implements AgentSource, CodexLive {
         old.configDir = e.detected.configDir;
         return old;
       }
-      return { id: e.id, dir: e.dir, configDir: e.detected.configDir, index: new RolloutIndex(e.dir, this.now), locks: null, recent: new Set(), recentAt: -Infinity };
+      return { id: e.id, dir: e.dir, configDir: e.detected.configDir, index: new RolloutIndex(e.dir, this.now), locks: null, recent: new Set(), recentAt: -Infinity, usageScanAt: -Infinity };
     });
   }
 
@@ -276,7 +283,10 @@ export class CodexSource implements AgentSource, CodexLive {
     try {
       for (const acc of this.accs) acc.index.scanAll();
       this.poll(true);
-      for (const acc of this.accs) if (!acc.usage) this.seedUsage(acc);
+      for (const acc of this.accs) {
+        acc.usageScanAt = this.now();
+        if (!acc.usage) this.seedUsage(acc);
+      }
     } finally {
       this.opts.office.endBoot();
     }
@@ -369,6 +379,25 @@ export class CodexSource implements AgentSource, CodexLive {
     // Subagentes de novo, depois das entradas e saídas deste ciclo: o que ficou para depois entra (o pai entrou agora)
     // e o neto ligado ao principal sai se o principal fechou agora (o closeMain não o alcança pelo pai direto).
     for (const t of this.threads.values()) if (t.kind === 'sub' && seen.has(t.key)) this.reconcile(t, now);
+    if (!boot) this.rescanUsage(now);
+  }
+
+  /**
+   * Contas sem sessão aberta: relê o uso a cada USAGE_RESCAN_MS com a busca do boot (todas as pastas de data e as
+   * arquivadas). O mtime só escolhe os arquivos a abrir; o uso mais novo vence pelo horário da linha (pushUsage).
+   */
+  private rescanUsage(now: number): void {
+    for (const acc of this.accs) {
+      if (now - acc.usageScanAt < USAGE_RESCAN_MS) continue;
+      acc.usageScanAt = now;
+      if (!this.hasOpenSession(acc)) this.seedUsage(acc);
+    }
+  }
+
+  /** A conta tem um agente principal no escritório (o uso dela chega pelas linhas novas da sessão). */
+  private hasOpenSession(acc: CodexAccount): boolean {
+    for (const t of this.threads.values()) if (t.acc === acc && t.kind === 'main' && t.inOffice) return true;
+    return false;
   }
 
   /**
@@ -860,10 +889,11 @@ export class CodexSource implements AgentSource, CodexLive {
   }
 
   /**
-   * Conta sem sessão aberta ao subir: o uso do rollout mais recente que tenha números (fica "desatualizado" com a
-   * idade: os números do Codex só se renovam com alguma sessão rodando). Por mtime em TODAS as pastas de data (uma
-   * sessão retomada continua no arquivo da pasta antiga), tentando os SEED_USAGE_FILES mais recentes: o último pode não
-   * ter `token_count` nenhum (sessão sem resposta, ou arquivada logo).
+   * Conta sem sessão aberta (ao subir e a cada USAGE_RESCAN_MS): o uso do rollout mais recente que tenha números (vale
+   * só se for mais novo que o atual pelo horário da linha; fica "desatualizado" com a idade: os números do Codex só se
+   * renovam com alguma sessão rodando). Por mtime (só para escolher o que abrir) em TODAS as pastas de data (uma sessão
+   * retomada continua no arquivo da pasta antiga) e nas arquivadas, tentando os SEED_USAGE_FILES mais recentes: o
+   * último pode não ter `token_count` nenhum (sessão sem resposta, ou arquivada logo).
    */
   private seedUsage(acc: CodexAccount): void {
     const files: Array<{ path: string; mtimeMs: number }> = [];

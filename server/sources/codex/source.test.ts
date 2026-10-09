@@ -11,7 +11,7 @@ import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
 import { grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { readLocks } from './files';
-import { CodexSource, MAIN_GONE_GRACE_MS } from './source';
+import { CodexSource, MAIN_GONE_GRACE_MS, USAGE_RESCAN_MS } from './source';
 
 setQuiet(true);
 
@@ -529,6 +529,45 @@ describe('fonte do Codex: uso do plano', () => {
     ctx.home.rollout(T3, [R.meta(T3, { at: at + 60_000 })], { archived: true, mtime: at + 60_000 });
     ctx.source.boot();
     expect(ctx.accounts.list(new Map())[0]).toMatchObject({ plan: 'Team', usageStatus: 'stale', usage: { source: 'codex', fetchedAt: at } });
+  });
+
+  it('conta sem sessão aberta: relê o uso a cada 60 s (uma sessão que rodou e já foi arquivada conta), e o mais novo vence pelo horário da linha, nunca pelo mtime', () => {
+    const ctx = setup();
+    const old = ctx.now() - 2 * 3600_000;
+    ctx.home.rollout(T, [R.meta(T, { at: old }), R.tokens({ input: 1, output: 1, at: old, rateLimits: { primary: { used: 10 }, plan: 'plus' } })], { mtime: old });
+    ctx.source.boot();
+    const usage = () => ctx.accounts.list(new Map())[0].usage;
+    expect(usage()).toMatchObject({ fetchedAt: old, fiveHour: { utilization: 10 } });
+    // Um `codex exec` curto rodou e foi arquivado entre dois ciclos: só aparece na releitura de 60 s.
+    const recent = ctx.now() - 60_000;
+    const T3 = threadId(3);
+    ctx.home.rollout(T3, [R.meta(T3, { at: recent }), R.tokens({ input: 1, output: 1, at: recent, rateLimits: { primary: { used: 55 }, plan: 'plus' } })], { archived: true, mtime: recent });
+    ctx.advance(USAGE_RESCAN_MS - 1_000);
+    ctx.poll();
+    expect(usage()?.fetchedAt).toBe(old);
+    ctx.advance(1_000);
+    ctx.poll();
+    expect(usage()).toMatchObject({ fetchedAt: recent, fiveHour: { utilization: 55 } });
+    // Um rollout mexido agora (mtime mais novo) com números mais velhos não volta o uso.
+    const T4 = threadId(4);
+    ctx.home.rollout(T4, [R.meta(T4, { at: old }), R.tokens({ input: 1, output: 1, at: old - 60_000, rateLimits: { primary: { used: 99 }, plan: 'plus' } })], { date: '2026/01/02', mtime: ctx.now() + 60_000 });
+    ctx.advance(USAGE_RESCAN_MS);
+    ctx.poll();
+    expect(usage()).toMatchObject({ fetchedAt: recent, fiveHour: { utilization: 55 } });
+  });
+
+  it('conta com sessão aberta: a releitura de 60 s fica de fora (o uso vem da própria sessão)', () => {
+    const ctx = setup();
+    const at = ctx.now() - 60_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.tokens({ input: 1, output: 1, at, rateLimits: { primary: { used: 20 } } })]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()).toBeDefined();
+    const T3 = threadId(3);
+    ctx.home.rollout(T3, [R.meta(T3, { at: at + 30_000 }), R.tokens({ input: 1, output: 1, at: at + 30_000, rateLimits: { primary: { used: 70 } } })], { archived: true });
+    ctx.advance(USAGE_RESCAN_MS);
+    ctx.poll();
+    expect(ctx.accounts.list(new Map())[0].usage).toMatchObject({ fetchedAt: at, fiveHour: { utilization: 20 } });
   });
 });
 
