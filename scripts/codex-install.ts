@@ -20,7 +20,7 @@
 //
 // Windows: o Codex roda cada hook como `pwsh.exe -NoProfile -Command "<comando>"` (sem shell configurado, `cmd /C`).
 // Com um Node 22+ no PATH, o comando é `node "<caminho com />"`, que roda no PowerShell, no cmd e no sh; senão,
-// `& "<outro Node 22+>" "<caminho>"`, a forma do PowerShell (o install avisa: no cmd ela não roda).
+// `& "<outro Node 22+>" "<caminho>"`, a forma do PowerShell (o install avisa: no cmd e no sh ela não roda).
 //
 // Confiança: o Codex só roda um hook novo ou alterado depois que você o aprova em /hooks, e guarda essa aprovação
 // (config.toml, [hooks.state."<hooks.json>:<evento>:<grupo>:<handler>"].trusted_hash) pela POSIÇÃO do grupo e por um
@@ -108,7 +108,7 @@ export function hookCommand(scriptPath: string, nodeBin?: string): string {
  * O comando no Windows, onde o Codex roda cada hook como `pwsh.exe -NoProfile -Command "<comando>"` (sem shell
  * configurado, `cmd /C "<comando>"`): `node "<hook>"`, com barras `/` e aspas duplas, roda no PowerShell, no cmd e no
  * sh. Com um Node escolhido (o do PATH é antigo ou não deu para conferir): `& "<node>" "<hook>"`, a forma do PowerShell
- * (no cmd, não roda). Aspas simples, como as do quotePath, são erro de sintaxe no PowerShell nessa posição.
+ * (no cmd e no sh, não roda). Aspas simples, como as do quotePath, são erro de sintaxe no PowerShell nessa posição.
  */
 export function windowsHookCommand(scriptPath: string, nodeBin?: string): string {
   const q = (p: string) => `"${p.split('\\').join('/')}"`;
@@ -593,13 +593,13 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
     const has = win ? (pick.login ? `é o Node ${pick.login}` : 'não existe ou não respondeu') : `tem ${pick.login ? `Node ${pick.login}` : 'nenhum Node'}`;
     if (pick.bin && win) {
       out(`! ${where} ${has}; o hook precisa do ${MIN_NODE_MAJOR}+ e vai usar ${tildify(pick.bin, home)} (${pick.chosen}) na forma do PowerShell:`);
-      out(`    & "<node>" "<hook>" roda no PowerShell, o shell dos hooks do Codex no Windows, mas não roda no cmd. Para o comando`);
-      out(`    curto (node "<hook>", que roda nos dois), ponha um Node ${MIN_NODE_MAJOR}+ no PATH e rode de novo.`);
+      out(`    & "<node>" "<hook>" roda no PowerShell, o shell dos hooks do Codex no Windows, mas não roda no cmd nem no sh. Para`);
+      out(`    o comando curto (node "<hook>", que roda nos três), ponha um Node ${MIN_NODE_MAJOR}+ no PATH e rode de novo.`);
     } else if (pick.bin) out(`i ${where} ${has}; o hook precisa do ${MIN_NODE_MAJOR}+ e vai usar ${tildify(pick.bin, home)} (${pick.chosen}).`);
     else if ((nodeMajor(pick.login) ?? 0) < MIN_NODE_MAJOR)
       out(`! ${where} ${has} e não achei um Node ${MIN_NODE_MAJOR}+: os hooks podem falhar. Use --node <caminho de um Node ${MIN_NODE_MAJOR}+>.`);
   } else if (nodeBin && win) {
-    out('i --node no Windows: o comando fica na forma do PowerShell (& "<node>" "<hook>"), o shell dos hooks do Codex; no cmd, ele não roda.');
+    out('i --node no Windows: o comando fica na forma do PowerShell (& "<node>" "<hook>"), o shell dos hooks do Codex; no cmd e no sh, ele não roda.');
   }
   const command = win ? windowsHookCommand(ctx.hookPath, nodeBin) : hookCommand(ctx.hookPath, nodeBin);
   let failures = 0;

@@ -513,7 +513,7 @@ describe('codex-install.ts (arquivos, HOME falso)', () => {
     const r = spawnSync(SH!, ['-c', winCmd], { input: hookInput, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home }, timeout: 10_000 });
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('');
-  });
+  }, 30_000);
 
   it.skipIf(process.platform !== 'win32')('Windows: o comando gravado roda de verdade no PowerShell (-NoProfile -Command) e no cmd (/C): sai com 0 e sem saída', async () => {
     await exec('install', { port: 1 }, {}, undefined, { platform: 'win32', nodeProbe: versions({ PATH: 'v24.16.0' }) });
@@ -541,5 +541,6 @@ describe('codex-install.ts (arquivos, HOME falso)', () => {
       expect(r.stdout).toBe('');
       expect(Date.now() - t0).toBeLessThan(10_000);
     }
-  });
+    // Três processos (o PowerShell sobe devagar com a máquina carregada): mais que os 5 s padrão do Vitest.
+  }, 60_000);
 });
