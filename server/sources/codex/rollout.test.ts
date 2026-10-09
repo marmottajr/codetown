@@ -10,6 +10,7 @@ import {
   parseRolloutLine,
   parseSessionMeta,
   patchFiles,
+  pathFromUri,
   usageFromRateLimits,
   type CodexLineResult,
   type CodexState,
@@ -395,5 +396,56 @@ describe('session_meta: só o 1º vale e a herança do fork fica de fora (P4, Re
     expect(parseSessionMeta({ id: T, subagent_history_start_ordinal: -1 }).historyStart).toBeUndefined();
     expect(parseSessionMeta({ id: T, subagent_history_start_ordinal: '5' }).historyStart).toBeUndefined();
     expect(parseSessionMeta({ id: T }).historyStart).toBeUndefined();
+  });
+});
+
+describe('segredos mascarados antes do corte do detalhe de erro (P15)', () => {
+  // Montados em partes: nenhum token inteiro no código. O token começa no caractere 130 e cruza o 140º: cortado
+  // antes, sobra menos do que a máscara exige (16 depois de ghp_/glpat-, 8 depois de sk-) e o começo vazaria.
+  const prefix = `Falhou: ${'x'.repeat(121)} `;
+  /** [máscara, token, começo do token que vazaria] */
+  const tokens: Array<[string, string, string]> = [
+    ['gh*_***', 'gh' + 'p_' + 'Z9'.repeat(20), 'gh' + 'p_Z'],
+    ['sk-***', 's' + 'k-' + 'Z9'.repeat(20), 's' + 'k-Z'],
+    ['glpat-***', 'gl' + 'pat-' + 'Z9'.repeat(20), 'gl' + 'pat-Z'],
+  ];
+
+  it.each(tokens)('comando com erro: o token que vira %s não vaza nem cortado', (masked, token, leak) => {
+    expect(prefix.length).toBe(130);
+    const { results } = feed([execItem('c1', ['bash', '-lc', 'npm run deploy'], { exit: 1, output: `${prefix}${token} resto\nlinha 2` })]);
+    const error = acts(results).find((a) => a.kind === 'error');
+    expect(error?.detail).toContain(masked);
+    expect(error?.detail).not.toContain(leak);
+  });
+
+  it('erro de MCP e erro do turno (task_complete) também', () => {
+    const [masked, token, leak] = tokens[0];
+    const turnEnd = JSON.parse(R.taskComplete('t1'));
+    turnEnd.payload.error = { message: `${prefix}${token}` };
+    const { results } = feed([R.mcp(T, 't1', 'm1', 'github', 'get_me', {}, { error: `${prefix}${token}` }), JSON.stringify(turnEnd)]);
+    const details = acts(results)
+      .filter((a) => a.kind === 'error')
+      .map((a) => a.detail);
+    expect(details).toHaveLength(2);
+    for (const d of details) {
+      expect(d).toContain(masked);
+      expect(d).not.toContain(leak);
+    }
+  });
+});
+
+describe('pathFromUri', () => {
+  it('Windows sem barra antes da letra do drive; POSIX e caminho comum como estão', () => {
+    expect(pathFromUri('file:///C:/x/y')).toBe('C:/x/y');
+    expect(pathFromUri('file:///d:/Projetos/a%20b/c.png')).toBe('d:/Projetos/a b/c.png');
+    expect(pathFromUri('file:///projetos/loja/a.png')).toBe('/projetos/loja/a.png');
+    expect(pathFromUri('C:\\x\\y.png')).toBe('C:\\x\\y.png');
+    expect(pathFromUri('/x/y')).toBe('/x/y');
+    expect(pathFromUri(42)).toBeUndefined();
+  });
+
+  it('ImageView com caminho do Windows vira leitura com o caminho certo', () => {
+    const { results } = feed([itemLine(T, 't', { type: 'ImageView', id: 'img1', path: 'file:///C:/proj/tela.png' }, Date.parse('2026-10-09T12:00:00Z'))]);
+    expect(acts(results)[0]).toMatchObject({ id: 'acc:t#img1', kind: 'read', text: 'Olhando tela.png', detail: 'C:/proj/tela.png', tool: 'Read' });
   });
 });

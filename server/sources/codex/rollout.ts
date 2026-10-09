@@ -235,16 +235,21 @@ export function fileChanges(raw: unknown): FileChangeEntry[] {
   return out;
 }
 
-/** Caminho de um `file://` (cwd e caminhos do Codex vêm como URL). */
+/**
+ * Caminho de um `file://` (cwd e caminhos do Codex vêm como URL). No Windows a URL é `file:///C:/x/y` e o caminho é
+ * `C:/x/y` (sem a barra antes da letra do drive), em qualquer plataforma: o Docker também lê rollouts do Windows.
+ */
 export function pathFromUri(v: unknown): string | undefined {
   const s = str(v);
   if (!s) return undefined;
   if (!s.startsWith('file://')) return s;
+  let path: string;
   try {
-    return decodeURIComponent(new URL(s).pathname);
+    path = decodeURIComponent(new URL(s).pathname);
   } catch {
-    return s.slice('file://'.length);
+    path = s.slice('file://'.length);
   }
+  return /^\/[A-Za-z]:(?:[/\\]|$)/.test(path) ? path.slice(1) : path;
 }
 
 /** Argumentos de uma chamada de função: string JSON (o normal) ou objeto. */
@@ -487,9 +492,13 @@ function outputOf(raw: unknown): { text: string; exitCode?: number } {
   return { text: '' };
 }
 
+/**
+ * 1ª linha não vazia (detalhe de erro), mascarada ANTES do corte: um token cortado ao meio não casa com a máscara e
+ * vazaria o começo. O recorte prévio (bem maior que o limite) só evita rodar as expressões sobre linhas enormes.
+ */
 function firstLine(s: string, max = 140): string | undefined {
   const line = s.split('\n').find((l) => l.trim());
-  return line ? truncate(line, max) : undefined;
+  return line ? truncate(maskSecrets(line.slice(0, max * 8)), max) : undefined;
 }
 
 class RolloutLineParser {
