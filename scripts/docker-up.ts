@@ -12,9 +12,10 @@
 //    credenciais e configurações — e a pasta do uso capturado pelo statusline
 //    (~/.habblaud/usage, criada se faltar) em /usage, também somente leitura. Passa
 //    HABBLAUD_CLAUDE_DIRS, HABBLAUD_ACCOUNTS, HABBLAUD_USAGE_DIR e o fuso do host (TZ) ao container.
-//    Contas do Codex (~/.codex*, CODEX_HOME ou HABBLAUD_CODEX_DIRS; HABBLAUD_CODEX=0 desliga): SOMENTE
-//    sessions/, archived_sessions/ e thread-writer-locks/ de cada uma, somente leitura, em /codex/<conta>/... —
-//    nunca auth.json, config.toml, shell_snapshots/, history.jsonl, logs nem os SQLite. Vão em HABBLAUD_CODEX_DIRS
+//    Contas do Codex (~/.codex*, CODEX_HOME ou HABBLAUD_CODEX_DIRS; HABBLAUD_CODEX=0 no ambiente ou só no .env
+//    desliga): SOMENTE sessions/, archived_sessions/, thread-writer-locks/ e o arquivo session_index.jsonl de cada
+//    uma (os que existirem; a pasta sem sessions/ fica de fora), somente leitura, em /codex/<conta>/... — nunca
+//    auth.json, config.toml, shell_snapshots/, history.jsonl, logs nem os SQLite. Vão em HABBLAUD_CODEX_DIRS
 //    e, com `provider: 'codex'` e a pasta do HOST (onde o `codex queue` roda), em HABBLAUD_ACCOUNTS.
 // 3. Migra o que sobrou do nome antigo (CodeTown, até a 0.3.2): ~/.codetown vira ~/.habblaud, o container
 //    `codetown` e a rede codetown_default saem e, se o volume novo ainda não existe, os dados de
@@ -55,13 +56,19 @@ const SERVICE = 'habblaud';
 const CONTAINER_ROOT = '/claude';
 /** Somente estas subpastas de cada conta entram no container. */
 const MOUNTED_SUBDIRS = ['projects', 'sessions'] as const;
-/** Raiz das montagens do Codex dentro do container: /codex/<conta>/{sessions,archived_sessions,thread-writer-locks}. */
+/** Raiz das montagens do Codex dentro do container: /codex/<conta>/{sessions,archived_sessions,thread-writer-locks,session_index.jsonl}. */
 const CODEX_CONTAINER_ROOT = '/codex';
 /**
  * Somente estas subpastas de cada pasta do Codex entram no container (as conversas e os locks das sessões abertas).
  * auth.json, config.toml, shell_snapshots/, history.jsonl, logs e os SQLite ficam no host.
  */
 export const CODEX_MOUNTED_SUBDIRS = ['sessions', 'archived_sessions', 'thread-writer-locks'] as const;
+/**
+ * E estes arquivos, só se forem arquivos comuns: o índice com os títulos das threads. A montagem de arquivo único fica
+ * presa ao inode: se o Codex reescrever o índice inteiro (ao apagar uma thread), o container segue com o antigo até o
+ * próximo docker:up (o servidor tolera título ausente ou desatualizado).
+ */
+export const CODEX_MOUNTED_FILES = ['session_index.jsonl'] as const;
 const DEFAULT_PORT = 4747;
 const HEALTH_TIMEOUT_MS = 120_000;
 /** Imagem e volume de dados como o Compose os nomeia (`name: habblaud` no docker-compose.yml). */
@@ -84,7 +91,8 @@ Opções:
 
 Variáveis: HABBLAUD_PORT (porta no host, padrão ${DEFAULT_PORT}), HABBLAUD_CLAUDE_DIRS
 (config dirs separados por vírgula, se as contas não estiverem em ~/.claude*), HABBLAUD_CODEX_DIRS
-(pastas do Codex, se não estiverem em ~/.codex* nem em CODEX_HOME) e HABBLAUD_CODEX=0 (sem o Codex).`;
+(pastas do Codex, se não estiverem em ~/.codex* nem em CODEX_HOME) e HABBLAUD_CODEX=0 (sem o Codex; vale também
+só no .env).`;
 
 // ---------------------------------------------------------------------------------------------
 // Saída no terminal
@@ -189,6 +197,21 @@ function realDir(p: string): string | undefined {
   }
 }
 
+/** Caminho real de um arquivo comum existente, ou undefined. */
+function realFile(p: string): string | undefined {
+  try {
+    const real = realpathSync(p);
+    return statSync(real).isFile() ? real : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Caminho real de uma pasta (`dir`) ou de um arquivo comum (`file`) existente, ou undefined. */
+function realPath(p: string, kind: 'dir' | 'file'): string | undefined {
+  return kind === 'dir' ? realDir(p) : realFile(p);
+}
+
 /**
  * Monta só projects/ e sessions/ de cada conta (as que existirem). `accounts` vem de
  * detectAccounts(dirs) e está na mesma ordem de `dirs`; o id (basename desambiguado) vira o
@@ -210,21 +233,28 @@ export function planMounts(dirs: string[], accounts: DetectedAccount[], resolveD
 }
 
 /**
- * Monta só sessions/, archived_sessions/ e thread-writer-locks/ de cada pasta do Codex (as que existirem), em
- * /codex/<id>. `accounts` vem de detectCodexAccounts(dirs), na mesma ordem de `dirs`; o id vira o nome da pasta no
- * container, então o servidor lá dentro deriva o mesmo id.
+ * Monta só sessions/, archived_sessions/ e thread-writer-locks/ (pastas) e session_index.jsonl (arquivo comum) de cada
+ * pasta do Codex, os que existirem, em /codex/<id>; a pasta sem sessions/ fica de fora (sem conversas, nada a mostrar).
+ * `accounts` vem de detectCodexAccounts(dirs), na mesma ordem de `dirs`; o id vira o nome da pasta no container, então
+ * o servidor lá dentro deriva o mesmo id.
  */
-export function planCodexMounts(dirs: string[], accounts: DetectedAccount[], resolveDir: (p: string) => string | undefined = realDir): AccountMount[] {
+export function planCodexMounts(
+  dirs: string[],
+  accounts: DetectedAccount[],
+  resolvePath: (p: string, kind: 'dir' | 'file') => string | undefined = realPath,
+): AccountMount[] {
   const out: AccountMount[] = [];
   dirs.forEach((hostDir, i) => {
     const account = accounts[i];
     const mountDir = posix.join(CODEX_CONTAINER_ROOT, account.id);
     const binds: BindMount[] = [];
-    for (const sub of CODEX_MOUNTED_SUBDIRS) {
-      const source = resolveDir(join(hostDir, sub));
-      if (source) binds.push({ source, target: posix.join(mountDir, sub) });
-    }
-    if (binds.length) out.push({ account, hostDir, mountDir, binds });
+    const add = (name: string, kind: 'dir' | 'file') => {
+      const source = resolvePath(join(hostDir, name), kind);
+      if (source) binds.push({ source, target: posix.join(mountDir, name) });
+    };
+    for (const sub of CODEX_MOUNTED_SUBDIRS) add(sub, 'dir');
+    for (const file of CODEX_MOUNTED_FILES) add(file, 'file');
+    if (binds.some((b) => b.target === posix.join(mountDir, 'sessions'))) out.push({ account, hostDir, mountDir, binds });
   });
   return out;
 }
@@ -238,9 +268,13 @@ export function codexAccountsPayload(mounts: AccountMount[]): AccountPayload[] {
   });
 }
 
-/** HABBLAUD_CODEX desligado (0, false, off, no) no ambiente de quem roda o docker:up. */
-export function codexDisabled(env: NodeJS.ProcessEnv): boolean {
-  const v = env.HABBLAUD_CODEX?.trim();
+/**
+ * HABBLAUD_CODEX desligado (0, false, off, no): o do ambiente de quem roda o docker:up ou, se ali não estiver definido,
+ * o do .env desta pasta (`envFile`, o texto dele). É a precedência do Compose, que repassa esse mesmo valor ao servidor
+ * no container: um HABBLAUD_CODEX=0 só no .env desliga o servidor lá dentro e também as montagens do Codex.
+ */
+export function codexDisabled(env: NodeJS.ProcessEnv, envFile?: string): boolean {
+  const v = (env.HABBLAUD_CODEX ?? envFileValue(envFile ?? '', 'HABBLAUD_CODEX'))?.trim();
   return !!v && !/^(1|true|yes|sim|on)$/i.test(v);
 }
 
@@ -320,7 +354,9 @@ export function renderOverride(mounts: AccountMount[], generatedAt: Date = new D
     `# Gerado por scripts/docker-up.ts em ${generatedAt.toISOString()} — não edite: é recriado a cada \`npm run docker:up\`.`,
     '# Contém caminhos do host e e-mails das contas: fica fora do git e com permissão 600.',
     '# Montagens: SOMENTE <conta>/projects, <conta>/sessions e a pasta do uso do statusline, todas somente leitura.',
-    ...(codex.length ? ['# Codex: SOMENTE <pasta>/sessions, <pasta>/archived_sessions e <pasta>/thread-writer-locks, somente leitura.'] : []),
+    ...(codex.length
+      ? ['# Codex: SOMENTE <pasta>/sessions, <pasta>/archived_sessions, <pasta>/thread-writer-locks e <pasta>/session_index.jsonl, somente leitura.']
+      : []),
     'services:',
     `  ${SERVICE}:`,
     '    environment:',
@@ -434,18 +470,38 @@ export function envFileKeys(text: string): string[] {
   return keys;
 }
 
+/**
+ * Valor de `key` num .env, lido como o Compose lê: `NOME=valor` ou `NOME: valor`, com ou sem `export`; aspas simples ou
+ * duplas em volta saem e, num valor sem aspas, um espaço seguido de `#` começa um comentário. A última linha da
+ * variável vale; undefined se ela não está lá.
+ */
+export function envFileValue(text: string, key: string): string | undefined {
+  let value: string | undefined;
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[=:]\s*(.*?)\s*$/.exec(line);
+    if (!m || m[1] !== key) continue;
+    const quoted = /^(["'])(.*?)\1/.exec(m[2]);
+    value = quoted ? quoted[2] : m[2].split(' #')[0].trimEnd();
+  }
+  return value;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Estado no host (~/.habblaud)
 // ---------------------------------------------------------------------------------------------
 
+/** Texto do .env desta pasta, ou undefined (sem .env, o normal, ou ilegível). */
+function readEnvFile(): string | undefined {
+  try {
+    return readFileSync(ENV_FILE, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
 /** Avisa das variáveis CODETOWN_* (nome antigo, ignoradas) no ambiente e no .env desta pasta. */
 function warnLegacyEnv(): void {
-  let fileKeys: string[] = [];
-  try {
-    fileKeys = envFileKeys(readFileSync(ENV_FILE, 'utf8'));
-  } catch {
-    // sem .env (o normal) ou ilegível: nada a avisar
-  }
+  const fileKeys = envFileKeys(readEnvFile() ?? '');
   for (const msg of [legacyEnvWarning(Object.keys(process.env)), legacyEnvWarning(fileKeys, 'no .env')]) {
     if (msg) warn(msg);
   }
@@ -650,7 +706,8 @@ async function up(opts: Options, port: number): Promise<void> {
   // Pasta do Codex (CODEX_HOME) listada ou achada como se fosse do Claude Code: não é montada como conta do Claude.
   // Ela entra (só as conversas e os locks) como conta do Codex, logo abaixo.
   const claudeRefused = codexDirsRefused(process.env, HOME);
-  const codexDirs = codexDisabled(process.env) ? [] : discoverCodexDirs(process.env, HOME);
+  // HABBLAUD_CODEX=0 no ambiente ou só no .env: nada do Codex é montado (o Compose repassa o mesmo valor ao servidor).
+  const codexDirs = codexDisabled(process.env, readEnvFile()) ? [] : discoverCodexDirs(process.env, HOME);
   for (const dir of claudeRefused) if (!codexDirs.includes(dir)) warn(`${tildify(dir)} é uma pasta do Codex, não do Claude Code; conta ignorada.`);
   const codexAccounts = detectCodexAccounts(codexDirs, {
     home: HOME,
@@ -664,6 +721,9 @@ async function up(opts: Options, port: number): Promise<void> {
     if (!m.binds.some((b) => b.target.endsWith('/thread-writer-locks'))) {
       warn(`${tildify(m.hostDir)} ainda não tem thread-writer-locks/: no container, sessão aberta = conversa modificada nos últimos 30 min (rode o docker:up de novo depois de usar o Codex).`);
     }
+  }
+  for (const dir of codexDirs) {
+    if (!codexMounts.some((m) => m.hostDir === dir)) warn(`${tildify(dir)} não tem sessions/; conta do Codex ignorada.`);
   }
 
   migrateStateDir();

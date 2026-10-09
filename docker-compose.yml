@@ -5,8 +5,9 @@
 #   - montagens SOMENTE LEITURA de <conta>/projects e <conta>/sessions em /claude/<conta>/...
 #     (nunca a pasta inteira da conta: lá ficam credenciais e configurações) e de ~/.habblaud/usage
 #     (uso de 5h/semanal capturado pelo tap de statusline) em /usage;
-#   - do Codex, SOMENTE <pasta>/sessions, <pasta>/archived_sessions e <pasta>/thread-writer-locks em
-#     /codex/<conta>/... (nunca auth.json, config.toml, history.jsonl, logs nem os bancos SQLite);
+#   - do Codex, SOMENTE <pasta>/sessions, <pasta>/archived_sessions, <pasta>/thread-writer-locks e o arquivo
+#     <pasta>/session_index.jsonl em /codex/<conta>/... (nunca a pasta inteira: auth.json, config.toml,
+#     history.jsonl, logs e os bancos SQLite ficam no host); a pasta sem sessions/ fica de fora;
 #   - HABBLAUD_CLAUDE_DIRS, HABBLAUD_CODEX_DIRS, HABBLAUD_ACCOUNTS e HABBLAUD_USAGE_DIR.
 # O Compose mescla o override automaticamente em qualquer `docker compose ...` rodado nesta pasta.
 name: habblaud
@@ -34,7 +35,8 @@ services:
       HABBLAUD_MENSAGENS: ${HABBLAUD_MENSAGENS:-}
       # 0 desliga a verificação de versão nova (consulta às releases no GitHub a cada 6 h).
       HABBLAUD_UPDATE_CHECK: ${HABBLAUD_UPDATE_CHECK:-}
-      # 0 desliga as sessões do Codex no escritório.
+      # 0 desliga as sessões do Codex no escritório. Vale também só no .env: o docker:up lê o mesmo valor (o do
+      # ambiente vence, como aqui) e aí não monta nada do Codex.
       HABBLAUD_CODEX: ${HABBLAUD_CODEX:-}
     # Endurecimento: sistema de arquivos só leitura (exceto /data e /tmp), sem capabilities extras.
     read_only: true

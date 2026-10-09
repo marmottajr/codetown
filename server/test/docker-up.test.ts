@@ -1,15 +1,19 @@
 // Funções puras de scripts/docker-up.ts (importar o módulo não sobe nada).
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { join, posix } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DetectedAccount } from '../accounts/detect';
 import { legacyEnvWarning } from '../legacy';
 import {
   accountsPayload,
+  CODEX_MOUNTED_FILES,
   CODEX_MOUNTED_SUBDIRS,
   codexAccountsPayload,
   codexDisabled,
   copyVolumeArgs,
   type DockerState,
   envFileKeys,
+  envFileValue,
   hostTimeZone,
   parseArgs,
   planCodexMounts,
@@ -19,6 +23,9 @@ import {
   sanitizeCachedUsage,
   yamlString,
 } from '../../scripts/docker-up';
+import { tempDir } from './fixtures';
+
+const ROOT = join(import.meta.dirname, '..', '..');
 
 const acc = (id: string, extra: Partial<DetectedAccount> = {}): DetectedAccount => ({
   id,
@@ -206,5 +213,123 @@ describe('docker-up: migração do nome antigo (CodeTown)', () => {
     expect(msg).toBe('variáveis do nome antigo ignoradas no .env: CODETOWN_BIND → HABBLAUD_BIND, CODETOWN_PORT → HABBLAUD_PORT. Renomeie para valer de novo.');
     expect(msg).not.toContain('0.0.0.0');
     expect(envFileKeys('')).toEqual([]);
+  });
+});
+
+describe('docker-up: Codex — índice das sessões, conta sem sessions/ e HABBLAUD_CODEX no .env', () => {
+  const codex = (id: string): DetectedAccount => ({ id, provider: 'codex', configDir: `/Users/fulano/${id}`, short: 'CX', name: 'Codex', color: '#5cc97b' });
+
+  it('monta também o session_index.jsonl (pedido como arquivo), depois das pastas e somente leitura', () => {
+    expect([...CODEX_MOUNTED_FILES]).toEqual(['session_index.jsonl']);
+    const host = '/Users/fulano/.codex';
+    const exists = new Set(['sessions', 'archived_sessions', 'thread-writer-locks', 'session_index.jsonl', 'config.toml', 'history.jsonl'].map((n) => `${host}/${n}`));
+    const asked: string[] = [];
+    const resolve = (p: string, kind: 'dir' | 'file') => {
+      asked.push(`${posix.basename(slash(p))}:${kind}`);
+      return exists.has(slash(p)) ? `/real${slash(p)}` : undefined;
+    };
+    const mounts = planCodexMounts([host], [codex('.codex')], resolve);
+    expect(asked).toEqual(['sessions:dir', 'archived_sessions:dir', 'thread-writer-locks:dir', 'session_index.jsonl:file']);
+    expect(mounts.map((m) => m.binds)).toEqual([
+      [
+        { source: `/real${host}/sessions`, target: '/codex/.codex/sessions' },
+        { source: `/real${host}/archived_sessions`, target: '/codex/.codex/archived_sessions' },
+        { source: `/real${host}/thread-writer-locks`, target: '/codex/.codex/thread-writer-locks' },
+        { source: `/real${host}/session_index.jsonl`, target: '/codex/.codex/session_index.jsonl' },
+      ],
+    ]);
+    const yml = renderOverride([], new Date(0), undefined, undefined, mounts);
+    expect(yml).toContain(`source: "/real${host}/session_index.jsonl"\n        target: "/codex/.codex/session_index.jsonl"\n        read_only: true`);
+    expect(yml.match(/read_only: true/g)).toHaveLength(4);
+    expect(yml.match(/create_host_path: false/g)).toHaveLength(4);
+    // Nunca a pasta inteira da conta nem o que mais existe nela.
+    expect(yml).not.toContain('target: "/codex/.codex"\n');
+    for (const other of ['config.toml', 'history.jsonl']) expect(yml).not.toContain(other);
+  });
+
+  it('pasta do Codex sem sessions/ fica de fora, mesmo com locks, arquivados e índice', () => {
+    const a = '/Users/fulano/.codex';
+    const b = '/Users/fulano/.codex-sem-sessions';
+    const exists = new Set([`${a}/sessions`, `${b}/thread-writer-locks`, `${b}/archived_sessions`, `${b}/session_index.jsonl`]);
+    const mounts = planCodexMounts([a, b], [codex('.codex'), codex('.codex-sem-sessions')], (p) => (exists.has(slash(p)) ? slash(p) : undefined));
+    expect(mounts.map((m) => m.account.id)).toEqual(['.codex']);
+    expect(codexAccountsPayload(mounts).map((p) => p.id)).toEqual(['.codex']);
+    const yml = renderOverride([], new Date(0), undefined, undefined, mounts);
+    expect(yml).toContain('HABBLAUD_CODEX_DIRS: "/codex/.codex"\n');
+    expect(yml).not.toContain('.codex-sem-sessions');
+  });
+
+  it('no disco: o índice entra só se for arquivo comum, e as pastas só se forem pastas', () => {
+    const tmp = tempDir();
+    try {
+      const h = join(tmp.dir, '.codex');
+      mkdirSync(join(h, 'sessions', '2026', '01', '15'), { recursive: true });
+      mkdirSync(join(h, 'thread-writer-locks'));
+      writeFileSync(join(h, 'session_index.jsonl'), '');
+      writeFileSync(join(h, 'config.toml'), '');
+      // archived_sessions como arquivo (não pasta): não entra.
+      writeFileSync(join(h, 'archived_sessions'), '');
+      const [m] = planCodexMounts([h], [codex('.codex')]);
+      expect(m.binds).toEqual([
+        { source: realpathSync(join(h, 'sessions')), target: '/codex/.codex/sessions' },
+        { source: realpathSync(join(h, 'thread-writer-locks')), target: '/codex/.codex/thread-writer-locks' },
+        { source: realpathSync(join(h, 'session_index.jsonl')), target: '/codex/.codex/session_index.jsonl' },
+      ]);
+      // session_index.jsonl que é pasta também não entra.
+      const h2 = join(tmp.dir, '.codex-2');
+      mkdirSync(join(h2, 'sessions'), { recursive: true });
+      mkdirSync(join(h2, 'session_index.jsonl'));
+      expect(planCodexMounts([h2], [codex('.codex-2')]).map((x) => x.binds.map((b) => b.target))).toEqual([['/codex/.codex-2/sessions']]);
+      // Sem sessions/ no disco: a conta fica de fora.
+      const h3 = join(tmp.dir, '.codex-3');
+      mkdirSync(join(h3, 'thread-writer-locks'), { recursive: true });
+      writeFileSync(join(h3, 'session_index.jsonl'), '');
+      expect(planCodexMounts([h3], [codex('.codex-3')])).toEqual([]);
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('.env: o valor de uma variável como o Compose lê (export, aspas, comentário, CRLF, BOM; a última vale)', () => {
+    expect(envFileValue('HABBLAUD_CODEX=0', 'HABBLAUD_CODEX')).toBe('0');
+    expect(envFileValue('\uFEFFHABBLAUD_CODEX=0\r\nHABBLAUD_DEMO=1\r\n', 'HABBLAUD_CODEX')).toBe('0');
+    expect(envFileValue('  export HABBLAUD_CODEX = off  ', 'HABBLAUD_CODEX')).toBe('off');
+    expect(envFileValue('HABBLAUD_CODEX="0"', 'HABBLAUD_CODEX')).toBe('0');
+    expect(envFileValue("HABBLAUD_CODEX='0' # sem Codex", 'HABBLAUD_CODEX')).toBe('0');
+    expect(envFileValue('HABBLAUD_CODEX="a # b"', 'HABBLAUD_CODEX')).toBe('a # b');
+    expect(envFileValue('HABBLAUD_CODEX=0 # sem Codex', 'HABBLAUD_CODEX')).toBe('0');
+    // Sem um espaço logo antes do #, não é comentário (regra do Compose; tabulação não conta).
+    expect(envFileValue('HABBLAUD_CODEX=0#x', 'HABBLAUD_CODEX')).toBe('0#x');
+    expect(envFileValue('HABBLAUD_CODEX=1 \t# x', 'HABBLAUD_CODEX')).toBe('1 \t# x');
+    // O Compose também aceita `NOME: valor`.
+    expect(envFileValue('HABBLAUD_CODEX: 0', 'HABBLAUD_CODEX')).toBe('0');
+    expect(envFileValue('HABBLAUD_CODEX:off', 'HABBLAUD_CODEX')).toBe('off');
+    expect(envFileValue('HABBLAUD_CODEX=', 'HABBLAUD_CODEX')).toBe('');
+    expect(envFileValue('HABBLAUD_CODEX=0\nHABBLAUD_CODEX=1', 'HABBLAUD_CODEX')).toBe('1');
+    expect(envFileValue('# HABBLAUD_CODEX=0', 'HABBLAUD_CODEX')).toBeUndefined();
+    expect(envFileValue('HABBLAUD_CODEX_DIRS=/x\nX_HABBLAUD_CODEX=0', 'HABBLAUD_CODEX')).toBeUndefined();
+    expect(envFileValue('', 'HABBLAUD_CODEX')).toBeUndefined();
+  });
+
+  it('HABBLAUD_CODEX=0 só no .env também desliga o Codex; o ambiente vence o .env, como no Compose', () => {
+    expect(codexDisabled({}, 'HABBLAUD_CODEX=0\n')).toBe(true);
+    expect(codexDisabled({}, '\uFEFFHABBLAUD_DEMO=1\r\nHABBLAUD_CODEX=off # sem Codex\r\n')).toBe(true);
+    expect(codexDisabled({}, 'HABBLAUD_CODEX: 0')).toBe(true);
+    expect(codexDisabled({}, 'HABBLAUD_CODEX=1 \t# x')).toBe(true);
+    expect(codexDisabled({}, 'HABBLAUD_CODEX=1')).toBe(false);
+    expect(codexDisabled({}, 'HABBLAUD_CODEX=')).toBe(false);
+    expect(codexDisabled({}, '# HABBLAUD_CODEX=0')).toBe(false);
+    expect(codexDisabled({}, '')).toBe(false);
+    expect(codexDisabled({}, undefined)).toBe(false);
+    // O docker-up repassa o process.env ao Compose, e o Compose dá preferência ao ambiente sobre o .env.
+    expect(codexDisabled({ HABBLAUD_CODEX: '1' }, 'HABBLAUD_CODEX=0')).toBe(false);
+    expect(codexDisabled({ HABBLAUD_CODEX: '0' }, 'HABBLAUD_CODEX=1')).toBe(true);
+    // Definida e vazia no ambiente também vence o .env (no Compose, o container recebe "").
+    expect(codexDisabled({ HABBLAUD_CODEX: '' }, 'HABBLAUD_CODEX=0')).toBe(false);
+  });
+
+  it('docker-compose.yml repassa HABBLAUD_CODEX (do ambiente ou do .env) ao servidor no container', () => {
+    const yml = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8');
+    expect(yml).toMatch(/^ {6}HABBLAUD_CODEX: \$\{HABBLAUD_CODEX:-\}\r?$/m);
   });
 });
