@@ -24,6 +24,8 @@ interface RoomRefs {
 
 interface NodeRefs {
   row: HTMLButtonElement;
+  /** Atalho para a janela de terminal do agente. */
+  term: HTMLButtonElement;
   subsWrap: HTMLElement;
   subsCaption: HTMLElement;
   subs: KeyedList<AgentInfo>;
@@ -252,19 +254,42 @@ export class Sidebar implements UiComponent {
     const subsCaption = h('span', { class: 'ui-subs__caption' });
     const subsList = h('ul', { class: 'ui-subs__list' });
     const subsWrap = h('div', { class: 'ui-subs', hidden: true }, subsCaption, subsList);
-    const li = h('li', { class: 'ui-node' }, row, subsWrap);
+    // Botão irmão da linha (não dentro dela: botão dentro de botão não vale), sobre o status à direita: aparece com
+    // o mouse em cima (ou foco) e fica aceso enquanto o terminal do agente estiver aberto.
+    const term = h('button', { class: 'ui-node__term', type: 'button' });
+    term.innerHTML = ICONS.terminal;
+    term.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = row.dataset.id;
+      if (id) this.ctx.terminals?.toggle(id, term);
+    });
+    const head = h('div', { class: 'ui-node__head' }, row, term);
+    const li = h('li', { class: 'ui-node' }, head, subsWrap);
     const subs = new KeyedList<AgentInfo>(subsList, {
       key: (a) => a.id,
       create: (a) => h('li', { class: 'ui-subs__item' }, createAgentRow(a, (id) => this.pick(id), 'sm')),
       update: (li2, a) => this.updateRow(li2.firstElementChild as HTMLElement, a),
     });
-    this.nodeRefs.set(li, { row, subsWrap, subsCaption, subs });
+    this.nodeRefs.set(li, { row, term, subsWrap, subsCaption, subs });
     return li;
   }
 
   private updateNode(li: HTMLElement, n: AgentNode): void {
     const r = this.nodeRefs.get(li)!;
     this.updateRow(r.row, n.agent);
+    const router = this.ctx.terminals;
+    const a = n.agent;
+    const canTerm = !!router?.available && a.status !== 'offline';
+    setHidden(r.term, !canTerm);
+    if (canTerm && router) {
+      const open = router.openAgentId === a.id;
+      const live = router.interactive(a.id);
+      r.term.classList.toggle('is-on', open);
+      r.term.classList.toggle('is-live', live);
+      const what = live ? 'interativo' : 'ao vivo';
+      setTitle(r.term, open ? 'Fechar o terminal' : `Abrir o terminal de ${a.name} (${what})`);
+      setAttr(r.term, 'aria-label', open ? `Fechar o terminal de ${a.name}` : `Abrir o terminal de ${a.name}`);
+    }
     const has = n.subTotal > 0;
     setHidden(r.subsWrap, !has);
     if (has) {
@@ -281,6 +306,9 @@ export class Sidebar implements UiComponent {
 
   private pick(id: string): void {
     this.ctx.select({ type: 'agent', id }, { focus: true });
+    // Com um terminal aberto, clicar noutro agente troca o terminal para o dele.
+    const t = this.ctx.terminals;
+    if (t && t.openAgentId !== null && t.openAgentId !== id && this.ctx.agent(id)) t.open(id);
     if (this.ctx.isNarrow()) this.ctx.togglePanel('sidebar', false);
   }
 }

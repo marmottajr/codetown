@@ -327,6 +327,8 @@ export interface OfficeSnapshot {
   serverTime: number;
   rooms: RoomInfo[];
   agents: AgentInfo[];
+  /** Terminais interativos abertos pelo Habblaud (Claude Code rodando dentro do navegador). */
+  ptys?: PtyInfo[];
   /** Contas do Claude detectadas (com uso de 5h/semanal quando disponível). */
   accounts: AccountInfo[];
   meta: {
@@ -349,6 +351,11 @@ export interface OfficeSnapshot {
      * desligar. Quem recebe agora diz AgentInfo.canMessage. Ausente/false = recurso desligado.
      */
     messages?: boolean;
+    /**
+     * Terminal interativo (abrir/assumir sessões e encerrar agentes pelo escritório): só fora do Docker, com
+     * node-pty e acesso local. Ausente = recurso desligado.
+     */
+    pty?: PtyStatus;
     /** Verificação de versão nova no GitHub (ausente nos testes e no timelapse). */
     updates?: UpdateStatus;
   };
@@ -611,6 +618,29 @@ export interface OutboxMessage {
 }
 
 /** Mensagem entregue ao plugin habblaud-mensagens (POST /api/mod/inbox). */
+export interface PtyStatus {
+  enabled: boolean;
+  /** Por que está desligado. */
+  reason?: string;
+}
+
+/** Terminal interativo aberto pelo Habblaud (node-pty no servidor, xterm.js no navegador). */
+export interface PtyInfo {
+  id: string;
+  /** PID do Claude Code: o agente correspondente é `${account}:${pid}` (= agentId). */
+  pid: number;
+  cwd: string;
+  account: string;
+  agentId: string;
+  /** Sessão retomada (`claude --resume`), quando o terminal assumiu uma sessão que já existia. */
+  resumed?: string;
+  /** Agente que este terminal assumiu (o id antigo, do processo encerrado). */
+  fromAgent?: string;
+  startedAt: number;
+  exitedAt?: number;
+  exitCode?: number;
+}
+
 export interface InboxMessage {
   id: string;
   /** O texto como foi digitado: o plugin o manda à sessão como se você o tivesse digitado. */

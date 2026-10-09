@@ -19,6 +19,9 @@ import { describeStateMigration, legacyEnvWarning, migrateLegacyStateDir } from 
 import { errMsg, log } from './log';
 import { NameStore } from './model/names';
 import { Office } from './model/office';
+import { isDefaultDir } from './accounts/detect';
+import { createPtyRoutes } from './http/pty';
+import { findExecutable, loadPty, PtyManager, type SpawnPty } from './pty/manager';
 import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
@@ -52,7 +55,7 @@ const names = new NameStore(join(config.dataDir, 'names.json'));
 names.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry } = {};
+const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -81,6 +84,7 @@ const office = new Office({
   terminal: config.terminal,
   permissions: () => late.permissions?.snapshot() ?? new Map(),
   messages: config.messages ? () => late.messages?.reachable() ?? new Set() : undefined,
+  ptys: () => (late.ptys ? { status: late.ptys.status(), list: late.ptys.list() } : { status: { enabled: false, reason: late.ptyOff ?? 'desligado' }, list: [] }),
   updates: () => updates.status(),
 });
 // Fontes de agentes, uma por ferramenta (sources/source.ts): a do Claude Code e, depois dela, a do Codex (quando há
@@ -146,6 +150,35 @@ const messages = config.messages
   : undefined;
 late.messages = messages;
 
+// Terminal interativo (abrir/assumir sessões e encerrar agentes): só com bind local, fora do Docker, com
+// node-pty e o executável do claude no PATH. HABBLAUD_PTY=0 desliga.
+const claudeBin = process.env.HABBLAUD_CLAUDE_BIN?.trim() || findExecutable('claude');
+let spawnPty: SpawnPty | null = null;
+let ptyOff: string | undefined;
+if (/^(0|false|no|off)$/i.test(process.env.HABBLAUD_PTY?.trim() ?? '')) ptyOff = 'desligado por HABBLAUD_PTY=0';
+else if (config.inDocker) ptyOff = 'indisponível no Docker (rode com npm start)';
+else if (!config.terminal) ptyOff = `mesma trava do terminal (${terminalOffReason(process.env, config.host, config.inDocker)})`;
+else if (!claudeBin) ptyOff = 'executável "claude" não encontrado no PATH (defina HABBLAUD_CLAUDE_BIN)';
+else {
+  const loaded = await loadPty();
+  spawnPty = loaded.spawn;
+  ptyOff = loaded.reason;
+}
+const ptys = spawnPty
+  ? new PtyManager({
+      spawn: spawnPty,
+      claudeBin: claudeBin ?? 'claude',
+      accounts: () => accounts.entries().map((a) => ({ id: a.id, dir: a.dir, isDefault: isDefaultDir(a.dir, config.home) })),
+      agent: (id) => {
+        const a = office.get(id);
+        return a && { id: a.id, kind: a.kind, account: a.account, sessionId: a.sessionId, cwd: office.roomPath(a.roomId) };
+      },
+      onChange: () => office.markDirty(),
+    })
+  : undefined;
+late.ptys = ptys;
+late.ptyOff = ptyOff;
+
 if (config.demo) office.setDemo(true);
 // As fontes síncronas (a do Claude Code) terminam o boot aqui, antes de o hub começar a transmitir.
 void agents.start();
@@ -180,6 +213,7 @@ const api = createApiHandler({
   timeline: createTimelineHandler({ dir: timelineDir, recording: !!timeline }),
   permissions: permissions ? createPermissionRoutes(permissions) : undefined,
   messages: messages ? createMessageRoutes(messages) : undefined,
+  pty: ptys ? createPtyRoutes(ptys) : undefined,
   codexLive,
   stats,
   updates,
@@ -260,6 +294,7 @@ server.listen(config.port, config.host, () => {
   if (office.isDemo()) log.info('   Modo demonstração ligado (agentes simulados misturados aos reais).');
   if (config.terminal) log.info('   Terminal: ligado (acesso só local).');
   else log.info(`   Terminal: desligado (${terminalOffReason(process.env, config.host, config.inDocker)}).`);
+  log.info(ptys ? `   Terminal interativo: ligado (${claudeBin}).` : `   Terminal interativo: ${ptyOff ?? 'desligado'}.`);
   log.info(timeline ? `   Linha do tempo (timelapse): gravando em ${timelineDir}.` : '   Linha do tempo (timelapse): gravação desligada (HABBLAUD_TIMELINE).');
   log.info(`   Responder pelo escritório: ${config.terminal ? 'ligado (precisa do mod: npm run mod:install; ou do hook antigo: npm run hooks:install)' : 'desligado (mesma trava do terminal)'}.`);
   log.info(
@@ -297,6 +332,7 @@ function shutdown(signal: string): void {
   timeline?.stop();
   permissions?.stop();
   messages?.stop();
+  ptys?.stopAll();
   updates.stop();
   names.flush();
   void closeVite?.();
