@@ -1,7 +1,7 @@
 // Pedidos de permissão (e perguntas) fictícios do modo demonstração (responder pelo escritório sem sessões reais),
-// do Claude Code e do Codex (só aprovação, sem "sempre permitir").
+// do Claude Code e do Codex (só aprovação, sem "sempre permitir"; pelo hook, com prazo, ou pelo canal paralelo).
 // Puro: usado pelo simulador no servidor (HABBLAUD_DEMO=1) e no navegador (?mock=1).
-import type { PermissionRequestInfo } from '../types';
+import type { CodexDecision, PermissionRequestInfo } from '../types';
 import { describeTool } from '../activity';
 
 export interface DemoPermissionSource {
@@ -145,24 +145,44 @@ export function demoPatchText(file: string, lines: readonly string[], add = fals
   return ['*** Begin Patch', `*** ${add ? 'Add' : 'Update'} File: ${file}`, ...(add ? [] : ['@@']), ...body, '*** End Patch'].join('\n');
 }
 
+/** Canal paralelo: as decisões que o app-server oferece num apply_patch (fileChange). */
+const DEMO_PATCH_DECISIONS: readonly CodexDecision[] = ['accept', 'acceptForSession', 'decline', 'cancel'];
 /**
- * Um pedido de aprovação fictício do Codex (hook PermissionRequest): comando no terminal, apply_patch ou acesso à
- * rede. Sem sugestões de "sempre permitir" (o Codex não as aceita pelo hook) e nunca uma pergunta; o prazo é curto.
+ * Canal paralelo: num comando, o Codex oferece a emenda de execpolicy no lugar do "nesta sessão", e o Habblaud só
+ * conhece as quatro decisões (a emenda fica de fora).
  */
-export function demoCodexPermission(id: string, src: DemoPermissionSource, rng: () => number, now: number): PermissionRequestInfo {
+const DEMO_COMMAND_DECISIONS: readonly CodexDecision[] = ['accept', 'decline', 'cancel'];
+
+/**
+ * Um pedido de aprovação fictício do Codex: comando no terminal, apply_patch ou acesso à rede. Sem sugestões de
+ * "sempre permitir" e nunca uma pergunta. `mode` = por onde o pedido chega: 'blocking' (padrão) = hook
+ * PermissionRequest, com prazo curto; 'parallel' = canal paralelo do app-server (TUI ligado ao daemon), sem prazo, com
+ * as decisões do canal e o comando como `exec_command` (o acesso à rede chega como o próprio comando). Os sorteios
+ * são os mesmos nos dois modos.
+ */
+export function demoCodexPermission(id: string, src: DemoPermissionSource, rng: () => number, now: number, mode: 'blocking' | 'parallel' = 'blocking'): PermissionRequestInfo {
   const pick = <T>(arr: readonly T[]): T => arr[Math.floor(rng() * arr.length)];
   const roll = rng();
-  const base = { id, provider: 'codex' as const, createdAt: now, expiresAt: now + DEMO_CODEX_PERMISSION_MS };
+  const parallel = mode === 'parallel';
+  // 'parallel': sem prazo, como o registro (nem o relógio nem a página leem o expiresAt desses pedidos).
+  const base = parallel
+    ? { id, provider: 'codex' as const, mode: 'parallel' as const, createdAt: now, expiresAt: Number.MAX_SAFE_INTEGER }
+    : { id, provider: 'codex' as const, createdAt: now, expiresAt: now + DEMO_CODEX_PERMISSION_MS };
+  const command = (cmd: string): PermissionRequestInfo => {
+    const d = describeTool('Bash', { command: cmd });
+    const req: PermissionRequestInfo = { ...base, tool: parallel ? 'exec_command' : 'Bash', title: `Bash(${cmd})`, text: d.text, icon: d.icon, input: cmd, inputKind: 'command' };
+    return parallel ? { ...req, decisions: [...DEMO_COMMAND_DECISIONS] } : req;
+  };
   if (roll < 0.3 && src.files.length) {
     const file = pick(src.files);
     const d = describeTool('Edit', { file_path: file });
-    return { ...base, tool: 'apply_patch', title: `apply_patch(${file})`, text: d.text, icon: d.icon, input: demoPatchText(file, pick(DEMO_DIFFS)), inputKind: 'diff' };
+    const req: PermissionRequestInfo = { ...base, tool: 'apply_patch', title: `apply_patch(${file})`, text: d.text, icon: d.icon, input: demoPatchText(file, pick(DEMO_DIFFS)), inputKind: 'diff' };
+    return parallel ? { ...req, decisions: [...DEMO_PATCH_DECISIONS] } : req;
   }
   if (roll < 0.45) {
-    const [host, command] = pick(DEMO_NETWORK);
-    return { ...base, tool: 'Bash', title: `Bash(${command})`, text: `Acesso à rede: ${host}`, icon: '🌐', input: command, inputKind: 'command' };
+    const [host, cmd] = pick(DEMO_NETWORK);
+    if (parallel) return command(cmd);
+    return { ...base, tool: 'Bash', title: `Bash(${cmd})`, text: `Acesso à rede: ${host}`, icon: '🌐', input: cmd, inputKind: 'command' };
   }
-  const command = src.commands.length ? pick(src.commands) : 'npm test';
-  const d = describeTool('Bash', { command });
-  return { ...base, tool: 'Bash', title: `Bash(${command})`, text: d.text, icon: d.icon, input: command, inputKind: 'command' };
+  return command(src.commands.length ? pick(src.commands) : 'npm test');
 }
