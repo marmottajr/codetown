@@ -1,4 +1,4 @@
-// Comandos em segundo plano do Codex, lidos das linhas cruas do rollout (P12). O C7 do parser não tem sinal de shell,
+// Comandos em segundo plano do Codex, lidos das linhas cruas do rollout (status 'shell'). O C7 não tem sinal de shell,
 // então este detector anda ao lado dele, linha a linha, e só diz quando um processo começa a rodar sozinho e quando
 // ele termina; quem guarda os processos vivos é o ShellTracker da fonte (o mesmo do Claude).
 //
