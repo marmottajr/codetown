@@ -165,13 +165,87 @@ describe('rollout do Codex: paginated', () => {
     const at = Date.parse('2026-10-09T12:00:00Z');
     // Posições trocadas: vale a duração (10080 = semana).
     const swapped = usageFromRateLimits(R.rateLimits({ primary: { used: 70, minutes: 10080, resetsAt: 1_900_000_000 }, secondary: { used: 5.5, minutes: 300 } }), at);
-    expect(swapped).toEqual({ source: 'codex', fetchedAt: at, sevenDay: { utilization: 70, resetsAt: 1_900_000_000_000 }, fiveHour: { utilization: 5.5, resetsAt: 2_000_000_000_000 } });
+    expect(swapped).toEqual({
+      source: 'codex',
+      fetchedAt: at,
+      sevenDay: { utilization: 70, resetsAt: 1_900_000_000_000 },
+      fiveHour: { utilization: 5.5, resetsAt: 2_000_000_000_000 },
+      // windows segue a ordem do rate_limits (primary, secondary), não a da duração.
+      windows: [
+        { windowMinutes: 10080, usedPercent: 70, resetsAt: 1_900_000_000_000 },
+        { windowMinutes: 300, usedPercent: 5.5, resetsAt: 2_000_000_000_000 },
+      ],
+    });
     const none = usageFromRateLimits(R.rateLimits({ primary: null, secondary: null, reached: 'workspace_owner_credits_depleted' }), at);
     expect(none).toEqual({ source: 'codex', fetchedAt: at, noQuota: true });
     expect(usageFromRateLimits(R.rateLimits({ primary: null, secondary: null }), at)).toBeUndefined();
     const { state, results } = feed([R.tokens({ input: 1, output: 1, at, rateLimits: { plan: 'pro' } })]);
     expect(state.planType).toBe('pro');
     expect(results[0].signals).toContainEqual({ type: 'usage', usage: expect.objectContaining({ fetchedAt: at, fiveHour: { utilization: 12.5, resetsAt: 2_000_000_000_000 } }), plan: 'pro' });
+  });
+
+  it('uso do plano: windows com só os medidores que o plano tem, na ordem primary, secondary', () => {
+    const at = Date.parse('2026-10-09T12:00:00Z');
+    // Plano só semanal (pro/prolite desde jul/2026): nada de 5 h.
+    const weekOnly = usageFromRateLimits(R.rateLimits({ primary: { used: 23, minutes: 10080, resetsAt: 1_900_000_000 }, secondary: null }), at);
+    expect(weekOnly).toEqual({
+      source: 'codex',
+      fetchedAt: at,
+      sevenDay: { utilization: 23, resetsAt: 1_900_000_000_000 },
+      windows: [{ windowMinutes: 10080, usedPercent: 23, resetsAt: 1_900_000_000_000 }],
+    });
+    expect(usageFromRateLimits(R.rateLimits({}), at)?.windows).toEqual([
+      { windowMinutes: 300, usedPercent: 12.5, resetsAt: 2_000_000_000_000 },
+      { windowMinutes: 10080, usedPercent: 40, resetsAt: 2_000_000_000_000 },
+    ]);
+    // Outra duração também é medidor do plano (o cartão rotula em horas/dias); fiveHour/sevenDay ficam sem ela.
+    // Percentual fora de 0–100 é limitado.
+    expect(usageFromRateLimits(R.rateLimits({ primary: { used: 130, minutes: 60 }, secondary: null }), at)).toEqual({
+      source: 'codex',
+      fetchedAt: at,
+      windows: [{ windowMinutes: 60, usedPercent: 100, resetsAt: 2_000_000_000_000 }],
+    });
+    // Mesma duração nas duas posições: vale a primary (como em fiveHour/sevenDay), sem medidor repetido.
+    const twice = usageFromRateLimits(R.rateLimits({ primary: { used: 7, minutes: 10080 }, secondary: { used: 99, minutes: 10080 } }), at);
+    expect(twice?.windows).toEqual([{ windowMinutes: 10080, usedPercent: 7, resetsAt: 2_000_000_000_000 }]);
+    expect(twice?.sevenDay).toEqual({ utilization: 7, resetsAt: 2_000_000_000_000 });
+    // Sem cota: como antes, sem windows (nenhuma janela informada).
+    expect(usageFromRateLimits(R.rateLimits({ primary: null, secondary: null, reached: 'rate_limit_reached' }), at)).toEqual({ source: 'codex', fetchedAt: at, noQuota: true });
+  });
+
+  it('uso do plano: formatos antigos (resets_in_seconds do 0.45/0.46 e o formato plano do 0.40)', () => {
+    const at = Date.parse('2026-10-09T12:00:00Z');
+    const v045 = {
+      primary: { used_percent: 5, window_minutes: 300, resets_in_seconds: 600 },
+      secondary: { used_percent: 50, window_minutes: 10080, resets_in_seconds: 86_400 },
+    };
+    expect(usageFromRateLimits(v045, at)).toEqual({
+      source: 'codex',
+      fetchedAt: at,
+      fiveHour: { utilization: 5, resetsAt: at + 600_000 },
+      sevenDay: { utilization: 50, resetsAt: at + 86_400_000 },
+      windows: [
+        { windowMinutes: 300, usedPercent: 5, resetsAt: at + 600_000 },
+        { windowMinutes: 10080, usedPercent: 50, resetsAt: at + 86_400_000 },
+      ],
+    });
+    const v040 = {
+      primary_used_percent: 12,
+      secondary_used_percent: 30,
+      primary_to_secondary_ratio_percent: 40,
+      primary_window_minutes: 300,
+      secondary_window_minutes: 10080,
+    };
+    expect(usageFromRateLimits(v040, at)).toEqual({
+      source: 'codex',
+      fetchedAt: at,
+      fiveHour: { utilization: 12 },
+      sevenDay: { utilization: 30 },
+      windows: [
+        { windowMinutes: 300, usedPercent: 12 },
+        { windowMinutes: 10080, usedPercent: 30 },
+      ],
+    });
   });
 
   it('turno interrompido e ids estáveis numa releitura (inclusive sem id próprio)', () => {

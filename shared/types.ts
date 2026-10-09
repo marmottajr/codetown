@@ -273,6 +273,15 @@ export interface UsageWindow {
   resetsAt?: number;
 }
 
+/** Uma janela de uso como o Codex informa no `rate_limits` (identificada pela duração, não pela posição). */
+export interface UsageWindowInfo {
+  /** Duração da janela em minutos (300 = 5 h, 10080 = semana). */
+  windowMinutes: number;
+  usedPercent: number;
+  /** Epoch ms do reset, se o Codex informou. */
+  resetsAt?: number;
+}
+
 export interface AccountUsage {
   /** Sessão de 5 horas. */
   fiveHour?: UsageWindow;
@@ -295,6 +304,8 @@ export interface AccountUsage {
    * esgotados). Não é "0% usado": as janelas ficam ausentes.
    */
   noQuota?: boolean;
+  /** Codex: os medidores que o plano tem, na ordem dos rate_limits (primary, secondary). Ausente = use fiveHour/sevenDay. */
+  windows?: UsageWindowInfo[];
   /** Quando os números foram obtidos na origem (epoch ms). */
   fetchedAt: number;
 }

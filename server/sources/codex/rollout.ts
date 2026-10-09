@@ -19,7 +19,7 @@
 // Tipos de linha desconhecidos são ignorados; uma linha inválida nunca derruba a leitura.
 import { describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../../shared/activity';
 import type { GitHubEvent } from '../../../shared/github';
-import type { AccountUsage, Activity, AgentStats, TaskItem, TaskStatus, UsageWindow } from '../../../shared/types';
+import type { AccountUsage, Activity, AgentStats, TaskItem, TaskStatus, UsageWindowInfo } from '../../../shared/types';
 import { detectGitHubResult, githubCallOf } from '../github';
 import type { ParsedActivity } from '../transcript';
 import { unwrapCommand } from './command';
@@ -137,21 +137,30 @@ export function parseSessionMeta(payload: Rec, at?: number): RolloutMeta {
 /** Janelas do Codex pela duração (não pela posição): 300 min = sessão de 5 h, 10080 min = semana. */
 const WINDOW_BY_MINUTES: Record<number, 'fiveHour' | 'sevenDay'> = { 300: 'fiveHour', 10080: 'sevenDay' };
 
-function usageWindow(raw: unknown): { key: 'fiveHour' | 'sevenDay'; window: UsageWindow } | undefined {
+/**
+ * Uma janela do `rate_limits` ({used_percent, window_minutes, ...}), de qualquer duração. Reinício: `resets_at` (epoch
+ * em segundos, Codex ≥ 0.50) ou `resets_in_seconds` (0.45/0.46, contado do horário da linha). Sem duração ou sem
+ * percentual = undefined.
+ */
+function usageWindow(raw: unknown, at: number): UsageWindowInfo | undefined {
   const w = rec(raw);
   const minutes = num(w?.window_minutes);
   const used = num(w?.used_percent);
-  const key = minutes !== undefined ? WINDOW_BY_MINUTES[minutes] : undefined;
-  if (!w || !key || used === undefined) return undefined;
-  const window: UsageWindow = { utilization: Math.min(100, Math.max(0, used)) };
+  if (!w || minutes === undefined || minutes <= 0 || used === undefined) return undefined;
+  const info: UsageWindowInfo = { windowMinutes: minutes, usedPercent: Math.min(100, Math.max(0, used)) };
   const resets = num(w.resets_at);
-  if (resets !== undefined) window.resetsAt = resets < 1e12 ? Math.round(resets * 1000) : Math.round(resets);
-  return { key, window };
+  const resetsIn = num(w.resets_in_seconds);
+  if (resets !== undefined) info.resetsAt = resets < 1e12 ? Math.round(resets * 1000) : Math.round(resets);
+  else if (resetsIn !== undefined) info.resetsAt = at + Math.round(resetsIn * 1000);
+  return info;
 }
 
 /**
- * `token_count.rate_limits` → uso da conta (source 'codex', `fetchedAt` = horário da linha). `primary` nulo com
- * `rate_limit_reached_type` = sem cota nem créditos (`noQuota`), não 0%. Sem nenhuma janela e com cota = undefined.
+ * `token_count.rate_limits` → uso da conta (source 'codex', `fetchedAt` = horário da linha). `windows` = os medidores
+ * que o plano tem, na ordem primary, secondary (uma janela por duração: a primeira vence); `fiveHour`/`sevenDay`
+ * continuam preenchidos pela duração (300/10080), para quem lê os campos fixos. Aceita também o formato plano do
+ * 0.40 (`primary_used_percent`, `primary_window_minutes`, ...). `primary` nulo com `rate_limit_reached_type` = sem
+ * cota nem créditos (`noQuota`), não 0%. Sem nenhuma janela e com cota = undefined.
  */
 export function usageFromRateLimits(raw: unknown, at: number): AccountUsage | undefined {
   const rl = rec(raw);
@@ -160,12 +169,17 @@ export function usageFromRateLimits(raw: unknown, at: number): AccountUsage | un
   const limit = str(rl.limit_id);
   if (limit && limit !== 'codex') return undefined;
   const usage: AccountUsage = { source: 'codex', fetchedAt: at };
-  for (const w of [rl.primary, rl.secondary]) {
-    const parsed = usageWindow(w);
-    if (parsed && !usage[parsed.key]) usage[parsed.key] = parsed.window;
+  const windows: UsageWindowInfo[] = [];
+  for (const slot of ['primary', 'secondary'] as const) {
+    const w = usageWindow(rl[slot], at) ?? usageWindow({ used_percent: rl[`${slot}_used_percent`], window_minutes: rl[`${slot}_window_minutes`] }, at);
+    if (!w || windows.some((x) => x.windowMinutes === w.windowMinutes)) continue;
+    windows.push(w);
+    const key = WINDOW_BY_MINUTES[w.windowMinutes];
+    if (key) usage[key] = w.resetsAt === undefined ? { utilization: w.usedPercent } : { utilization: w.usedPercent, resetsAt: w.resetsAt };
   }
+  if (windows.length) usage.windows = windows;
   if ((rl.primary === null || rl.primary === undefined) && str(rl.rate_limit_reached_type)) usage.noQuota = true;
-  return usage.fiveHour || usage.sevenDay || usage.noQuota ? usage : undefined;
+  return windows.length || usage.noQuota ? usage : undefined;
 }
 
 // ------------------------------------------------------------------ comandos
