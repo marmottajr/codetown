@@ -125,6 +125,18 @@ describe('timeline: ferramenta (provider)', () => {
     expect(toAccountInfo(f.accounts.get('.codex')!, T0)).toMatchObject({ provider: 'codex', usage: { source: 'codex', noQuota: true } });
     expect(toAccountInfo(f.accounts.get('.claude')!, T0)).not.toHaveProperty('provider');
   });
+
+  it('as janelas de uso do Codex (windows) vão para a timeline e voltam iguais; sem windows, nada muda', () => {
+    const windows = [{ windowMinutes: 10080, usedPercent: 23, resetsAt: T0 + 3 * 86_400_000 }];
+    const acc: AccountInfo = { ...account('.codex'), provider: 'codex', usage: { source: 'codex', fetchedAt: T0, sevenDay: { utilization: 23, resetsAt: T0 + 3 * 86_400_000 }, windows } };
+    const f = compactSnapshot(snap([], [room('/p/loja')], [account('.claude'), acc]));
+    expect(f.accounts.get('.codex')!.usage).toEqual({ source: 'codex', sevenDay: { utilization: 23, resetsAt: T0 + 3 * 86_400_000 }, windows });
+    // Cópia: mexer no snapshot depois não altera o quadro gravado.
+    expect(f.accounts.get('.codex')!.usage!.windows![0]).not.toBe(windows[0]);
+    expect(toAccountInfo(f.accounts.get('.codex')!, T0 + 5).usage).toEqual({ source: 'codex', fetchedAt: T0 + 5, sevenDay: { utilization: 23, resetsAt: T0 + 3 * 86_400_000 }, windows });
+    expect(f.accounts.get('.claude')!.usage).not.toHaveProperty('windows');
+    expect(toAccountInfo(f.accounts.get('.claude')!, T0).usage).not.toHaveProperty('windows');
+  });
 });
 
 describe('timeline: deltas', () => {

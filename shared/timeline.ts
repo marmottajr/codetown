@@ -85,7 +85,7 @@ export interface TimelineAccount {
   color: string;
   plan?: string;
   sessions: number;
-  usage?: Pick<AccountUsage, 'fiveHour' | 'sevenDay' | 'source' | 'noQuota'>;
+  usage?: Pick<AccountUsage, 'fiveHour' | 'sevenDay' | 'windows' | 'source' | 'noQuota'>;
   usageStatus: AccountInfo['usageStatus'];
   demo?: true;
 }
@@ -222,6 +222,7 @@ export function compactAccount(a: AccountInfo, demo = false): TimelineAccount {
     const u: NonNullable<TimelineAccount['usage']> = { source: a.usage.source };
     if (a.usage.fiveHour) u.fiveHour = { ...a.usage.fiveHour };
     if (a.usage.sevenDay) u.sevenDay = { ...a.usage.sevenDay };
+    if (a.usage.windows?.length) u.windows = a.usage.windows.map((w) => ({ ...w }));
     if (a.usage.noQuota) u.noQuota = true;
     out.usage = u;
   }
@@ -447,6 +448,7 @@ export function toAccountInfo(a: TimelineAccount, at: number): AccountInfo {
     const u: AccountUsage = { source: a.usage.source, fetchedAt: at };
     if (a.usage.fiveHour) u.fiveHour = { ...a.usage.fiveHour };
     if (a.usage.sevenDay) u.sevenDay = { ...a.usage.sevenDay };
+    if (a.usage.windows?.length) u.windows = a.usage.windows.map((w) => ({ ...w }));
     if (a.usage.noQuota) u.noQuota = true;
     out.usage = u;
   }
