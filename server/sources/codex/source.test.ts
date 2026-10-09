@@ -1401,3 +1401,106 @@ describe('fonte do Codex: terminal com o session_meta do cabeçalho (C2)', () =>
     expect(tools).toEqual(['Bash(npm test)', 'Edit(src/a.ts)']);
   });
 });
+
+describe('fonte do Codex: corte de inatividade (C3)', () => {
+  it('só existência: 31 min sem escrita → idle → linha nova do turno ainda aberto → working (com pergunta aberta, waiting)', () => {
+    const ctx = setup({ locks: 'exists' });
+    const at = ctx.now() - 60_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t', at), R.user(T, 't', 'u', 'rode a migração longa', at)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()?.status).toBe('working');
+    ctx.advance(31 * 60_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    // O comando longo volta a escrever: o turno nunca fechou.
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.command(T, 't', 'call_1', 'npm run migrate', { at: ctx.now(), output: 'ok' })]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    // De novo calado, agora com uma pergunta aberta antes do corte: a linha nova volta a esperar a resposta.
+    ctx.advance(1_000);
+    ctx.home.append(path, [Q.ask('call_q', 'Posso seguir?', ctx.now())]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('waiting');
+    ctx.hook({ hook_event_name: 'Stop', session_id: T, cwd: '/projetos/loja', turn_id: 't' });
+    expect(ctx.agent()?.status).toBe('idle');
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.command(T, 't', 'call_2', 'npm run migrate -- --resume', { at: ctx.now(), output: 'ok' })]);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ status: 'waiting', waitingFor: 'responder uma pergunta' });
+  });
+
+  it('Stop do hook e depois a resposta final e o task_complete, lidos no mesmo ciclo: termina idle, com um "concluiu" só', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t', at), R.user(T, 't', 'u', 'oi', at)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()?.status).toBe('working');
+    ctx.advance(1_000);
+    ctx.hook({ hook_event_name: 'Stop', session_id: T, cwd: '/projetos/loja', turn_id: 't' });
+    ctx.advance(10);
+    ctx.home.append(path, [R.agent(T, 't', 'a', 'Pronto.', ctx.now()), R.taskComplete('t', ctx.now() + 1)]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    expect(ctx.notices.filter((n) => n.text.includes('concluiu'))).toHaveLength(1);
+  });
+
+  it('só existência: subagente 31 min sem escrita → idle (entrega); voltou a escrever no mesmo turno → working', () => {
+    const ctx = setup({ locks: 'exists' });
+    const at = ctx.now() - 60_000;
+    const SUB = `.codex:${C}`;
+    const parent = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue a suíte', at)]);
+    const sub = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), R.user(C, 's1', 'su', 'Rode a suíte longa', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)?.status).toBe('working');
+    // O principal segue escrevendo; o subagente fica calado.
+    ctx.advance(31 * 60_000);
+    ctx.home.append(parent, [R.command(T, 'p1', 'call_p', 'git status', { at: ctx.now(), output: 'ok' })]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    ctx.advance(1_000);
+    ctx.home.append(sub, [R.command(C, 's1', 'call_s', 'npm test', { at: ctx.now(), output: 'ok' })]);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('working');
+  });
+
+  it('sem thread-writer-locks/: subagente presente pelo mtime e sem escrita há 31 min sai, como o principal (o reconcile final usa o motivo da presença)', () => {
+    const ctx = setup({ noLocks: true });
+    const at = ctx.now() - 60_000;
+    const SUB = `.codex:${C}`;
+    const parent = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue a dúvida', at)]);
+    const sub = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), Q.ask('call_q', 'Qual banco?', at + 1_000)]);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)).toMatchObject({ status: 'waiting', waitingFor: 'responder uma pergunta' });
+    // Os dois arquivos tocados agora (mtime novo, sem conteúdo novo no subagente); o principal escreve.
+    ctx.advance(31 * 60_000);
+    ctx.home.append(parent, [R.command(T, 'p1', 'call_p', 'git status', { at: ctx.now(), output: 'ok' })]);
+    ctx.home.touch(parent, ctx.now());
+    ctx.home.touch(sub, ctx.now());
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    expect(ctx.agent(SUB)?.status).toBe('done');
+  });
+
+  it('só existência: subagente com lock de 13 h e sem escrita há 13 h sai, como o principal (o reconcile final usa o motivo da presença)', () => {
+    const ctx = setup({ locks: 'exists' });
+    const at = ctx.now() - 60_000;
+    const SUB = `.codex:${C}`;
+    const parent = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue a dúvida', at)]);
+    ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), Q.ask('call_q', 'Qual banco?', at + 1_000)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)?.status).toBe('waiting');
+    ctx.advance(13 * 3600_000);
+    ctx.home.append(parent, [R.command(T, 'p1', 'call_p', 'git status', { at: ctx.now(), output: 'ok' })]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    expect(ctx.agent(SUB)?.status).toBe('done');
+  });
+});

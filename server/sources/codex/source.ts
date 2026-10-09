@@ -38,7 +38,8 @@
 // fica 'shell'. O fim vem do write_stdin/wait ou do CommandExecution com o process_id ('ShellDone'); o próximo
 // task_started do dono, o thread fechar ou SHELL_EXPIRE_MS depois do fim do turno encerram a espera sem 'ShellDone'.
 // Com a trava segura o turno aberto continua 'working' sem prazo; sem sondagem, 'working' sem nenhuma escrita por
-// WORKING_QUIET_MS vira 'idle'. Ao abrir um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos
+// WORKING_QUIET_MS vira 'idle' (principal e subagente), e uma linha nova do turno ainda aberto volta a 'working' (ou a
+// 'waiting', com pergunta aberta). Ao abrir um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos
 // `tailBytes` e até a fronteira de turno (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de
 // onde a varredura parou e o começo anterior a ela é lido depois, em segundo plano (números e linha do tempo longa).
 // Boot síncrono, com endBoot num `finally`.
@@ -405,6 +406,7 @@ export class CodexSource implements AgentSource, CodexLive {
     for (const t of subs.sort((a, b) => depth.get(a)! - depth.get(b)!)) {
       try {
         this.reconcile(t, now, seen.get(t.key));
+        if (t.inOffice) this.quietCheck(t, now);
       } catch (err) {
         log.warnOnce(`codex-thread:${t.key}:${errMsg(err)}`, `Codex: thread ${t.key}: ${errMsg(err)}`);
       }
@@ -941,6 +943,12 @@ export class CodexSource implements AgentSource, CodexLive {
         default:
           break;
       }
+    }
+    // Turno ainda aberto que o corte de inatividade (ou um Stop) deu como ocioso e voltou a andar (um comando longo que
+    // escreve de novo): trabalhando, ou esperando a resposta se houver pergunta aberta.
+    if (live && t.status === 'idle' && t.state.turnOpen === true && (r.activities.length || r.signals.some((s) => s.type === 'progress'))) {
+      if (t.state.asking.size) this.decide(t, 'waiting', r.at, QUESTION_WAIT, live);
+      else this.decide(t, 'working', r.at, undefined, live);
     }
     if (!live || !t.inOffice) {
       if (r.activities.length || r.signals.some((s) => s.type === 'github')) {
