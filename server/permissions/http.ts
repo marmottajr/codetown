@@ -8,11 +8,21 @@
 //   GET  /api/permissions/:id             (página)  detalhe com os argumentos (comando, diff...)
 //   POST /api/permissions/:id/decision    (página)  {behavior: allow | deny | terminal | answer, message?, answers?, forSession?, ...}
 //                                                   (pedido 'parallel': a decisão vai ao app-server do Codex; 503 = canal fora)
+//
+// As chamadas do hook do Codex (o registro com provider "codex" e a espera dos pedidos que ele registrou) passam pela
+// guarda do hook (verifyHookCall, codex/http.ts): de fora do loopback só com nonce e prova da chave local (senão 403,
+// sem efeito nenhum), e com a prova a resposta leva a do servidor, sem a qual o hook não decide. As do hook do Claude
+// nunca: no Docker elas também chegam pelo gateway e sem prova.
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { type CodexHookAuth, verifyHookCall } from '../codex/http';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { InvalidRequest, parseDecision, WAIT_MAX_MS, type PermissionRegistry } from './registry';
 
 const ITEM = /^\/api\/permissions\/([^/]+)(?:\/(wait|decision))?$/;
+/** Sem a guarda do processo: só o loopback (nenhuma chave, nenhuma prova vale). */
+const LOOPBACK_ONLY: CodexHookAuth = { key: undefined, check: () => false, inDocker: false };
+/** Ids do hook do Codex lembrados, bem acima de MAX_PENDING: o mais antigo que sai já não espera nada. */
+const CODEX_IDS_MAX = 1_024;
 
 function methodNotAllowed(res: ServerResponse, allow: string): void {
   res.setHeader('Allow', allow);
@@ -33,17 +43,42 @@ export function waitMs(url: URL): number {
   return Math.min(WAIT_MAX_MS, Math.max(50, raw * 1_000));
 }
 
-export function createPermissionRoutes(registry: PermissionRegistry): (req: IncomingMessage, res: ServerResponse, path: string) => void {
-  const register = async (req: IncomingMessage, res: ServerResponse) => {
-    const body = await readJson(req);
-    const r = registry.register(body);
-    if ('skip' in r) sendJson(res, 200, { skip: r.skip });
-    else sendJson(res, 201, r);
+export function createPermissionRoutes(
+  registry: PermissionRegistry,
+): (req: IncomingMessage, res: ServerResponse, path: string, codexHook?: CodexHookAuth) => void {
+  /**
+   * Pedidos que o hook do Codex registrou: a espera deles passa pela mesma guarda. O registro não serve para saber:
+   * o detalhe some assim que há decisão, justamente a resposta que precisa da prova.
+   */
+  const codexIds = new Set<string>();
+
+  /** Chamada do hook do Codex: false = recusada (já respondeu 403). Com a prova, a resposta já leva a do servidor. */
+  const codexAllowed = (req: IncomingMessage, res: ServerResponse, codexHook: CodexHookAuth | undefined): boolean => {
+    if (verifyHookCall(req, res, codexHook ?? LOOPBACK_ONLY) !== 'denied') return true;
+    sendJson(res, 403, { error: 'pedidos do hook do Codex só são aceitos pelo próprio computador (no Docker, com a prova da chave do hook)' });
+    return false;
   };
 
-  const wait = (req: IncomingMessage, res: ServerResponse, id: string) => {
+  const register = async (req: IncomingMessage, res: ServerResponse, codexHook: CodexHookAuth | undefined) => {
+    const body = await readJson(req);
+    const codex = !!body && typeof body === 'object' && (body as { provider?: unknown }).provider === 'codex';
+    if (codex && !codexAllowed(req, res, codexHook)) return;
+    const r = registry.register(body);
+    if ('skip' in r) return sendJson(res, 200, { skip: r.skip });
+    if (codex) {
+      codexIds.add(r.id);
+      if (codexIds.size > CODEX_IDS_MAX) codexIds.delete(codexIds.values().next().value!);
+    }
+    sendJson(res, 201, r);
+  };
+
+  const wait = (req: IncomingMessage, res: ServerResponse, id: string, codexHook: CodexHookAuth | undefined) => {
+    if (codexIds.has(id) && !codexAllowed(req, res, codexHook)) return;
     const w = registry.wait(id, waitMs(new URL(req.url ?? '/', 'http://localhost')));
-    if (!w) return sendJson(res, 404, { error: 'pedido desconhecido' });
+    if (!w) {
+      codexIds.delete(id);
+      return sendJson(res, 404, { error: 'pedido desconhecido' });
+    }
     req.socket.setTimeout(0);
     // Conexão fechada antes da resposta (o hook morreu ou desistiu): larga a espera.
     res.on('close', () => {
@@ -51,6 +86,7 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
     });
     w.result.then(
       (result) => {
+        if (result.status !== 'pending') codexIds.delete(id);
         if (!res.destroyed && !res.writableEnded) sendJson(res, 200, result);
       },
       (err) => fail(res, err),
@@ -80,11 +116,11 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
     }
   };
 
-  return (req, res, path) => {
+  return (req, res, path, codexHook) => {
     const method = req.method ?? 'GET';
     if (path === '/api/permissions') {
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      register(req, res).catch((err) => fail(res, err));
+      register(req, res, codexHook).catch((err) => fail(res, err));
       return;
     }
     const m = ITEM.exec(path);
@@ -97,7 +133,7 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
     }
     if (m[2] === 'wait') {
       if (method !== 'GET') return methodNotAllowed(res, 'GET');
-      return wait(req, res, id);
+      return wait(req, res, id, codexHook);
     }
     if (m[2] === 'decision') {
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
