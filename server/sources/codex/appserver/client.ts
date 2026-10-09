@@ -131,6 +131,8 @@ export class CodexAppServerClient extends EventEmitter {
   private readonly approvals = new Map<string | number, { threadId: string; answered: boolean }>();
   /** "<threadId>\n<itemId>" → patch do item fileChange. */
   private readonly patches = new Map<string, string>();
+  /** Threads que deixamos de seguir (unsubscribe começou): o `serverRequest/resolved` delas não vem mais, então um pedido novo não vira cartão. */
+  private readonly released = new Set<string>();
 
   constructor(private readonly opts: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream; clientName: string; version: string }) {
     super();
@@ -157,6 +159,8 @@ export class CodexAppServerClient extends EventEmitter {
 
   /** Inscreve a conexão numa thread carregada (rejoin), sem overrides. Nunca rejeita. */
   async resumeThread(threadId: string): Promise<ResumeResult> {
+    // O replay dos pedidos abertos pode vir antes da resposta do resume: a thread já tem de valer de novo.
+    this.released.delete(threadId);
     let res: unknown;
     try {
       // Sem overrides: com overrides divergentes o app-server pode encerrar e recarregar uma thread ociosa.
@@ -172,6 +176,7 @@ export class CodexAppServerClient extends EventEmitter {
 
   /** Sai da thread (o daemon a descarrega quando ninguém mais a segura). Fecha os pedidos abertos dela. Nunca rejeita. */
   async unsubscribe(threadId: string): Promise<void> {
+    this.released.add(threadId);
     this.dropThread(threadId);
     try {
       await this.request('thread/unsubscribe', { threadId });
@@ -282,7 +287,7 @@ export class CodexAppServerClient extends EventEmitter {
     const p = rec(params);
     const threadId = str(p?.threadId);
     // O mesmo id de novo é o replay do resume: um pedido só.
-    if (!p || !threadId || this.approvals.has(id)) return;
+    if (!p || !threadId || this.approvals.has(id) || this.released.has(threadId)) return;
     this.approvals.set(id, { threadId, answered: false });
     const req: ApprovalRequest = { requestId: id, threadId, kind: method === COMMAND_APPROVAL ? 'command' : 'fileChange' };
     if (req.kind === 'command') {

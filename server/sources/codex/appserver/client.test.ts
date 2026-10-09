@@ -422,4 +422,46 @@ describe('CodexAppServerClient: aprovações', () => {
     expect(ev.resolved).toEqual([{ requestId: 40 }, { requestId: 41 }]);
     expect(fake.responses()).toEqual([]);
   });
+
+  it('pedido que chega durante o unsubscribe (antes da resposta) não fica aberto, nem depois dela', async () => {
+    // Arrange: o app-server manda o pedido da thread depois do unsubscribe do cliente e antes de respondê-lo.
+    const { fake, client, ev } = await ready();
+    const openIds = () => ev.approvals.filter((a) => !ev.resolved.some((r) => (r as { requestId: unknown }).requestId === a.requestId)).map((a) => a.requestId);
+    fake.handlers.set('thread/unsubscribe', (p) => {
+      fake.request(50, COMMAND, { ...BASE, threadId: p.threadId, itemId: 'call-50', command: 'ls' });
+      return { status: 'unsubscribed' };
+    });
+
+    // Act
+    await client.unsubscribe(THREAD);
+    fake.request(51, FILE, { ...BASE, threadId: THREAD, itemId: 'item-51' });
+    await flush();
+    client.respond(50, 'accept');
+    client.respond(51, 'accept');
+    await flush();
+
+    // Assert
+    expect(openIds()).toEqual([]);
+    expect(fake.responses()).toEqual([]);
+  });
+
+  it('resumeThread volta a seguir a thread: o pedido dela volta a virar cartão', async () => {
+    // Arrange
+    const { fake, client, ev } = await ready();
+    await client.unsubscribe(THREAD);
+    fake.request(60, COMMAND, { ...BASE, threadId: THREAD, itemId: 'call-60', command: 'ls' });
+    await flush();
+    expect(ev.approvals).toEqual([]);
+
+    // Act
+    await expect(client.resumeThread(THREAD)).resolves.toBe('ok');
+    fake.request(61, COMMAND, { ...BASE, threadId: THREAD, itemId: 'call-61', command: 'ls' });
+    await until(() => ev.approvals.length === 1);
+    client.respond(61, 'accept');
+    await until(() => fake.responses().length === 1);
+
+    // Assert
+    expect(ev.approvals.map((a) => a.requestId)).toEqual([61]);
+    expect(fake.responses()).toEqual([{ id: 61, result: { decision: 'accept' } }]);
+  });
 });
