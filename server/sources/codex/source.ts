@@ -1026,11 +1026,12 @@ export class CodexSource implements AgentSource, CodexLive {
   }
 
   /**
-   * Conta sem sessão aberta (ao subir e a cada USAGE_RESCAN_MS): o uso do rollout mais recente que tenha números (vale
-   * só se for mais novo que o atual pelo horário da linha; fica "desatualizado" com a idade: os números do Codex só se
-   * renovam com alguma sessão rodando). Por mtime (só para escolher o que abrir) em TODAS as pastas de data (uma sessão
-   * retomada continua no arquivo da pasta antiga) e nas arquivadas, tentando os SEED_USAGE_FILES mais recentes: o
-   * último pode não ter `token_count` nenhum (sessão sem resposta, ou arquivada logo).
+   * Conta sem sessão aberta (ao subir e a cada USAGE_RESCAN_MS): o uso mais novo pelo horário da linha entre os
+   * rollouts lidos (e só se for mais novo que o atual; fica "desatualizado" com a idade: os números do Codex só se
+   * renovam com alguma sessão rodando). O mtime só escolhe os SEED_USAGE_FILES arquivos a abrir, em TODAS as pastas de
+   * data (uma sessão retomada continua no arquivo da pasta antiga) e nas arquivadas; todos eles são lidos, porque o
+   * último pode não ter `token_count` nenhum (sessão sem resposta, ou arquivada logo) e um arquivo mexido agora pode ter
+   * números mais velhos que os de outro.
    */
   private seedUsage(acc: CodexAccount): void {
     const files: Array<{ path: string; mtimeMs: number }> = [];
@@ -1053,6 +1054,8 @@ export class CodexSource implements AgentSource, CodexLive {
     }
     files.sort((a, b) => b.mtimeMs - a.mtimeMs);
     let plan: string | undefined;
+    // Todos os candidatos são lidos: um arquivo de mtime mais novo pode ter uma linha de uso mais velha que a de outro.
+    let best: { usage: AccountUsage; plan?: string } | undefined;
     for (const f of files.slice(0, SEED_USAGE_FILES)) {
       try {
         const tail = new FileTail(f.path);
@@ -1064,11 +1067,12 @@ export class CodexSource implements AgentSource, CodexLive {
           if (!r.more) break;
         }
         plan ??= state.planType;
-        if (state.usage) return this.pushUsage(acc, state.usage, state.planType ?? plan);
+        if (state.usage && (!best || state.usage.fetchedAt > best.usage.fetchedAt)) best = { usage: state.usage, plan: state.planType };
       } catch {
         // ilegível agora: tenta o seguinte
       }
     }
+    if (best) return this.pushUsage(acc, best.usage, best.plan ?? plan);
     if (!acc.plan) this.pushPlan(acc, plan);
   }
 

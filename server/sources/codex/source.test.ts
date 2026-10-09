@@ -557,6 +557,28 @@ describe('fonte do Codex: uso do plano', () => {
     expect(usage()).toMatchObject({ fetchedAt: recent, fiveHour: { utilization: 55 } });
   });
 
+  it.each([
+    ['mais velha que o uso atual', -60_000],
+    ['entre o uso atual e o mais novo', 30 * 60_000],
+  ])('conta sem sessão aberta: na mesma releitura, um rollout de mtime mais novo com a linha %s não esconde o uso mais novo de outro', (_, offset) => {
+    const ctx = setup();
+    const old = ctx.now() - 2 * 3600_000;
+    ctx.home.rollout(T, [R.meta(T, { at: old }), R.tokens({ input: 1, output: 1, at: old, rateLimits: { primary: { used: 10 }, plan: 'plus' } })], { mtime: old });
+    ctx.source.boot();
+    const usage = () => ctx.accounts.list(new Map())[0].usage;
+    expect(usage()).toMatchObject({ fetchedAt: old, fiveHour: { utilization: 10 } });
+    // Entre dois ciclos: uma sessão curta arquivada (uso mais novo) e um rollout mexido agora (mtime mais novo) com uma
+    // linha de uso mais velha. O mtime só ordena o que abrir: vence o horário da linha.
+    const recent = ctx.now() - 60_000;
+    const T3 = threadId(3);
+    ctx.home.rollout(T3, [R.meta(T3, { at: recent }), R.tokens({ input: 1, output: 1, at: recent, rateLimits: { primary: { used: 55 }, plan: 'plus' } })], { archived: true, mtime: recent });
+    const T4 = threadId(4);
+    ctx.home.rollout(T4, [R.meta(T4, { at: old }), R.tokens({ input: 1, output: 1, at: old + offset, rateLimits: { primary: { used: 99 }, plan: 'plus' } })], { date: '2026/01/02', mtime: ctx.now() + 60_000 });
+    ctx.advance(USAGE_RESCAN_MS);
+    ctx.poll();
+    expect(usage()).toMatchObject({ fetchedAt: recent, fiveHour: { utilization: 55 } });
+  });
+
   it('conta com sessão aberta: a releitura de 60 s fica de fora (o uso vem da própria sessão)', () => {
     const ctx = setup();
     const at = ctx.now() - 60_000;
