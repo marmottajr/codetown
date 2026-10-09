@@ -333,8 +333,10 @@ export class CodexSource implements AgentSource, CodexLive {
     return t?.inOffice ? t.rolloutPath : undefined;
   }
 
+  /** Com o session_meta do cabeçalho: a janela do fim lida pelo terminal pode não ter o dele (fork: o do pai vem depois). */
   terminalParser(agentId: string): TerminalParser | undefined {
-    return this.threads.has(agentId) ? createCodexTerminalParser() : undefined;
+    const t = this.threads.get(agentId);
+    return t ? createCodexTerminalParser({ meta: t.state.meta }) : undefined;
   }
 
   /** Espera as leituras do começo dos rollouts (testes). */

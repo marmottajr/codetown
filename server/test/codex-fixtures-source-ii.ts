@@ -1,7 +1,7 @@
 // Construtores SINTÉTICOS da Tarefa 15 (CodexSource II): pergunta do request_user_input, spawn_agent e o
-// SubAgentActivity do multiagente v2, neto (depth 2) e comandos em segundo plano (unified exec e code mode). Os formatos
-// seguem a pesquisa do Codex 0.160.1 (c-rollout.md, c-agents.md §6); nada aqui vem de conversas reais.
-import { R } from './codex-fixtures';
+// SubAgentActivity do multiagente v2, neto (depth 2), subagente com fork e comandos em segundo plano (unified exec e code
+// mode). Os formatos seguem a pesquisa do Codex 0.160.1 (c-rollout.md, c-agents.md §6); nada aqui vem de conversas reais.
+import { R, SOURCES } from './codex-fixtures';
 
 const ts = (at: number) => new Date(at).toISOString();
 
@@ -112,4 +112,29 @@ export function commandParsed(thread: string, turn: string, id: string, script: 
 export function withOrdinal(raw: string, ordinal: number): string {
   const j = JSON.parse(raw) as Record<string, unknown>;
   return JSON.stringify({ timestamp: j.timestamp, ordinal, type: j.type, payload: j.payload });
+}
+
+/** cwd do filho no rollout de forkRollout. */
+export const FORK_CWD = '/projetos/filho';
+
+/**
+ * Rollout de um subagente com fork (subagent_history_start_ordinal = 4, cwd FORK_CWD): o cabeçalho e o resto, que é a
+ * janela do fim quando o cabeçalho fica de fora. O resto traz a cópia do session_meta do pai (cwd /projetos/pai), a
+ * história herdada (ordinal 2 e 3: `ls`) e o turno do filho (npm test e o apply_patch de FORK_CWD/src/a.ts).
+ */
+export function forkRollout(child: string, parent: string, at: number): { header: string; rest: string[] } {
+  const meta = JSON.parse(R.meta(child, { at, cwd: FORK_CWD, sessionId: parent, source: SOURCES.sub(parent, 'worker') })) as { payload: Record<string, unknown> };
+  meta.payload.subagent_history_start_ordinal = 4;
+  const patch = `*** Begin Patch\n*** Update File: ${FORK_CWD}/src/a.ts\n@@\n-a\n+b\n*** End Patch`;
+  return {
+    header: withOrdinal(JSON.stringify(meta), 0),
+    rest: [
+      withOrdinal(R.meta(parent, { at: at - 60_000, cwd: '/projetos/pai' }), 1),
+      withOrdinal(R.functionCall('old', 'shell_command', { command: 'ls' }, at - 50_000), 2),
+      withOrdinal(R.functionOutput('old', 'Exit code: 0\nOutput:\na.ts', at - 49_000), 3),
+      withOrdinal(R.taskStarted('s1', at + 1_000), 4),
+      withOrdinal(R.functionCall('new', 'shell_command', { command: 'npm test' }, at + 2_000), 5),
+      withOrdinal(R.customToolCall('p1', 'apply_patch', patch, at + 3_000), 6),
+    ],
+  };
 }

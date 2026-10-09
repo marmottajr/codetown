@@ -11,7 +11,7 @@ import { DONE_GRACE_MS, Office } from '../../model/office';
 import { PermissionRegistry } from '../../permissions/registry';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
-import { B, commandParsed, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
+import { B, commandParsed, forkRollout, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { writeLines } from '../../test/fixtures';
 import { readLocks, RolloutIndex } from './files';
 import { CodexSource, LOCK_SETTLE_MS, MAIN_GONE_GRACE_MS, scanPrefix, SHELL_EXPIRE_MS, USAGE_RESCAN_MS } from './source';
@@ -1382,5 +1382,22 @@ describe('fonte do Codex: thread revertido com dois rollouts (G7)', () => {
     ctx.source.boot();
     expect(ctx.source.transcriptPathOf(KEY)).toBe(original);
     expect(ctx.agent()).toMatchObject({ title: 'Versão original', status: 'working' });
+  });
+});
+
+describe('fonte do Codex: terminal com o session_meta do cabeçalho (C2)', () => {
+  it('subagente com fork e o cabeçalho fora da janela do fim: nenhuma entrada herdada do pai, caminhos pelo cwd do filho', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    ctx.home.rollout(T, [R.meta(T, { at, cwd: '/projetos/pai' }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue os testes', at)]);
+    const fork = forkRollout(C, T, at + 1_000);
+    ctx.home.rollout(C, [fork.header, ...fork.rest]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at + 1_000);
+    ctx.source.boot();
+    // A janela que o terminal lê do fim não tem o cabeçalho: começa na cópia do session_meta do pai.
+    const parser = ctx.source.terminalParser(`.codex:${C}`)!;
+    const tools = fork.rest.flatMap((l) => parser.push(l)).flatMap((e) => (e.kind === 'tool' ? [e.title] : []));
+    expect(tools).toEqual(['Bash(npm test)', 'Edit(src/a.ts)']);
   });
 });

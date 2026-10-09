@@ -18,7 +18,7 @@ import { errMsg, log } from '../../log';
 import { HISTORY_LIMIT, HISTORY_MAX_AGE_MS } from '../history';
 import type { HistoryProvider, HistoryResolveResult } from '../source';
 import { encodeCwd } from '../watcher';
-import { compareRollouts, parseRolloutName, rolloutDirs } from './files';
+import { compareRollouts, parseRolloutName, readRolloutHead as readHeadSync, rolloutDirs } from './files';
 import { createCodexState, isThreadId, metaFromLine, parseRolloutLine, type CodexState, type RolloutMeta } from './rollout';
 import { createCodexTerminalParser } from './terminal';
 
@@ -173,7 +173,12 @@ export class CodexHistory implements HistoryProvider {
         }
       }
     }
-    if (best) return { path: best.path, createParser: createCodexTerminalParser };
+    if (best) {
+      // O session_meta do cabeçalho vai para o parser: a janela do fim lida pelo terminal pode não ter o dele (fork: o do
+      // pai vem depois, e a história herdada só se separa pelo subagent_history_start_ordinal).
+      const meta = readHeadSync(best.path).meta;
+      return { path: best.path, createParser: () => createCodexTerminalParser({ meta }) };
+    }
     return { status: 404, error: compressed ? 'sessão compactada pelo Codex (.zst): ainda não dá para ler' : 'sessão não encontrada' };
   }
 

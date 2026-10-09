@@ -4,6 +4,7 @@ import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setQuiet } from '../../log';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
+import { forkRollout } from '../../test/codex-fixtures-source-ii';
 import { symlinkOrSkip, tempDir, writeLines } from '../../test/fixtures';
 import { CodexHistory } from './history';
 
@@ -240,6 +241,18 @@ describe('histórico do Codex', () => {
     writeFileSync(join(outside.dir, 'x.jsonl'), R.meta(SUB));
     symlinkOrSkip(skip, join(outside.dir, 'x.jsonl'), join(dir, `rollout-2026-10-01T09-00-00-${SUB}.jsonl`));
     expect(history.resolve('.codex', SUB)).toMatchObject({ status: 404 });
+  });
+
+  it('resolve de subagente com fork e o cabeçalho fora da janela do fim: o parser já vem com o session_meta (nada herdado do pai, caminhos pelo cwd do filho)', () => {
+    const { home, history } = setup();
+    const fork = forkRollout(SUB, A, NOW - HOUR);
+    home.rollout(SUB, [fork.header, ...fork.rest]);
+    const r = history.resolve('.codex', SUB);
+    if (!('path' in r)) throw new Error(r.error);
+    // A janela que o terminal lê do fim não tem o cabeçalho: começa na cópia do session_meta do pai.
+    const parser = r.createParser();
+    const tools = fork.rest.flatMap((l) => parser.push(l)).flatMap((e) => (e.kind === 'tool' ? [e.title] : []));
+    expect(tools).toEqual(['Bash(npm test)', 'Edit(src/a.ts)']);
   });
 
   it('cache: o rollout só é relido quando muda', async () => {
