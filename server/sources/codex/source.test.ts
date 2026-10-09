@@ -1019,7 +1019,7 @@ describe('fonte do Codex: neto (P13)', () => {
   });
 });
 
-describe('fonte do Codex: comandos em segundo plano (P12)', () => {
+describe('fonte do Codex: comandos em segundo plano (status shell)', () => {
   const SUB = `.codex:${C}`;
   const DEV = describeShellJob('Bash', { command: 'npm run dev' }).label;
   const said = (ctx: ReturnType<typeof setup>, re: RegExp) => ctx.notices.some((n) => re.test(n.text));
