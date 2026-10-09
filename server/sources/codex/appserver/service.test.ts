@@ -268,6 +268,37 @@ describe('CodexAppServerService: threads', () => {
     expect(s.svc.owns(ACCOUNT, OTHER)).toBe(false);
   });
 
+  it('thread/loaded/list que falha com a conexão de pé: avisa uma vez e lista de novo depois de DISCOVERY_MS, sem derrubar a conexão', async () => {
+    // Arrange: o daemon recusa a 1ª listagem (método desconhecido numa outra versão, ou o prazo do pedido).
+    const s = setup();
+    const fake = server([THREAD]);
+    let lists = 0;
+    fake.handlers.set('thread/loaded/list', () => {
+      lists++;
+      if (lists === 1) rpcFail(-32601, 'método desconhecido: thread/loaded/list');
+      return { data: [THREAD], nextCursor: null };
+    });
+    s.queue.push(fake);
+
+    // Act
+    s.svc.tick();
+    await until(() => s.logs.some((l) => l.includes('thread/loaded/list')));
+    s.clock.advance(DISCOVERY_MS - 1);
+    s.svc.tick();
+    await flush();
+
+    // Assert
+    expect(fake.calls('thread/loaded/list')).toHaveLength(1);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    s.clock.advance(1);
+    s.svc.tick();
+    await until(() => s.svc.owns(ACCOUNT, THREAD));
+    expect(fake.calls('thread/loaded/list')).toHaveLength(2);
+    expect(s.proxies).toHaveLength(1);
+    expect(s.proxies[0].killed).toBe(false);
+    expect(s.logs.filter((l) => l.includes('thread/loaded/list'))).toHaveLength(1);
+  });
+
   it('thread/started → resume; thread/closed → a thread deixa a conexão e o cartão aberto dela fecha', async () => {
     // Arrange
     const s = setup({ threads: [] });

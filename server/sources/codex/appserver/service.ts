@@ -126,6 +126,14 @@ interface Conn {
   notDaemon: Set<string>;
   /** Pedidos com cartão aberto no registro: key → id ORIGINAL do pedido. */
   open: Map<string, string | number>;
+  /** A descoberta (thread/loaded/list ao ficar pronta) já deu certo. */
+  discovered: boolean;
+  /** thread/loaded/list em andamento (um por vez: o pedido pode levar até o prazo do RpcPeer). */
+  listing: boolean;
+  /** Depois de uma falha do thread/loaded/list, a próxima listagem só a partir daqui. */
+  listAt: number;
+  /** A falha do thread/loaded/list já foi para o log nesta conexão. */
+  listWarned: boolean;
 }
 
 interface AccountState {
@@ -188,7 +196,7 @@ export class CodexAppServerService implements ParallelSink {
           this.states.set(a.id, st);
         }
         if (st.conn) {
-          if (st.conn.ready) this.retryResumes(st.conn, now);
+          if (st.conn.ready) this.maintain(st, st.conn, now);
         } else if (!st.checking && now >= st.retryAt) this.check(st, bin);
       }
     } catch (err) {
@@ -249,7 +257,21 @@ export class CodexAppServerService implements ParallelSink {
       return;
     }
     const client = new CodexAppServerClient({ input: proxy.stdout, output: proxy.stdin, clientName: 'habblaud', version: this.opts.version ?? '0.0.0' });
-    const conn: Conn = { client, proxy, ready: false, closed: false, owned: new Set(), resuming: new Set(), retry: new Map(), notDaemon: new Set(), open: new Map() };
+    const conn: Conn = {
+      client,
+      proxy,
+      ready: false,
+      closed: false,
+      owned: new Set(),
+      resuming: new Set(),
+      retry: new Map(),
+      notDaemon: new Set(),
+      open: new Map(),
+      discovered: false,
+      listing: false,
+      listAt: 0,
+      listWarned: false,
+    };
     st.conn = conn;
     proxy.on('exit', () => this.drop(st, conn, 'o proxy do app-server saiu'));
     client.on('close', (reason: string) => this.drop(st, conn, reason));
@@ -270,11 +292,41 @@ export class CodexAppServerService implements ParallelSink {
     conn.ready = true;
     st.backoffMs = BACKOFF_MIN_MS;
     this.say(`Codex (${st.id}): ligado ao daemon do app-server; os pedidos de aprovação do codex no terminal também podem ser respondidos pelo escritório.`);
+    this.listLoaded(st, conn);
+  }
+
+  /** Conexão pronta, a cada tick: novas tentativas de resume e a descoberta que falhou. */
+  private maintain(st: AccountState, conn: Conn, now: number): void {
+    this.retryResumes(conn, now);
+    if (!conn.discovered && now >= conn.listAt) this.listLoaded(st, conn);
+  }
+
+  /**
+   * Descoberta: thread/loaded/list (um por vez) e resume de cada thread carregada. Falha com a conexão de pé (prazo do
+   * pedido no RpcPeer, erro do daemon): avisa uma vez por conexão e lista de novo depois de DISCOVERY_MS, sem derrubar a
+   * conexão (com um método desconhecido, reconectar não adiantaria). Se a conexão caiu no meio, a reconexão lista de novo.
+   */
+  private listLoaded(st: AccountState, conn: Conn): void {
+    if (conn.listing || conn.closed) return;
+    conn.listing = true;
     conn.client.listLoadedThreads().then(
-      (ids) => this.guard(() => ids.forEach((id) => this.resume(conn, id))),
-      () => {
-        // Conexão caiu no meio: a reconexão lista de novo.
-      },
+      (ids) =>
+        this.guard(() => {
+          conn.listing = false;
+          if (conn.closed) return;
+          conn.discovered = true;
+          conn.listAt = 0;
+          for (const id of ids) this.resume(conn, id);
+        }),
+      (err) =>
+        this.guard(() => {
+          conn.listing = false;
+          if (conn.closed) return;
+          conn.listAt = this.now() + DISCOVERY_MS;
+          if (conn.listWarned) return;
+          conn.listWarned = true;
+          this.say(`Codex (${st.id}): o thread/loaded/list falhou (${errMsg(err)}); tento de novo em ${DISCOVERY_MS / 1000} s. Até lá, só as threads que começarem agora entram no canal paralelo.`);
+        }),
     );
   }
 
