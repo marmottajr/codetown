@@ -4,9 +4,9 @@
 // termina com um cartão só. Agentes e ids sintéticos.
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CodexDecision, PermissionRequestInfo } from '../../shared/types';
-import { setQuiet } from '../log';
+import { log, setQuiet } from '../log';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import { ORPHAN_MS, parseDecision, PermissionRegistry, RESOLVED_KEEP_MS, WAIT_MAX_MS, type ParallelRequestInput, type ParallelSink } from './registry';
@@ -233,6 +233,23 @@ describe('decisão do escritório num pedido parallel', () => {
     state.reply = 'ok';
     expect(await registry.decide(id, { behavior: 'allow' })).toBe('ok');
     expect(sent.at(-1)).toEqual([KEY, 'accept']);
+  });
+
+  it('sink que lança: o erro vai ao log, sem a decisão nem o conteúdo do pedido, e a página recebe unavailable', async () => {
+    const { registry, state, sink } = setup();
+    registry.setParallelSink(sink);
+    const id = opened(registry.registerParallel(req()));
+    const warn = vi.spyOn(log, 'warnOnce');
+    try {
+      state.reply = new Error('proxy em estado inválido');
+      expect(await registry.decide(id, { behavior: 'allow' })).toBe('unavailable');
+      expect(warn).toHaveBeenCalledTimes(1);
+      const [key, text] = warn.mock.calls[0];
+      expect(`${key} ${text}`).toContain('proxy em estado inválido');
+      expect(`${key} ${text}`).not.toMatch(/hunter2|rm -rf/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('gone (já respondido ou cancelado no app-server): o cartão fecha e a página recebe not-found', async () => {

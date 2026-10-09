@@ -724,7 +724,10 @@ export class PermissionRegistry {
     if (!sink) return 'unavailable';
     par.sent = choice;
     return new Promise<'ok' | 'gone' | 'unavailable'>((done) => done(sink.decide(par.key, choice)))
-      .catch(() => 'unavailable' as const)
+      .catch((err: unknown): 'unavailable' => {
+        log.warnOnce(`permissions-sink:${errMsg(err)}`, `Pedidos de permissão: o canal paralelo falhou ao repassar a decisão (${errMsg(err)}).`);
+        return 'unavailable';
+      })
       .then((r): DecideResult => {
         if (r === 'unavailable') {
           delete par.sent;
