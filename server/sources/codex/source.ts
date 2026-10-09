@@ -158,6 +158,14 @@ export interface CodexSourceOptions {
   watch?: boolean;
   /** Sondagem das travas (testes); padrão `createLockProber({ platform: process.platform, inDocker: detectDocker(env) })`. */
   lockProber?: LockProber;
+  /**
+   * O turno de uma thread (principal, subagente ou interna) abriu ou fechou, para o canal paralelo soltar a thread de um
+   * TUI fechado. `account` = o id da conta (o prefixo do id do agente, `<conta>:<threadId>`); `threadId` como o Codex o
+   * grava (o `id` do session_meta). Ao abrir o rollout (e no thread ainda sem rollout) sai o estado do turno uma vez;
+   * depois só as mudanças: task_started, task_complete/turn_aborted ao vivo, SessionEnd do hook, a saída do escritório e
+   * o fim do thread. O mesmo valor seguido não sai de novo.
+   */
+  onTurn?: (account: string, threadId: string, open: boolean) => void;
 }
 
 interface CodexAccount {
@@ -216,6 +224,8 @@ interface ThreadTracker {
   subDone: boolean;
   /** Criado agora por um hook (SubagentStart): entra mesmo sem turno visto. */
   hookSpawned?: boolean;
+  /** Último estado do turno avisado ao onTurn por este tracker (undefined = nada ainda). */
+  turnSent?: boolean;
   watcher?: FSWatcher;
 }
 
@@ -398,6 +408,7 @@ export class CodexSource implements AgentSource, CodexLive {
       const grace = t.kind === 'main' ? MAIN_GONE_GRACE_MS : t.kind === 'sub' && !t.subDone && t.status !== 'idle' ? SUB_FOLLOWUP_GRACE_MS : CLOSE_AFTER_MISSING_MS;
       if (!boot && now - t.missingSince < grace) continue;
       this.leave(t);
+      this.turnTo(t, false);
       this.unwatch(t);
       this.threads.delete(key);
       // Thread fechado: os processos dele morrem junto (a sessão do Codex encerra os terminais em segundo plano).
@@ -505,6 +516,8 @@ export class CodexSource implements AgentSource, CodexLive {
     delete t.missingSince;
     if (t.inOffice && !this.opts.office.has(t.key)) t.inOffice = false; // saiu do escritório (graça encerrada)
     this.pump(t, boot);
+    // Thread ainda sem rollout (o Codex só o cria no primeiro prompt): nenhum turno aberto.
+    if (!t.tail && t.turnSent === undefined) this.turnTo(t, false);
     if (t.kind === 'sub') return;
     this.reconcile(t, now, via);
     if (t.inOffice && t.kind === 'main') {
@@ -657,7 +670,7 @@ export class CodexSource implements AgentSource, CodexLive {
     this.applySummary(t);
   }
 
-  /** Sai do escritório: principal encerra; subagente entrega (se ainda não tinha entregado). */
+  /** Sai do escritório: principal encerra; subagente entrega (se ainda não tinha entregado). O turno conta como fechado. */
   private leave(t: ThreadTracker): void {
     if (!t.inOffice) return;
     const office = this.opts.office;
@@ -666,6 +679,22 @@ export class CodexSource implements AgentSource, CodexLive {
       t.subDone = true;
     } else office.closeMain(t.key);
     t.inOffice = false;
+    this.turnTo(t, false);
+  }
+
+  /** Avisa o onTurn que o turno do thread abriu ou fechou (o mesmo valor seguido não sai de novo). */
+  private turnTo(t: ThreadTracker, open: boolean): void {
+    if (t.turnSent === open || !this.opts.onTurn) return;
+    t.turnSent = open;
+    // O id como o Codex o grava (o do session_meta): o canal paralelo o compara com o do app-server sem normalizar.
+    // Locks, nomes de arquivo e hooks chegam aqui em minúsculas.
+    const own = t.meta?.threadId;
+    const threadId = own && own.toLowerCase() === t.threadId ? own : t.threadId;
+    try {
+      this.opts.onTurn(t.acc.id, threadId, open);
+    } catch (err) {
+      log.warnOnce(`codex-turn:${errMsg(err)}`, `Codex: o aviso de turno ao canal paralelo falhou (${errMsg(err)}).`);
+    }
   }
 
   /**
@@ -861,6 +890,8 @@ export class CodexSource implements AgentSource, CodexLive {
     for (const line of scan.lines) this.take(t, line, false);
     t.lastWriteAt = lastLineAt(scan.lines) ?? t.state.lastAt;
     this.settleStatus(t);
+    // O estado do turno ao abrir: o canal paralelo solta a thread que assinou no boot e cujo turno já fechou.
+    this.turnTo(t, t.state.turnOpen === true);
     if (t.inOffice) {
       this.flushBacklog(t);
       this.statusToOffice(t);
@@ -917,9 +948,11 @@ export class CodexSource implements AgentSource, CodexLive {
           break;
         case 'turnStart':
           this.decide(t, 'working', r.at, undefined, live);
+          if (live) this.turnTo(t, true);
           break;
         case 'turnEnd':
           this.decide(t, 'idle', r.at, undefined, live);
+          if (live) this.turnTo(t, false);
           break;
         case 'progress':
           // Algo andou: sai a espera por aprovação; com uma pergunta ainda aberta, volta a esperar a resposta.
@@ -1145,6 +1178,7 @@ export class CodexSource implements AgentSource, CodexLive {
       if (!t) return false;
       t.endedAt = now;
       delete t.lastHookAt;
+      this.turnTo(t, false);
       this.reconcile(t, now);
       this.schedule();
       return true;

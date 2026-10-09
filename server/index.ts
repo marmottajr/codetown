@@ -54,7 +54,7 @@ const names = new NameStore(join(config.dataDir, 'names.json'));
 names.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry } = {};
+const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; codexAppServer?: CodexAppServerService } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -91,7 +91,11 @@ const office = new Office({
 const claude = new ClaudeWatcher({ accounts, office, inDocker: config.inDocker });
 const agents = new SourceSet([claude]);
 const codexDirs = config.codex ? discoverCodexDirs(process.env, config.home) : [];
-const codex = codexDirs.length ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home }) : undefined;
+// O turno de cada thread vai ao canal paralelo (criado mais abaixo, só com ele ligado), que solta a thread de um TUI
+// fechado: lido na hora de cada aviso, pela ligação tardia.
+const codex = codexDirs.length
+  ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home, onTurn: (a, t, open) => late.codexAppServer?.setTurnOpen(a, t, open) })
+  : undefined;
 if (codex) agents.add(codex);
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
@@ -161,6 +165,7 @@ const codexAppServer =
         version: config.version,
       })
     : undefined;
+late.codexAppServer = codexAppServer;
 permissions?.setParallelSink(codexAppServer);
 // Mensagens pelo escritório (plugin habblaud-mensagens): entram na sessão como se você as tivesse digitado, então
 // seguem a mesma trava (e HABBLAUD_MENSAGENS=0 desliga só elas). Ao Codex vão por `codex queue` (messages/codex.ts):

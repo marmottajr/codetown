@@ -32,7 +32,16 @@ afterEach(() => {
  * `locks`: como a sondagem vê os locks do fixture (arquivos vazios que ninguém trava). 'held' (padrão) = Windows/Linux
  * com a trava segura; 'exists' = macOS/Docker (só a existência, estado 'unknown'). `ctx.locks.set` muda uma thread.
  */
-function setup(opts: { names?: string[]; noLocks?: boolean; locks?: 'held' | 'exists'; env?: (dirs: string[]) => NodeJS.ProcessEnv; permissions?: () => ReadonlyMap<string, PermissionRequestInfo> } = {}) {
+function setup(
+  opts: {
+    names?: string[];
+    noLocks?: boolean;
+    locks?: 'held' | 'exists';
+    env?: (dirs: string[]) => NodeJS.ProcessEnv;
+    permissions?: () => ReadonlyMap<string, PermissionRequestInfo>;
+    onTurn?: (account: string, threadId: string, open: boolean) => void;
+  } = {},
+) {
   const locks = fakeLockProber(opts.locks === 'exists' ? 'exists' : 'win32');
   const homes = (opts.names ?? ['.codex']).map((n) => codexHome(n));
   const home = homes[0];
@@ -54,7 +63,7 @@ function setup(opts: { names?: string[]; noLocks?: boolean; locks?: 'held' | 'ex
   });
   late.office = office;
   const dirs = homes.map((h) => h.dir);
-  const source = new CodexSource({ accounts, office, dirs, env: opts.env?.(dirs) ?? {}, home: home.home, now, watch: false, lockProber: locks.prober });
+  const source = new CodexSource({ accounts, office, dirs, env: opts.env?.(dirs) ?? {}, home: home.home, now, watch: false, lockProber: locks.prober, onTurn: opts.onTurn });
   // Para antes de apagar as pastas (nenhum ciclo agendado roda depois).
   cleanups.unshift(() => source.stop());
   const notices: Notice[] = [];
@@ -1561,5 +1570,113 @@ describe('fonte do Codex: subagente que volta em followup_task (G1)', () => {
     ctx.advance(1_500);
     ctx.poll();
     expect(ctx.source.terminalParser(SUB)).toBeUndefined();
+  });
+});
+
+describe('fonte do Codex: turno aberto e fechado para o canal paralelo (onTurn, C1)', () => {
+  type Turn = [account: string, threadId: string, open: boolean];
+  function recorder() {
+    const calls: Turn[] = [];
+    return { calls, onTurn: (account: string, threadId: string, open: boolean) => void calls.push([account, threadId, open]) };
+  }
+
+  it('no boot sai o estado do turno de cada thread (aberto e fechado); depois só as mudanças ao vivo, sem repetir', () => {
+    const rec = recorder();
+    const ctx = setup({ onTurn: rec.onTurn });
+    const at = ctx.now() - 60_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t1', at), R.user(T, 't1', 'u', 'oi', at), R.taskComplete('t1', at + 1_000)]);
+    ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), R.user(C, 's1', 'su', 'Revise o módulo', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    expect(rec.calls).toEqual(expect.arrayContaining([['.codex', T, false], ['.codex', C, true]]));
+    expect(rec.calls).toHaveLength(2);
+    rec.calls.length = 0;
+    // Abre, anda (sem repetir), fecha (o turn_aborted logo depois não repete), abre e é interrompido.
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.taskStarted('t2', ctx.now()), R.user(T, 't2', 'u2', 'de novo', ctx.now())]);
+    ctx.poll();
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.command(T, 't2', 'call_1', 'npm test', { at: ctx.now(), output: 'ok' })]);
+    ctx.poll();
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.taskComplete('t2', ctx.now()), R.turnAborted('t2', ctx.now() + 1)]);
+    ctx.poll();
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.taskStarted('t3', ctx.now()), R.turnAborted('t3', ctx.now() + 1)]);
+    ctx.poll();
+    expect(rec.calls).toEqual([
+      ['.codex', T, true],
+      ['.codex', T, false],
+      ['.codex', T, true],
+      ['.codex', T, false],
+    ]);
+  });
+
+  it('SessionEnd do hook e a saída do escritório fecham o turno; thread só com o lock (sem rollout) sai fechada e abre quando o rollout chega', () => {
+    const rec = recorder();
+    const ctx = setup({ onTurn: rec.onTurn });
+    const at = ctx.now() - 60_000;
+    const E = threadId(5);
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t1', at), R.user(T, 't1', 'u', 'oi', at)]);
+    ctx.home.rollout(C, [R.meta(C, { at, cwd: '/projetos/api' }), R.taskStarted('c1', at), R.user(C, 'c1', 'u', 'outra sessão', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.home.lock(E, at);
+    ctx.source.boot();
+    expect(rec.calls).toEqual(expect.arrayContaining([['.codex', T, true], ['.codex', C, true], ['.codex', E, false]]));
+    expect(rec.calls).toHaveLength(3);
+    rec.calls.length = 0;
+    // SessionEnd: fecha na hora, com o lock ainda lá.
+    expect(ctx.hook({ hook_event_name: 'SessionEnd', session_id: T, cwd: '/projetos/loja', reason: 'other' })).toBe(true);
+    expect(rec.calls).toEqual([['.codex', T, false]]);
+    // C sai do escritório com o turno aberto (lock sumiu, fim da graça do principal).
+    ctx.home.unlock(C);
+    ctx.poll();
+    ctx.advance(MAIN_GONE_GRACE_MS);
+    ctx.poll();
+    expect(ctx.agent(`.codex:${C}`)?.status).toBe('offline');
+    expect(rec.calls).toEqual([
+      ['.codex', T, false],
+      ['.codex', C, false],
+    ]);
+    // E: o primeiro prompt cria o rollout, com o turno aberto.
+    ctx.home.rollout(E, [R.meta(E, { at: ctx.now(), cwd: '/projetos/web' }), R.taskStarted('e1', ctx.now()), R.user(E, 'e1', 'u', 'Comece', ctx.now())]);
+    ctx.advance(3_100);
+    ctx.poll();
+    expect(rec.calls.at(-1)).toEqual(['.codex', E, true]);
+    expect(rec.calls).toHaveLength(3);
+  });
+
+  it('subagente com o turno aberto que some: fechado quando sai, depois da graça do followup_task', () => {
+    const rec = recorder();
+    const ctx = setup({ onTurn: rec.onTurn });
+    const at = ctx.now() - 10_000;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue', at)]);
+    ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), R.user(C, 's1', 'su', 'Revise', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    rec.calls.length = 0;
+    ctx.home.unlock(C);
+    ctx.poll();
+    ctx.advance(SUB_FOLLOWUP_GRACE_MS - 1);
+    ctx.poll();
+    expect(rec.calls).toEqual([]);
+    ctx.advance(1);
+    ctx.poll();
+    expect(rec.calls).toEqual([['.codex', C, false]]);
+  });
+
+  it('o id vai como o Codex o grava (o id do session_meta), mesmo com o lock e o arquivo em maiúsculas', () => {
+    const rec = recorder();
+    const ctx = setup({ onTurn: rec.onTurn });
+    const U = '0199B0C0-0000-7000-8000-0000000000AB';
+    const at = ctx.now() - 60_000;
+    ctx.home.rollout(U, [R.meta(U, { at }), R.taskStarted('t1', at), R.user(U, 't1', 'u', 'oi', at)]);
+    ctx.home.lock(U, at);
+    ctx.source.boot();
+    expect(ctx.agent(`.codex:${U.toLowerCase()}`)?.status).toBe('working');
+    expect(rec.calls).toEqual([['.codex', U, true]]);
   });
 });
