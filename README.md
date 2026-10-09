@@ -395,7 +395,9 @@ com abas para os outros agentes do mesmo projeto.
 Assumir e encerrar pedem um segundo clique; fechar a janela não encerra a sessão. A janela (e a gaveta do
 agente) pode ser arrastada pela barra e redimensionada pelo canto; duplo clique na barra devolve ao lugar.
 Usa o `node-pty` (dependência opcional) e o `claude` do PATH (`HABBLAUD_CLAUDE_BIN` para outro); só aceita pedidos
-do próprio computador e desliga com `HABBLAUD_PTY=0`. **Reiniciar o Habblaud encerra as sessões abertas por ele.**
+do próprio computador e desliga com `HABBLAUD_PTY=0`. Ao reiniciar o Habblaud, as sessões abertas por ele voltam sozinhas (`claude --resume`, lista em
+`<HABBLAUD_DATA_DIR>/ptys.json`; `HABBLAUD_PTY_RESTORE=0` desliga); o turno em andamento se perde, então reinicie
+com os agentes parados.
 O terminal ao vivo continua no histórico de sessões, para subagentes e quando o interativo está desligado.
 
 ### Timelapse do dia

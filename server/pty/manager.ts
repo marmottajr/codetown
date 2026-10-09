@@ -8,7 +8,7 @@
 //
 // Segurança: quem controla um terminal destes executa comandos na máquina. As rotas só aceitam conexões do
 // próprio computador (ver http/pty.ts), o recurso fica desligado no Docker e com HABBLAUD_PTY=0.
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { PtyInfo, PtyStatus } from '../../shared/types';
@@ -99,6 +99,13 @@ interface Pty {
   proc: PtyProcess;
   buffer: string;
   clients: Set<ServerResponse>;
+}
+
+/** Terminal a reabrir quando o servidor voltar (pty/restore.ts grava a lista em <dataDir>/ptys.json). */
+export interface PtyRestoreEntry {
+  sessionId: string;
+  cwd: string;
+  account: string;
 }
 
 export class PtyError extends Error {
@@ -222,6 +229,68 @@ export class PtyManager {
       this.drop(id);
       this.opts.onChange();
     }
+  }
+
+  /** Terminais rodando cuja sessão do Claude Code é conhecida: o que retomar se o servidor reiniciar. */
+  restorable(): PtyRestoreEntry[] {
+    const out: PtyRestoreEntry[] = [];
+    for (const t of this.ptys.values()) {
+      if (t.info.exitedAt !== undefined) continue;
+      const sessionId = this.opts.agent(t.info.agentId)?.sessionId ?? t.info.resumed;
+      if (sessionId && SESSION_ID.test(sessionId)) out.push({ sessionId, cwd: t.info.cwd, account: t.info.account });
+    }
+    return out;
+  }
+
+  /**
+   * Retoma (`claude --resume`) os terminais que estavam abertos antes de o servidor reiniciar. Se a sessão ainda
+   * roda num processo que sobrou (confirmado pelo registro de sessões da conta), ele é encerrado antes, como no
+   * "Assumir". Devolve quantos voltaram.
+   */
+  async restore(entries: readonly PtyRestoreEntry[]): Promise<number> {
+    let n = 0;
+    for (const e of entries) {
+      if (!SESSION_ID.test(e.sessionId)) continue;
+      if ([...this.ptys.values()].some((t) => t.info.exitedAt === undefined && (t.info.resumed === e.sessionId || this.opts.agent(t.info.agentId)?.sessionId === e.sessionId))) continue;
+      try {
+        const pid = this.livePidOf(e.account, e.sessionId);
+        if (pid) {
+          await this.killPid(pid);
+          for (let waited = 0; this.isAlive(pid) && waited < TAKEOVER_WAIT_MS; waited += 100) await this.sleep(100);
+          if (this.isAlive(pid)) throw new Error('o processo antigo da sessão não encerrou');
+        }
+        this.spawn({ cwd: e.cwd, account: e.account, resume: e.sessionId });
+        n++;
+      } catch (err) {
+        log.warn(`Não consegui retomar a sessão ${e.sessionId} em ${e.cwd}: ${errMsg(err)}`);
+      }
+    }
+    return n;
+  }
+
+  /** PID vivo da sessão no registro da conta (<conta>/sessions/<pid>.json), se houver. */
+  private livePidOf(accountId: string, sessionId: string): number | undefined {
+    const account = this.opts.accounts().find((a) => a.id === accountId);
+    if (!account) return undefined;
+    const dir = join(account.dir, 'sessions');
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return undefined;
+    }
+    for (const name of names) {
+      const m = /^(\d+)\.json$/.exec(name);
+      if (!m) continue;
+      try {
+        const reg = JSON.parse(readFileSync(join(dir, name), 'utf8')) as { sessionId?: unknown };
+        const pid = Number(m[1]);
+        if (reg?.sessionId === sessionId && this.isAlive(pid)) return pid;
+      } catch {
+        // registro ilegível: ignora
+      }
+    }
+    return undefined;
   }
 
   stopAll(): void {

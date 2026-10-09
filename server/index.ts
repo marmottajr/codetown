@@ -22,6 +22,7 @@ import { Office } from './model/office';
 import { isDefaultDir } from './accounts/detect';
 import { createPtyRoutes } from './http/pty';
 import { findExecutable, loadPty, PtyManager, type SpawnPty } from './pty/manager';
+import { PtyRestore } from './pty/restore';
 import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
@@ -178,6 +179,9 @@ const ptys = spawnPty
   : undefined;
 late.ptys = ptys;
 late.ptyOff = ptyOff;
+// Reinício do servidor (rebuild, atualização) não perde os terminais: grava a lista e retoma ao subir.
+// HABBLAUD_PTY_RESTORE=0 não retoma (a lista continua sendo gravada).
+const ptyRestore = ptys ? new PtyRestore(join(config.dataDir, 'ptys.json'), ptys) : undefined;
 
 if (config.demo) office.setDemo(true);
 // As fontes síncronas (a do Claude Code) terminam o boot aqui, antes de o hub começar a transmitir.
@@ -190,6 +194,7 @@ if (timeline) {
 }
 permissions?.start();
 messages?.start();
+void ptyRestore?.start(!/^(0|false|no|off)$/i.test(process.env.HABBLAUD_PTY_RESTORE?.trim() ?? ''));
 stats.start();
 updates.start();
 const ticker = setInterval(() => {
@@ -332,6 +337,7 @@ function shutdown(signal: string): void {
   timeline?.stop();
   permissions?.stop();
   messages?.stop();
+  ptyRestore?.stop();
   ptys?.stopAll();
   updates.stop();
   names.flush();
