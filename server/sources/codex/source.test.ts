@@ -1457,6 +1457,29 @@ describe('fonte do Codex: corte de inatividade (C3)', () => {
     ctx.poll();
     expect(ctx.agent()?.status).toBe('idle');
     expect(ctx.notices.filter((n) => n.text.includes('concluiu'))).toHaveLength(1);
+    expect(ctx.office.detail(KEY)!.history.filter((a) => a.id.includes('#done:'))).toHaveLength(1);
+  });
+
+  it('SubagentStop do hook e depois a resposta final e o task_complete do subagente, lidos no mesmo ciclo: termina done, com um "entregou" só', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const SUB = `.codex:${C}`;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue', at)]);
+    const sub = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), R.user(C, 's1', 'su', 'Revise', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)?.status).toBe('working');
+    ctx.advance(1_000);
+    ctx.hook({ hook_event_name: 'SubagentStop', session_id: T, agent_id: C, agent_type: 'worker', cwd: '/projetos/loja', turn_id: 's1' });
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    ctx.advance(10);
+    ctx.home.append(sub, [R.agent(C, 's1', 'sa', 'Revisado.', ctx.now()), R.taskComplete('s1', ctx.now() + 1)]);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    expect(ctx.notices.filter((n) => n.text.includes('entregou'))).toHaveLength(1);
+    expect(ctx.office.detail(SUB)!.history.filter((a) => a.id.includes('#done:'))).toHaveLength(1);
   });
 
   it('só existência: subagente 31 min sem escrita → idle (entrega); voltou a escrever no mesmo turno → working', () => {

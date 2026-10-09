@@ -40,7 +40,8 @@
 // task_started do dono, o thread fechar ou SHELL_EXPIRE_MS depois do fim do turno encerram a espera sem 'ShellDone'.
 // Com a trava segura o turno aberto continua 'working' sem prazo; sem sondagem, 'working' sem nenhuma escrita por
 // WORKING_QUIET_MS vira 'idle' (principal e subagente), e uma linha nova do turno ainda aberto volta a 'working' (ou a
-// 'waiting', com pergunta aberta). Ao abrir um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos
+// 'waiting', com pergunta aberta), decidido no fim de cada leitura: a resposta final lida junto com o task_complete
+// depois de um Stop não traz o agente de volta. Ao abrir um rollout: o começo (session_meta, título) e, do fim para trás, pelo menos
 // `tailBytes` e até a fronteira de turno (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de
 // onde a varredura parou e o começo anterior a ela é lido depois, em segundo plano (números e linha do tempo longa).
 // Boot síncrono, com endBoot num `finally`.
@@ -226,6 +227,8 @@ interface ThreadTracker {
   hookSpawned?: boolean;
   /** Último estado do turno avisado ao onTurn por este tracker (undefined = nada ainda). */
   turnSent?: boolean;
+  /** Horário da última linha ao vivo que andou com o tracker ocioso e o turno aberto, na leitura em curso. */
+  reviveAt?: number;
   watcher?: FSWatcher;
 }
 
@@ -862,6 +865,7 @@ export class CodexSource implements AgentSource, CodexLive {
         return;
       }
       for (const line of r.lines) this.take(t, line, true);
+      this.reviveIfOpen(t);
       if (r.lines.length) this.applySummary(t);
       if (!r.more) break;
     }
@@ -983,11 +987,10 @@ export class CodexSource implements AgentSource, CodexLive {
           break;
       }
     }
-    // Turno ainda aberto que o corte de inatividade (ou um Stop) deu como ocioso e voltou a andar (um comando longo que
-    // escreve de novo): trabalhando, ou esperando a resposta se houver pergunta aberta.
+    // Turno ainda aberto que o corte de inatividade (ou um Stop) deu como ocioso e voltou a andar: anotado aqui e
+    // decidido no fim da leitura (reviveIfOpen), quando o resto do turno lido junto já foi aplicado.
     if (live && t.status === 'idle' && t.state.turnOpen === true && (r.activities.length || r.signals.some((s) => s.type === 'progress'))) {
-      if (t.state.asking.size) this.decide(t, 'waiting', r.at, QUESTION_WAIT, live);
-      else this.decide(t, 'working', r.at, undefined, live);
+      t.reviveAt = r.at;
     }
     if (!live || !t.inOffice) {
       if (r.activities.length || r.signals.some((s) => s.type === 'github')) {
@@ -997,6 +1000,20 @@ export class CodexSource implements AgentSource, CodexLive {
       return;
     }
     this.toOffice(t, r, true);
+  }
+
+  /**
+   * Fim de uma leitura: o turno que voltou a andar com o tracker ocioso e continua aberto sai do 'idle' (trabalhando, ou
+   * esperando a resposta se houver pergunta aberta). A resposta final e o task_complete lidos juntos depois de um Stop
+   * fecham o turno antes disso: o agente não volta por uma linha (nem entrega duas vezes).
+   */
+  private reviveIfOpen(t: ThreadTracker): void {
+    const at = t.reviveAt;
+    if (at === undefined) return;
+    delete t.reviveAt;
+    if (t.status !== 'idle' || t.state.turnOpen !== true) return;
+    if (t.state.asking.size) this.decide(t, 'waiting', at, QUESTION_WAIT, true);
+    else this.decide(t, 'working', at, undefined, true);
   }
 
   private toOffice(t: ThreadTracker, r: CodexLineResult, live: boolean): void {
