@@ -678,3 +678,57 @@ describe('multiagente v2: SubAgentActivity, spawn_agent e agent_message (P11)', 
     expect(state.title).toBe('Tarefa do filho');
   });
 });
+
+describe('Extension (web.search, clock.sleep, image_gen) e web::run (P12)', () => {
+  const ext = (id: string, kind: string, extra: Record<string, unknown> = {}) => itemLine(T, 't', { type: 'Extension', kind, id, ...extra }, AT);
+  const usingRunOrSleep = (results: CodexLineResult[]) => acts(results).some((a) => /^Usando (run|sleep)/.test(a.text));
+
+  it('itens de extensão viram atividades próprias e contam como ferramenta; o clock.sleep cai na mesma atividade do function_call; tipo desconhecido não gera nada', () => {
+    const { state, results } = feed([
+      R.meta(T),
+      ext('exec-1', 'web.search', { query: 'vitest each', action: { type: 'search', query: 'vitest each', queries: null }, results: [] }),
+      ext('exec-2', 'web.search', { action: { type: 'open_page', url: 'https://vitest.dev/api/' } }),
+      R.functionCall('call_s', 'sleep', { duration_ms: 15_000 }, AT, 'clock'),
+      ext('call_s', 'clock.sleep', { durationMs: 15_000 }),
+      ext('exec-3', 'image_gen.generation', { status: 'completed', revisedPrompt: `Um gato de pixel art ${GHP}`, result: 'x', transparentBackground: null, failure: null, savedPath: 'imagens/gato.png' }),
+      ext('exec-4', 'outra.extensao', {}),
+    ]);
+    expect(acts(results).map((a) => [a.id, a.kind, a.text, a.tool])).toEqual([
+      ['acc:t#exec-1', 'web', 'Pesquisando “vitest each”', 'WebSearch'],
+      ['acc:t#exec-2', 'web', 'Lendo vitest.dev', 'WebFetch'],
+      ['acc:t#call_s', 'wait', 'Esperando um pouco', 'clock.sleep'],
+      ['acc:t#call_s', 'wait', 'Esperando um pouco', 'clock.sleep'],
+      ['acc:t#exec-3', 'other', 'Gerando imagem', 'image_gen'],
+    ]);
+    expect(acts(results)[3].durationMs).toBe(15_000);
+    expect(acts(results)[4].detail).toBe('Um gato de pixel art gh*_***');
+    expect(state.stats.toolCalls).toBe(4);
+    expect(state.pending.size).toBe(0);
+    expect(usingRunOrSleep(results)).toBe(false);
+  });
+
+  it('web::run (function_call run no namespace web): busca, página ou busca genérica, nunca "Usando run"', () => {
+    const { results } = feed([
+      R.meta(T),
+      R.functionCall('call_w1', 'run', { search_query: [{ q: 'formato do rollout' }], response_length: 'short' }, AT, 'web'),
+      R.functionCall('call_w2', 'run', { open: [{ ref_id: 'https://example.com/docs' }] }, AT, 'web'),
+      R.functionCall('call_w3', 'run', { search_query: ['texto solto'] }, AT, 'web'),
+      R.functionCall('call_w4', 'run', {}, AT, 'web'),
+    ]);
+    expect(acts(results).map((a) => [a.id, a.kind, a.text, a.tool])).toEqual([
+      ['acc:t#call_w1', 'web', 'Pesquisando “formato do rollout”', 'WebSearch'],
+      ['acc:t#call_w2', 'web', 'Lendo example.com', 'WebFetch'],
+      ['acc:t#call_w3', 'web', 'Pesquisando “texto solto”', 'WebSearch'],
+      ['acc:t#call_w4', 'web', 'Pesquisando na web', 'WebSearch'],
+    ]);
+    expect(usingRunOrSleep(results)).toBe(false);
+    // Outros namespaces continuam como estão (só web e clock ganham nome composto).
+    expect(describeCodexTool('load_workspace_dependencies', {}, 'codex_app').desc.text).toBe('Usando load_workspace_dependencies');
+  });
+
+  it('no legacy, o function_call já contou: o Extension do clock.sleep não conta de novo nem muda o formato', () => {
+    const { state } = feed([R.meta(T, { history: null }), R.functionCall('call_s', 'sleep', { duration_ms: 1_000 }, AT, 'clock'), ext('call_s', 'clock.sleep', { durationMs: 1_000 })]);
+    expect(state.stats.toolCalls).toBe(1);
+    expect(state.mode).toBe('legacy');
+  });
+});

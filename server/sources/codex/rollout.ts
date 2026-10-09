@@ -13,6 +13,9 @@
 // Tokens: o `total_token_usage` do token_count é cumulativo e o cache JÁ está dentro de input (não soma de novo).
 // Herança: só o 1º session_meta vale; num subagente com fork, as linhas com ordinal < subagent_history_start_ordinal
 // (e o session_meta do pai, copiado logo depois do cabeçalho) são do pai e ficam de fora.
+// Tratamento próprio: request_user_input sem output (sinal 'asking'; o output ou o fim do turno dão 'answered'),
+// tools.update_plan no JS do code mode, filhos do multiagente v2 (SubAgentActivity started conta e dá o sinal 'spawn';
+// a tarefa que chega por agent_message é o título do filho) e extensões (web.search, clock.sleep, image_gen, web::run).
 // Tipos de linha desconhecidos são ignorados; uma linha inválida nunca derruba a leitura.
 import { describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../../shared/activity';
 import type { GitHubEvent } from '../../../shared/github';
@@ -399,13 +402,45 @@ function looseJson(literal: string): string {
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
+/** Namespaces cujas ferramentas ganham nome composto (`web::run` → `web.run`, `clock::sleep` → `clock.sleep`). */
+const DOTTED_NAMESPACES = new Set(['web', 'clock']);
+
+function sleepDesc(): ActivityDescription {
+  return { kind: 'wait', icon: '⏳', text: 'Esperando um pouco' };
+}
+
+/** Busca na web (Extension web.search): página aberta vira leitura (WebFetch); senão a busca (WebSearch). */
+function webDesc(action: unknown, query?: string): { desc: ActivityDescription; tool: string } {
+  const a = rec(action) ?? {};
+  const url = str(a.url);
+  if ((a.type === 'open_page' || a.type === 'find_in_page') && url) return { desc: describeTool('WebFetch', { url }), tool: 'WebFetch' };
+  const q = str(a.query) ?? (Array.isArray(a.queries) ? str(a.queries[0]) : undefined) ?? query;
+  return { desc: describeTool('WebSearch', { query: q }), tool: 'WebSearch' };
+}
+
+/** web::run: a 1ª busca de `search_query[]` ({q} ou texto) ou a 1ª página de `open[]` ({ref_id}/{url} ou texto). */
+function webRunDesc(input: Rec): { desc: ActivityDescription; tool: string } {
+  const first = (v: unknown, keys: string[]): string | undefined => {
+    const e: unknown = Array.isArray(v) ? v[0] : undefined;
+    if (typeof e === 'string') return str(e);
+    const o = rec(e);
+    return o ? keys.map((k) => str(o[k])).find((x) => x !== undefined) : undefined;
+  };
+  const query = first(input.search_query, ['q', 'query']);
+  if (query) return { desc: describeTool('WebSearch', { query }), tool: 'WebSearch' };
+  const url = first(input.open, ['ref_id', 'url']);
+  if (url) return { desc: describeTool('WebFetch', { url }), tool: 'WebFetch' };
+  return { desc: describeTool('WebSearch', {}), tool: 'WebSearch' };
+}
+
 /**
  * Atividade de uma ferramenta do Codex pelo nome que ela tem no rollout, no hook ou no app (exec_command, shell,
  * Bash, apply_patch, mcp__…, spawn_agent, exec do code mode...). `name` volta normalizado (Bash, Edit, Write,
  * mcp__…) para o Activity.tool.
  */
 export function describeCodexTool(rawName: string, input: Rec, namespace?: string): { desc: ActivityDescription; tool: string } {
-  const name = namespace && /^mcp__/.test(namespace) ? `${namespace.replace(/_+$/, '')}__${rawName}` : rawName;
+  const name =
+    namespace && /^mcp__/.test(namespace) ? `${namespace.replace(/_+$/, '')}__${rawName}` : namespace && DOTTED_NAMESPACES.has(namespace) ? `${namespace}.${rawName}` : rawName;
   switch (name) {
     case 'Bash':
     case 'shell':
@@ -461,6 +496,10 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
     case 'request_user_input':
       // Pergunta síncrona: o turno para até você responder (kind 'ask': o escritório não sobrepõe o "Precisa de você").
       return { desc: { ...describeTool('AskUserQuestion', { questions: input.questions }), text: 'Esperando você responder' }, tool: name };
+    case 'web.run':
+      return webRunDesc(input);
+    case 'clock.sleep':
+      return { desc: sleepDesc(), tool: name };
     default:
       return { desc: describeTool(name, input), tool: name };
   }
@@ -931,6 +970,8 @@ class RolloutLineParser {
       }
       case 'SubAgentActivity':
         return this.subAgentActivity(id, item);
+      case 'Extension':
+        return this.extension(id, item);
       case 'Plan':
         this.sawPaginated();
         this.push(describeTool('ExitPlanMode', {}), { key: id, tool: 'Plan' });
@@ -988,6 +1029,30 @@ class RolloutLineParser {
     if (seen) return; // a atividade de delegar já saiu com o spawn_agent (mesmo id)
     const { desc, tool } = describeCodexTool('spawn_agent', { message: title || undefined });
     this.push(desc, { key: id, tool, callId: id });
+  }
+
+  /**
+   * Item de extensão (camelCase): web.search (busca no code mode), clock.sleep (id = call_id do function_call: cai na
+   * mesma atividade) e image_gen.*. Outro tipo não gera nada. No legacy o function_call já contou a ferramenta (o
+   * Extension do clock.sleep também é gravado lá); não chama sawPaginated pelo mesmo motivo.
+   */
+  private extension(id: string | undefined, item: Rec): void {
+    const kind = str(item.kind) ?? '';
+    let d: { desc: ActivityDescription; tool: string };
+    if (kind === 'web.search') d = webDesc(item.action, str(item.query));
+    else if (kind === 'clock.sleep') d = { desc: sleepDesc(), tool: 'clock.sleep' };
+    else if (kind.startsWith('image_gen')) {
+      const prompt = str(item.revisedPrompt);
+      const desc: ActivityDescription = { kind: 'other', icon: '🎨', text: 'Gerando imagem' };
+      if (prompt) desc.detail = truncate(maskSecrets(prompt.slice(0, 1_200)), 300);
+      d = { desc, tool: 'image_gen' };
+    } else return;
+    if (this.s.mode !== 'legacy') {
+      this.s.stats.toolCalls++;
+      this.changed();
+    }
+    this.done(id);
+    this.push(d.desc, { key: id, tool: d.tool, callId: id, durationMs: kind === 'clock.sleep' ? num(item.durationMs) : undefined });
   }
 
   /** Chamada concluída: sai da lista das em andamento e tira a espera por aprovação. */
