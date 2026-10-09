@@ -35,7 +35,8 @@ export interface CodexHookAuth {
 }
 
 /**
- * Confere uma chamada do hook do Codex, antes de ler o corpo (o Host local a rota já conferiu):
+ * Confere uma chamada do hook do Codex (o Host local a rota já conferiu). Só lê cabeçalhos e o socket: a rota dos eventos
+ * chama antes de ler o corpo; uma rota que só sabe que a chamada é do Codex pelo corpo pode chamar depois do readJson.
  * - 'proof': nonce e prova do hook válidos; a resposta já leva `x-habblaud-proof` = keyProof(key, 'server', nonce);
  * - 'loopback': sem prova válida, mas pela conexão do próprio computador (aceita, sem a prova do servidor);
  * - 'denied': nem uma coisa nem outra (a rota responde 403).

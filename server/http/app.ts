@@ -36,8 +36,9 @@ export interface ApiDeps {
   /**
    * Rotas de /api/permissions (responder pelo escritório, server/permissions/http.ts). Só existem com bind
    * local (ServerConfig.terminal); a trava do Host local é conferida aqui antes de chamá-las. `codexHook` é a guarda
-   * das chamadas do hook do Codex, a mesma de POST /api/codex/events (um conjunto só de nonces): as rotas que o hook do
-   * Codex chama conferem com verifyHookCall (codex/http.ts) e recusam 'denied' com 403.
+   * das chamadas do hook do Codex, a mesma de POST /api/codex/events (um conjunto só de nonces): só as chamadas do hook
+   * do Codex (provider 'codex') conferem com verifyHookCall (codex/http.ts) e recusam 'denied' com 403. As do hook do
+   * Claude nunca: no Docker elas também chegam pelo gateway e sem prova, e seguem só a trava de sempre.
    */
   permissions?: (req: IncomingMessage, res: ServerResponse, path: string, codexHook: CodexHookAuth) => void;
   /**
