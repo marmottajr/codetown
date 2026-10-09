@@ -1,6 +1,6 @@
 // Construtor de áreas em coordenadas LOCAIS (tiles relativos ao canto da área).
 // Converte tudo para coordenadas absolutas e registra spots de forma consistente.
-import { FURNITURE, type Dir, type FloorKind, type FurnitureKind, type WallStyle } from '../../art/api';
+import { furnitureDef, type Dir, type FloorKind, type FurnitureKind, type WallStyle } from '../../art/api';
 import { FOOT_DX, FOOT_DY, TILE } from '../constants';
 import type { AreaKind, AreaLayout, Doorway, FurniturePlacement, SpotDef, SpotKind, TileRect } from './types';
 
@@ -172,12 +172,12 @@ export class AreaBuilder {
 
 /** Tiles bloqueados por um móvel de chão. */
 export function furnitureBlocks(kind: FurnitureKind): boolean {
-  const def = FURNITURE[kind];
+  const def = furnitureDef(kind);
   return def.mount === 'floor' && def.blocks;
 }
 
 /** Tiles de assento (caminháveis, mas evitados pelo A*). */
 export function furnitureIsSeat(kind: FurnitureKind): boolean {
-  const def = FURNITURE[kind];
+  const def = furnitureDef(kind);
   return def.mount === 'floor' && !!def.seat;
 }

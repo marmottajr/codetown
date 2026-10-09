@@ -1,10 +1,11 @@
 // Montagem do prédio: núcleo + corredor + salas de projeto -> grade de caminhabilidade e spots.
-import { FURNITURE } from '../../art/api';
+import { furnitureDef } from '../../art/api';
 import { BUILDING_H, COL_W } from '../constants';
 import { BLOCKED, FREE, SEAT, WalkGrid } from '../path/grid';
 import { furnitureBlocks, furnitureIsSeat } from './builder';
 import { layoutCafe, layoutLounge, layoutReception, layoutRestroom } from './core';
 import { layoutCorridor } from './corridor';
+import { applyAreaDesign, designPack } from './custom';
 import { buildingRect } from './geometry';
 import type { AreaLayout, SpotDef, TileRect } from './types';
 
@@ -18,11 +19,13 @@ export interface BuildingLayout {
   spots: SpotDef[];
 }
 
-let coreCache: AreaLayout[] | null = null;
+let coreCache: { version: number; areas: AreaLayout[] } | null = null;
 
-/** Áreas fixas do núcleo (calculadas uma vez). */
+/** Áreas fixas do núcleo (calculadas uma vez por versão dos assets do usuário, que podem ajustá-las). */
 export function coreAreas(): AreaLayout[] {
-  return (coreCache ??= [layoutReception(), layoutRestroom(), layoutCafe(), layoutLounge()]);
+  const version = designPack().version;
+  if (coreCache?.version !== version) coreCache = { version, areas: [layoutReception(), layoutRestroom(), layoutCafe(), layoutLounge()].map(applyAreaDesign) };
+  return coreCache.areas;
 }
 
 /** Marca na grade as células caminháveis de uma área, os bloqueios e os assentos. */
@@ -30,7 +33,7 @@ export function paintArea(grid: WalkGrid, area: AreaLayout): void {
   for (const r of area.walkable) grid.fill(r.x, r.y, r.w, r.h, FREE);
   for (const r of area.blocked ?? []) grid.fill(r.x, r.y, r.w, r.h, BLOCKED);
   for (const f of area.furniture) {
-    const def = FURNITURE[f.kind];
+    const def = furnitureDef(f.kind);
     if (def.mount !== 'floor') continue;
     const { w, h } = def.footprint;
     if (furnitureBlocks(f.kind)) grid.fill(f.tx, f.ty, w, h, BLOCKED);
@@ -48,7 +51,7 @@ export function buildWalkGrid(cols: number, areas: readonly AreaLayout[], versio
 
 export function assembleBuilding(cols: number, rooms: readonly AreaLayout[], version = 0): BuildingLayout {
   const core = coreAreas();
-  const corridor = layoutCorridor(cols);
+  const corridor = applyAreaDesign(layoutCorridor(cols));
   const all = [...core, corridor, ...rooms];
   const grid = buildWalkGrid(cols, all, version);
   const spots: SpotDef[] = [];

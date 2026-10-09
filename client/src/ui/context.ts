@@ -11,10 +11,31 @@ export interface UiComponent {
 
 export type PanelName = 'sidebar' | 'feed';
 
+/**
+ * Uma janela de terminal só, por agente: o interativo quando a sessão roda dentro do Habblaud (pty); senão o
+ * de leitura (com "Assumir daqui" para passar a ser interativo). Montado em ui/index.ts.
+ */
+export interface TerminalRouter {
+  /** Agente com o terminal aberto (qualquer um dos dois), ou null. */
+  readonly openAgentId: string | null;
+  open(agentId: string, opener?: HTMLElement | null): void;
+  toggle(agentId: string, opener?: HTMLElement | null): void;
+  /** O terminal deste agente seria o interativo. */
+  interactive(agentId: string): boolean;
+  /** Dá para abrir algum terminal agora (acesso local, fora do timelapse). */
+  readonly available: boolean;
+  /** Terminal interativo ligado (abrir sessões novas, assumir, encerrar). */
+  readonly interactiveEnabled: boolean;
+  /** Sessão nova do Claude Code na pasta, aberta no terminal interativo. */
+  newSession(cwd: string, account?: string): Promise<void>;
+}
+
 export type HelpSection = 'usage' | 'codex';
 
 export interface UiContext {
   readonly store: OfficeStore;
+  /** Janela de terminal (definida depois que os painéis existem). */
+  terminals?: TerminalRouter;
   readonly world: WorldApi;
   readonly root: HTMLElement;
   readonly prefs: Readonly<UiPrefs>;

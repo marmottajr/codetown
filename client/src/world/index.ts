@@ -4,7 +4,9 @@ import * as artModule from '../art';
 import { TILE, type ArtModule } from '../art/api';
 import type { OfficeStore } from '../net/store';
 import { DEFAULT_WORLD_OPTIONS, type Selection, type SocialEvent, type SoundCue, type WorldApi, type WorldOptions, type WorldPlayback } from './api';
-import { loadWorldAssets, type WorldAssets } from './assets';
+import { loadCustomSprites } from '../art/custom';
+import { loadDesignPack, loadWorldAssets, type WorldAssets } from './assets';
+import { setDesignPack } from './layout/custom';
 import { Camera, overviewFrame } from './camera';
 import { createDebug, type WorldDebug } from './debug';
 import { BUILDING_H, COL_W } from './constants';
@@ -197,9 +199,29 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
 
   // ------------------------------------------------------------------ dados
 
+  /**
+   * Assets do usuário (salas e itens do Arquiteto): quando a versão do snapshot muda, baixa o pacote, prepara os
+   * sprites e recomeça o mundo com as salas novas (todos já nos lugares, como na carga inicial). Fora do timelapse.
+   */
+  let designVersion = 0;
+  const syncDesigns = () => {
+    const want = store.snapshot?.meta.assets?.version;
+    if (!want || want === designVersion || store.replaying || playback) return;
+    designVersion = want;
+    void loadDesignPack(abort.signal).then(async (pack) => {
+      if (!pack || designVersion !== want || playback) return;
+      await loadCustomSprites(pack.items);
+      if (designVersion !== want || playback) return;
+      setDesignPack(pack);
+      rebuild();
+      onSnapshot();
+    });
+  };
+
   const onSnapshot = () => {
     const snap = store.snapshot;
     if (!snap) return;
+    syncDesigns();
     try {
       // No timelapse, os horários do snapshot vão para o relógio do mundo (world/playback.ts).
       if (playback) sim.applySnapshot(rebaseSnapshot(snap, worldNow - snap.serverTime), worldNow);

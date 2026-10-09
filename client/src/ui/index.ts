@@ -10,8 +10,9 @@ import './styles.css';
 
 import type { OfficeStore } from '../net/store';
 import type { Selection, WorldApi } from '../world/api';
-import type { PanelName, UiComponent, UiContext } from './context';
+import type { PanelName, TerminalRouter, UiComponent, UiContext } from './context';
 import { DayLauncher } from './daystats-launcher';
+import { StudioPanel } from './studio';
 import { h } from './dom';
 import { Drawer } from './drawer';
 import { FeedPanel } from './feed';
@@ -28,6 +29,7 @@ import { SettingsPopover } from './settings';
 import { Sidebar } from './sidebar';
 import { SoundControl } from './sound';
 import { TERMINAL_UNAVAILABLE_HINT, TerminalPanel } from './terminal';
+import { PtyPanel } from './pty';
 import { TimelapsePlayer } from './timelapse';
 import { Toasts } from './toasts';
 import { UpdateToaster } from './version';
@@ -148,11 +150,44 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   const notifier = new Notifier(ctx, sound.board);
   topbar = new TopBar(ctx);
   sidebar = new Sidebar(ctx);
-  const terminal = new TerminalPanel(ctx);
+  // Terminal interativo (Claude Code de verdade, dentro do navegador): abrir, assumir e encerrar sessões.
+  const pty = new PtyPanel(ctx);
+  const terminal = new TerminalPanel(ctx, pty);
   // Histórico de sessões (terminal): botão no grupo dos painéis da barra superior.
   const history = new HistoryPopover(ctx, terminal);
   topbar.panelGroup.prepend(history.button);
-  drawer = new Drawer(ctx, terminal);
+  // Terminal do agente: o interativo se a sessão roda aqui; senão o de leitura, com "Assumir daqui" para
+  // continuar nesta janela (sem o de leitura, o interativo mostra o aviso de "em outro terminal").
+  pty.onShow = () => terminal.close();
+  const router: TerminalRouter = {
+    get openAgentId() {
+      return pty.isOpen ? pty.agentId : terminal.agentId;
+    },
+    get available() {
+      return pty.enabled || (!!store.snapshot?.meta.terminal && !store.replaying);
+    },
+    interactive: (id) => !!pty.ptyOf(id),
+    get interactiveEnabled() {
+      return pty.enabled;
+    },
+    newSession: (cwd, account) => pty.newSession(cwd, account),
+    open(id, opener) {
+      const readOnly = !!store.snapshot?.meta.terminal && !store.replaying;
+      if (pty.ptyOf(id) || (pty.enabled && !readOnly && ctx.agent(id)?.kind === 'main')) pty.openAgent(id);
+      else {
+        pty.close();
+        terminal.open(id, opener);
+      }
+    },
+    toggle(id, opener) {
+      if (router.openAgentId === id) {
+        pty.close();
+        terminal.close();
+      } else router.open(id, opener);
+    },
+  };
+  ctx.terminals = router;
+  drawer = new Drawer(ctx, terminal, pty);
   const feed = new FeedPanel(ctx);
   const toasts = new Toasts(ctx);
   const updateToaster = new UpdateToaster(ctx, (n) => toasts.push(n));
@@ -160,6 +195,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   help = new HelpDialog();
   const day = new DayLauncher(ctx, (el) => root.append(el));
   topbar.addPanelButton(day.button);
+  // Arquiteto: salas e itens criados a pedido por um Claude Code na pasta de assets (ui/studio.ts).
+  const studio = new StudioPanel(ctx);
+  topbar.addPanelButton(studio.button);
   const empty = new EmptyState(ctx);
   const banner = new ConnectionBanner(ctx);
   const update = new UpdateBanner(store);
@@ -169,15 +207,16 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
-  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, live, splash.el);
+  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, tip.el, settings.el, history.el, help.el, studio.el, live, splash.el);
   area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
     sidebar: panels.sidebar,
     feed: panels.feed,
-    drawer: selection !== null,
+    drawer: selection !== null && !drawer.floating,
     narrow: ctx.isNarrow(),
   }));
+  drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, studio, updateToaster];
 
   // ---------------------------------------------------------------- renderização agrupada por quadro
   let rafId = 0;
@@ -211,7 +250,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   function applyLayout(opts: { refocus?: boolean } = {}): void {
     root.classList.toggle('has-sidebar', panels.sidebar);
     root.classList.toggle('has-feed', panels.feed);
-    root.classList.toggle('has-drawer', selection !== null);
+    root.classList.toggle('has-drawer', selection !== null && !drawer.floating);
     root.classList.toggle('is-narrow', ctx.isNarrow());
     area.sync(opts);
   }
@@ -329,9 +368,13 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
     }
   }
 
-  /** Atalho T: abre o terminal do agente selecionado (ou fecha o que estiver aberto). */
+  /**
+   * Atalho T: abre a janela de terminal do agente selecionado (ver `router`) ou fecha a que estiver aberta.
+   */
   function toggleTerminal(): void {
     const id = selection?.type === 'agent' ? selection.id : null;
+    if (id !== null && pty.enabled && ctx.agent(id)?.kind === 'main') return router.toggle(id);
+    if (id === null && pty.isOpen) return pty.close();
     if (terminal.isOpen && (id === null || terminal.agentId === id)) terminal.close();
     else if (id === null) ctx.announce('Selecione um agente para abrir o terminal.');
     else if (!store.snapshot?.meta.terminal) ctx.announce(`${TERMINAL_UNAVAILABLE_HINT}.`);
