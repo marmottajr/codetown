@@ -92,8 +92,9 @@ mudou.
   `~/.habblaud/codex-hook.key`. Rode `npm run docker:up` de novo.
 - O hook do Codex aceitava a decisão de qualquer programa que ocupasse a porta do Habblaud com ele parado. Agora ele
   só decide com a prova da mesma chave. Depois de atualizar, reinicie o Habblaud.
-- Um token cortado ao meio podia escapar da máscara de segredos nos textos que o Codex mostra (prompts, comandos,
-  buscas, perguntas, plano, títulos, detalhes de erro e pedidos de subagente): a máscara agora vem antes do corte.
+- Um token cortado ao meio podia escapar da máscara de segredos nos textos que o Claude Code e o Codex mostram
+  (prompts, comandos, buscas, perguntas, plano, tarefas, títulos, detalhes de erro, pedidos de subagente, mensagens,
+  respostas, links do GitHub e o cartão de permissão do Codex): a máscara agora vem antes de qualquer corte.
 
 ## [0.8.0] - 2026-10-09
 
