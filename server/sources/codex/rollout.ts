@@ -12,6 +12,7 @@
 // andamento, o hook PreToolUse e o item concluído caem na mesma atividade.
 // Tokens: o `total_token_usage` do token_count é cumulativo e o cache JÁ está dentro de input (não soma de novo).
 // Tipos de linha desconhecidos são ignorados; uma linha inválida nunca derruba a leitura.
+import { fileURLToPath } from 'node:url';
 import { describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../../shared/activity';
 import type { GitHubEvent } from '../../../shared/github';
 import type { AccountUsage, Activity, AgentStats, TaskItem, TaskStatus, UsageWindow } from '../../../shared/types';
@@ -217,15 +218,24 @@ export function fileChanges(raw: unknown): FileChangeEntry[] {
   return out;
 }
 
-/** Caminho de um `file://` (cwd e caminhos do Codex vêm como URL). */
+/** Caminho de um `file://` (cwd e caminhos do Codex vêm como URL). Drive ou host UNC viram caminho
+ *  Windows: o rollout pode ter sido gravado em outro sistema. */
 export function pathFromUri(v: unknown): string | undefined {
   const s = str(v);
   if (!s) return undefined;
   if (!s.startsWith('file://')) return s;
   try {
-    return decodeURIComponent(new URL(s).pathname);
+    const url = new URL(s);
+    const path = decodeURIComponent(url.pathname);
+    // localhost o parser do file:// já esvazia; host que sobra é UNC. Letra de drive também é Windows.
+    const windows = (url.hostname !== '' && url.hostname !== 'localhost') || /^\/[A-Za-z]:/.test(path);
+    return fileURLToPath(url, { windows });
   } catch {
-    return s.slice('file://'.length);
+    try {
+      return decodeURIComponent(new URL(s).pathname);
+    } catch {
+      return s.slice('file://'.length);
+    }
   }
 }
 
