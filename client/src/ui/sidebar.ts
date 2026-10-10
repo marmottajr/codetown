@@ -7,7 +7,7 @@ import { moveRoom, orderRooms } from './roomorder';
 import { h, iconButton, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle } from './dom';
 import { plural, shortPath } from './format';
 import { ICONS } from './icons';
-import { groupRooms, type AgentNode, type RoomGroup } from './model';
+import { groupRooms, subLevels, type AgentNode, type RoomGroup } from './model';
 import { officeIsEmpty } from './overlays';
 import { createAgentRow, updateAgentRow } from './rows';
 import { createAccountChip, createProgress, updateAccountChip, updateProgress } from './widgets';
@@ -31,6 +31,8 @@ interface NodeRefs {
   subsWrap: HTMLElement;
   subsCaption: HTMLElement;
   subs: KeyedList<AgentInfo>;
+  /** Nível de recuo de cada sub (1 = filho direto do principal). */
+  levels: ReadonlyMap<string, number>;
 }
 
 export class Sidebar implements UiComponent {
@@ -366,9 +368,12 @@ export class Sidebar implements UiComponent {
     const subs = new KeyedList<AgentInfo>(subsList, {
       key: (a) => a.id,
       create: (a) => h('li', { class: 'ui-subs__item' }, createAgentRow(a, (id) => this.pick(id), 'sm')),
-      update: (li2, a) => this.updateRow(li2.firstElementChild as HTMLElement, a),
+      update: (li2, a) => {
+        this.updateRow(li2.firstElementChild as HTMLElement, a);
+        setStyleVar(li2, '--ui-sub-level', String(this.nodeRefs.get(li)?.levels.get(a.id) ?? 1));
+      },
     });
-    this.nodeRefs.set(li, { row, head, subsWrap, subsCaption, subs });
+    this.nodeRefs.set(li, { row, head, subsWrap, subsCaption, subs, levels: new Map() });
     return li;
   }
 
@@ -383,6 +388,7 @@ export class Sidebar implements UiComponent {
       const shown = n.subs.length;
       setText(r.subsCaption, shown === n.subTotal ? plural(n.subTotal, 'subagente', 'subagentes') : `${shown} de ${plural(n.subTotal, 'subagente', 'subagentes')}`);
     }
+    r.levels = subLevels(n.subs);
     r.subs.sync(n.subs);
   }
 

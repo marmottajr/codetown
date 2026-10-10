@@ -1762,7 +1762,10 @@
 }
 
 .ui-subs__item {
+  --ui-sub-level: 1;
   position: relative;
+  /* Sub de sub (Codex): um recuo a mais por nível; o tronco e o ramo continuam saindo da linha do filho direto. */
+  padding-left: calc((var(--ui-sub-level) - 1) * 14px);
 }
 
 .ui-subs__item:last-child::before {
@@ -1774,7 +1777,7 @@
   position: absolute;
   left: -12px;
   top: 50%;
-  width: 9px;
+  width: calc(9px + (var(--ui-sub-level) - 1) * 14px);
   border-top: 1px solid var(--ui-line-strong);
 }
 

@@ -25,6 +25,7 @@ import {
   sortByUrgency,
   statusLabel,
   subagentsOf,
+  subLevels,
   visibleShells,
   waitingAgents,
 } from './model';
@@ -150,6 +151,21 @@ describe('groupRooms', () => {
     const [api] = groupRooms(tree());
     expect(api.nodes[0].subs.map((s) => s.id)).toEqual(['filho1', 'filho2']);
     expect(api.nodes[0].subTotal).toBe(2);
+  });
+  it('Codex: recuo da barra, um nível a mais para cada sub de sub; o filho direto fica no 1', () => {
+    const [api] = groupRooms(tree('codex'));
+    expect([...subLevels(api.nodes[0].subs)]).toEqual([['filho1', 1], ['neto', 2], ['bisneto', 3], ['filho2', 1]]);
+  });
+  it('Codex: com a busca, o sub de sub cujo pai não está na lista fica no nível 1; com o pai na lista, ganha o recuo', () => {
+    const found = groupRooms(tree('codex'), { query: 'neto', hiddenAccounts: new Set() })[0].nodes[0].subs;
+    expect([...subLevels(found)]).toEqual([['neto', 1]]);
+    const all = groupRooms(tree('codex'))[0].nodes[0].subs;
+    expect([...subLevels(all.filter((s) => s.id === 'neto' || s.id === 'bisneto'))]).toEqual([['neto', 1], ['bisneto', 2]]);
+  });
+  it('Claude: todos os subs da barra ficam no nível 1, e os netos continuam escondidos', () => {
+    const [api] = groupRooms(tree());
+    expect([...subLevels(api.nodes[0].subs)]).toEqual([['filho1', 1], ['filho2', 1]]);
+    expect(api.nodes[0].subs.map((s) => s.id)).not.toContain('neto');
   });
 });
 

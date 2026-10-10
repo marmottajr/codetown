@@ -414,6 +414,16 @@ function subtreeOf(a: AgentInfo, subsOf: ReadonlyMap<string, AgentInfo[]>): Agen
   return direct.flatMap((s) => [s, ...subtreeOf(s, subsOf)]);
 }
 
+/**
+ * Nível de recuo de cada sub da lista da barra (1 = filho direto do principal). Um sub de sub, que vem logo depois do pai,
+ * ganha um nível a mais; sem o pai na lista (busca), fica no 1. No Claude a lista só tem filhos diretos: tudo no 1.
+ */
+export function subLevels(subs: readonly Pick<AgentInfo, 'id' | 'parentId'>[]): Map<string, number> {
+  const levels = new Map<string, number>();
+  for (const s of subs) levels.set(s.id, (s.parentId ? levels.get(s.parentId) ?? 0 : 0) + 1);
+  return levels;
+}
+
 /** Subagentes diretos de `agent` para a gaveta, por urgência. Um sub do Codex também lista os dele; um do Claude, não. */
 export function subagentsOf(agent: Pick<AgentInfo, 'id' | 'kind' | 'provider'>, agents: readonly AgentInfo[]): AgentInfo[] {
   if (agent.kind === 'sub' && agent.provider !== 'codex') return [];
