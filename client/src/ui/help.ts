@@ -249,7 +249,7 @@ export class HelpDialog {
         h('li', { text: 'O chip colorido com a letra (C, D…) mostra de qual conta do Claude Code é cada agente: cada atalho de terminal usa uma pasta de configuração diferente.' }),
         h('li', {}, accountSample('C', '#f08a3c'), ' Conta do Claude Code · ', accountSample('X', '#a77bf3', true), ' Conta do Codex (chip vazado, com o selo CODEX onde há espaço).'),
         h('li', {
-          text: 'No topo, cada conta mostra o uso da sessão de 5 horas e da semana. O ↻ indica quando cada limite reinicia (contagem regressiva se faltar menos de um dia). Verde abaixo de 50%, âmbar até 80% e vermelho a partir daí.',
+          text: 'No topo, cada conta mostra o uso das janelas do plano. O ↻ indica quando cada limite reinicia (contagem regressiva se faltar menos de um dia). Verde abaixo de 50%, âmbar até 80% e vermelho a partir daí.',
         }),
         h('li', { text: 'Números antigos ficam acinzentados com a idade ao lado (ex.: “há 3 h”); uma janela que já reiniciou desde a leitura mostra “—” e “renovada”.' }),
       ),
