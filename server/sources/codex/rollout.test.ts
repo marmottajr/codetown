@@ -9,6 +9,7 @@ import {
   parseRolloutLine,
   parseSessionMeta,
   patchFiles,
+  pathFromUri,
   usageFromRateLimits,
   type CodexLineResult,
   type CodexState,
@@ -224,5 +225,36 @@ describe('session_meta', () => {
     // Sem thread_spawn, mas com a raiz diferente do próprio id: o pai é a raiz.
     expect(meta('exec', { session_id: parent }).parentThreadId).toBe(parent);
     expect(parseSessionMeta({ id: T }).historyMode).toBe('legacy');
+  });
+});
+
+describe('pathFromUri', () => {
+  it('caminho POSIX, com percent-encoding', () => {
+    expect(pathFromUri('file:///repo/a.png')).toBe('/repo/a.png');
+    expect(pathFromUri('file:///home/user/my%20file.png')).toBe('/home/user/my file.png');
+    expect(pathFromUri('file:///tmp/caf%C3%A9.png')).toBe('/tmp/café.png');
+  });
+
+  it('drive do Windows (a letra da URI decide, não o sistema), com percent-encoding', () => {
+    expect(pathFromUri('file:///C:/repo/a.png')).toBe('C:\\repo\\a.png');
+    expect(pathFromUri('file:///C:/repo/my%20file.png')).toBe('C:\\repo\\my file.png');
+  });
+
+  it('UNC preserva o servidor, com percent-encoding', () => {
+    expect(pathFromUri('file://servidor/share/a.png')).toBe('\\\\servidor\\share\\a.png');
+    expect(pathFromUri('file://servidor/share/my%20file.png')).toBe('\\\\servidor\\share\\my file.png');
+  });
+
+  it('o que não é file:// e URI inválida continuam como antes', () => {
+    expect(pathFromUri('/repo/a.png')).toBe('/repo/a.png');
+    expect(pathFromUri('C:\\repo\\a.png')).toBe('C:\\repo\\a.png');
+    expect(pathFromUri('FILE:///C:/repo/a.png')).toBe('FILE:///C:/repo/a.png');
+    expect(pathFromUri(undefined)).toBeUndefined();
+    expect(pathFromUri('')).toBeUndefined();
+    expect(pathFromUri('   ')).toBeUndefined();
+    // % inválido: o decode falha e sobra o resto depois de "file://". %2F o decode aceita e vira barra.
+    expect(pathFromUri('file:///tmp/%ZZ')).toBe('/tmp/%ZZ');
+    expect(pathFromUri('file://%')).toBe('%');
+    expect(pathFromUri('file:///home/user/a%2Fb.png')).toBe('/home/user/a/b.png');
   });
 });
