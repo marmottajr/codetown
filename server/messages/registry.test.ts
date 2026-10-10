@@ -11,6 +11,7 @@ import {
   ERR_NOT_CONFIRMED,
   ERR_NOT_FETCHED,
   ERR_REFUSED,
+  ERR_SESSION_CHANGED,
   INBOX_BATCH,
   KEEP_MS,
   MAX_OPEN,
@@ -267,6 +268,19 @@ describe('MessageRegistry: prazos e limpeza', () => {
     registry.tick();
     for (const id of [a, b, c]) expect(registry.get(id)).toMatchObject({ status: 'failed', error: ERR_GONE });
     expect(registry.reachable().size).toBe(0);
+  });
+
+  it('/clear ou /resume antes da busca: a mensagem não vai para a sessão nova e falha', () => {
+    const { office, registry } = setup();
+    registry.inbox({ session: SESSION });
+    const id = sent(registry.send({ agentId: MAIN, text: 'para a conversa antiga' }));
+    office.switchSession(MAIN, 'sess-nova');
+    expect(registry.inbox({ session: 'sess-nova' })).toEqual([]);
+    registry.tick();
+    expect(registry.get(id)).toMatchObject({ status: 'failed', error: ERR_SESSION_CHANGED });
+    // A mandada depois da troca vai para a sessão nova.
+    const next = sent(registry.send({ agentId: MAIN, text: 'para a nova' }));
+    expect(registry.inbox({ session: 'sess-nova' }).map((m) => m.id)).toEqual([next]);
   });
 
   it('resolvidas ficam 10 min para a consulta e depois somem', () => {

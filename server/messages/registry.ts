@@ -5,7 +5,8 @@
 // tivesse digitado e confirma em POST /api/mod/inbox/ack. O registro:
 // - marca a PRESENÇA de cada sessão que pergunta pela caixa de entrada (AgentInfo.canMessage, via Office);
 // - guarda as mensagens de cada agente na ordem e acompanha a situação delas (queued → sent → delivered/failed);
-// - falha as que ninguém buscou, as que a sessão não confirmou e as do agente que saiu;
+// - falha as que ninguém buscou, as que a sessão não confirmou, as do agente que saiu e as de uma conversa que já
+//   trocou (/clear, /resume): cada mensagem vale só para a sessão em que foi mandada;
 // - põe a atividade "Mensagem pelo Habblaud" no agente quando a sessão confirma a entrega;
 // - simula a entrega para os agentes do demo (nada vai a uma sessão de verdade).
 // O texto vai à sessão exatamente como foi digitado (é do próprio usuário) e nunca sai nas respostas da página nem
@@ -43,6 +44,7 @@ export const ERR_NOT_FETCHED = 'a sessão não buscou a mensagem: o plugin habbl
 export const ERR_NOT_CONFIRMED = 'a sessão não confirmou a entrega';
 export const ERR_GONE = 'o agente saiu do escritório';
 export const ERR_REFUSED = 'a sessão não aceitou a mensagem';
+export const ERR_SESSION_CHANGED = 'a conversa do agente mudou (/clear ou /resume) antes da entrega';
 export const ERR_CODEX_UNAVAILABLE =
   'não há como entregar ao Codex agora: rode o Habblaud fora do Docker com o `codex` no PATH (ou HABBLAUD_CODEX_BIN) ou, no Docker, deixe o npm run codex:bridge rodando no Mac';
 export const ERR_CODEX_NOT_FETCHED = 'o auxiliar do Codex não buscou a mensagem: o npm run codex:bridge está rodando no Mac?';
@@ -111,6 +113,8 @@ interface Entry {
   text: string;
   /** Atividade do feed quando a entrega se confirma (o começo do texto, mascarado e cortado). */
   activity: ReturnType<typeof describeMessage>;
+  /** Sessão do agente quando a mensagem foi mandada: só ela recebe (troca de conversa = falha). */
+  target: string;
   /** Sessão que buscou a mensagem (sent): só ela confirma a entrega. */
   session?: string;
   sentAt?: number;
@@ -265,7 +269,7 @@ export class MessageRegistry {
 
     const now = this.now();
     const id = `m-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
-    const entry: Entry = { msg: { id, agentId, status: 'queued', createdAt: now, updatedAt: now }, text, activity: describeMessage(text) };
+    const entry: Entry = { msg: { id, agentId, status: 'queued', createdAt: now, updatedAt: now }, text, activity: describeMessage(text), target: agent.sessionId };
     if (demo) entry.demo = true;
     else if (real?.provider === 'codex') entry.codex = true;
     this.messages.set(id, entry);
@@ -304,7 +308,7 @@ export class MessageRegistry {
     const out: InboxMessage[] = [];
     for (const e of this.messages.values()) {
       if (out.length >= INBOX_BATCH) break;
-      if (e.demo || e.codex || e.msg.agentId !== agent.id || e.msg.status !== 'queued') continue;
+      if (e.demo || e.codex || e.msg.agentId !== agent.id || e.msg.status !== 'queued' || e.target !== session) continue;
       this.setStatus(e, 'sent', now);
       e.session = session;
       e.sentAt = now;
@@ -397,7 +401,9 @@ export class MessageRegistry {
         }
         continue;
       }
-      if (!present(this.opts.office.get(e.msg.agentId))) this.fail(e, now, ERR_GONE);
+      const a = this.opts.office.get(e.msg.agentId);
+      if (!present(a)) this.fail(e, now, ERR_GONE);
+      else if (e.msg.status === 'queued' && a.sessionId !== e.target) this.fail(e, now, ERR_SESSION_CHANGED);
       else if (e.msg.status === 'queued' && now - e.msg.createdAt >= this.queuedTimeoutMs) {
         this.fail(e, now, !e.codex ? ERR_NOT_FETCHED : this.opts.codex?.run ? ERR_CODEX_SLOW : ERR_CODEX_NOT_FETCHED);
       } else if (e.msg.status === 'sent' && now - (e.sentAt ?? now) >= this.sentTimeoutMs) {
@@ -429,6 +435,7 @@ export class MessageRegistry {
   private codexTarget(e: Entry, now: number): { account: string; codexHome: string; thread: string } | undefined {
     const a = this.opts.office.get(e.msg.agentId);
     if (!present(a)) return void this.fail(e, now, ERR_GONE);
+    if (a.sessionId !== e.target) return void this.fail(e, now, ERR_SESSION_CHANGED);
     const codexHome = this.opts.codex?.homeOf(a.account);
     if (!codexHome) return void this.fail(e, now, ERR_CODEX_HOME);
     return { account: a.account, codexHome, thread: a.sessionId };
