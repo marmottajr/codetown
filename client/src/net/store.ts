@@ -103,6 +103,9 @@ export class OfficeStore {
   private retryAt: number | null = null;
   /** Desligado de propósito (disconnect()): não reconecta sozinho. */
   private stopped = true;
+  private readonly onOnline = () => {
+    if (!this.stopped && this.connection === 'closed') this.reconnectNow();
+  };
   /** Timelapse ligado: `snapshot` é o reconstruído; o último ao vivo fica em `live` (com a hora em que chegou). */
   private replay = false;
   private live: { snap: OfficeSnapshot; at: number } | null = null;
@@ -111,12 +114,6 @@ export class OfficeStore {
     this.mock = !!opts.mock;
     this.search = opts.search ?? (typeof location !== 'undefined' ? location.search : '');
     this.openStream = opts.eventSource ?? ((url) => new EventSource(url));
-    // Rede de volta (Wi-Fi, VPN): não espera o próximo intervalo para religar.
-    if (typeof addEventListener === 'function' && !this.mock) {
-      addEventListener('online', () => {
-        if (!this.stopped && this.connection === 'closed') this.reconnectNow();
-      });
-    }
   }
 
   on<K extends keyof StoreEvents>(event: K, cb: Listener<K>): () => void {
@@ -127,6 +124,7 @@ export class OfficeStore {
   }
 
   connect(): void {
+    if (!this.stopped) return;
     this.stopped = false;
     if (this.mock) return this.startMock();
     this.startSSE();
@@ -134,6 +132,7 @@ export class OfficeStore {
 
   disconnect(): void {
     this.stopped = true;
+    if (typeof removeEventListener === 'function') removeEventListener('online', this.onOnline);
     this.clearRetry();
     this.closeSource();
     if (this.mockTimer) clearInterval(this.mockTimer);
@@ -423,6 +422,8 @@ export class OfficeStore {
   }
 
   private startSSE(): void {
+    // Rede de volta (Wi-Fi, VPN): não espera o próximo intervalo para religar.
+    if (typeof addEventListener === 'function') addEventListener('online', this.onOnline);
     this.setConnection('connecting');
     let es: EventSourceLike;
     try {

@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgentInfo, OfficeSnapshot } from '../../../shared/types';
+import { OfficeStore } from '../net/store';
+import { createWorld } from './index';
 import { animScale, rebaseSnapshot } from './playback';
 
 describe('timelapse no mundo', () => {
@@ -33,5 +35,41 @@ describe('timelapse no mundo', () => {
     expect(agent.statusSince).toBe(1_000);
     expect(agent.shells![0].startedAt).toBe(800);
     expect(rebaseSnapshot(snap, 0)).toBe(snap);
+  });
+});
+
+describe('descarte do mundo', () => {
+  it('destroy() remove o listener de fontes ao montar e desmontar repetidamente', () => {
+    const fonts = new EventTarget();
+    const added = vi.spyOn(fonts, 'addEventListener');
+    const removed = vi.spyOn(fonts, 'removeEventListener');
+    vi.stubGlobal('document', Object.assign(new EventTarget(), { fonts }));
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
+    const canvas = Object.assign(new EventTarget(), {
+      clientWidth: 800,
+      clientHeight: 600,
+      width: 800,
+      height: 600,
+      style: {},
+      getContext: () => ({}),
+    }) as unknown as HTMLCanvasElement;
+    const store = new OfficeStore();
+    const worlds: ReturnType<typeof createWorld>[] = [];
+    try {
+      for (let i = 0; i < 3; i++) {
+        const world = createWorld(canvas, store);
+        worlds.push(world);
+        expect(added).toHaveBeenCalledTimes(i + 1);
+        world.destroy();
+        expect(removed.mock.calls.map(([type, cb]) => [type, cb])).toEqual(added.mock.calls.map(([type, cb]) => [type, cb]));
+      }
+    } finally {
+      worlds.forEach((world) => world.destroy());
+      store.disconnect();
+      vi.unstubAllGlobals();
+    }
   });
 });

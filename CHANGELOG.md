@@ -10,6 +10,10 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Corrigido
+
+- O escritório evita conexões ao vivo duplicadas e libera os recursos de rede e fontes ao ser fechado.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio
