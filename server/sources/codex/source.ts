@@ -45,36 +45,26 @@
 // `tailBytes` e até a fronteira de turno (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de
 // onde a varredura parou e o começo anterior a ela é lido depois, em segundo plano (números e linha do tempo longa).
 // Boot síncrono, com endBoot num `finally`.
-import { realpathSync, type FSWatcher } from 'node:fs';
-import { basename, resolve, sep } from 'node:path';
-import { codexApprovalReason } from '../../../shared/activity';
-import type { Activity, AgentStatus, SourceInfo } from '../../../shared/types';
+import type { FSWatcher } from 'node:fs';
+import type { AgentStatus, SourceInfo } from '../../../shared/types';
 import type { DetectedAccount } from '../../accounts/detect';
 import type { AccountEntry } from '../../accounts/service';
 import { detectDocker } from '../../config';
 import { errMsg, log } from '../../log';
 import type { TranscriptSummary } from '../../model/office';
-import { networkTarget } from '../../permissions/codex';
 import { reportShellDone, type ShellTracker } from '../shells';
 import type { AgentSource } from '../source';
 import { FileTail } from '../tail';
 import type { TerminalParser } from '../terminal';
 import { detectCodexAccounts } from './accounts';
-import { readRolloutHead, RolloutIndex, parseRolloutName } from './files';
+import { readRolloutHead, RolloutIndex } from './files';
 import { ThreadNameIndex } from './history';
 import type { CodexLive } from './live';
 import { createLockProber, type LockProber } from './locks';
 import { scanBackward } from './reader';
-import {
-  codexAgentPath,
-  createCodexState,
-  describeCodexTool,
-  isThreadId,
-  parseRolloutLine,
-  type CodexLineResult,
-  type RolloutMeta,
-} from './rollout';
+import { createCodexState, parseRolloutLine, type CodexLineResult, type RolloutMeta } from './rollout';
 import { createShellScan } from './shells';
+import { CodexHooks } from './source-hooks';
 import { CodexPresence } from './source-presence';
 import { boundaryAfter, lastLineAt, scanPrefix } from './source-scan';
 import { CodexShells } from './source-shells';
@@ -117,29 +107,6 @@ const SUB_ROLE = 'Subagente (Codex)';
 /** Motivo da espera de um request_user_input aberto (o mesmo texto que o registro usa para uma pergunta). */
 const QUESTION_WAIT = 'responder uma pergunta';
 
-const HOOK_EVENTS = new Set([
-  'SessionStart',
-  'SessionEnd',
-  'UserPromptSubmit',
-  'PreToolUse',
-  'PostToolUse',
-  'PermissionRequest',
-  'Stop',
-  'SubagentStart',
-  'SubagentStop',
-  'PreCompact',
-  'PostCompact',
-  'Interrupt',
-]);
-
-function str(v: unknown): string | undefined {
-  return typeof v === 'string' && v.trim() ? v.trim() : undefined;
-}
-
-function rec(v: unknown): Record<string, unknown> | undefined {
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
-}
-
 function roleOf(raw: string | undefined): string {
   if (!raw) return SUB_ROLE;
   const r = raw.trim();
@@ -172,6 +139,7 @@ export class CodexSource implements AgentSource, CodexLive {
   private readonly presence: CodexPresence;
   private readonly shells: CodexShells;
   private readonly usage: CodexUsage;
+  private readonly hooks: CodexHooks;
   private stopped = false;
 
   constructor(private readonly opts: CodexSourceOptions) {
@@ -185,6 +153,17 @@ export class CodexSource implements AgentSource, CodexLive {
     this.presence = new CodexPresence(this.threads, this.prober, this.watchers, this.tree);
     this.shells = new CodexShells(this.shellTrees, this.threads, opts, this.now, this.tree);
     this.usage = new CodexUsage({ opts, threads: this.threads, now: this.now, accs: () => this.accs, detected: () => this.detected, register: () => this.register() });
+    this.hooks = new CodexHooks({
+      opts,
+      threads: this.threads,
+      now: this.now,
+      accs: () => this.accs,
+      schedule: () => this.schedule(),
+      pump: (t, boot) => this.pump(t, boot),
+      turnTo: (t, open) => this.turnTo(t, open),
+      reconcile: (t, now, via) => this.reconcile(t, now, via),
+      decide: (t, status, at, waitingFor, live) => this.decide(t, status, at, waitingFor, live),
+    });
     const claude = opts.accounts.entries();
     this.detected = detectCodexAccounts(opts.dirs, {
       env,
@@ -790,159 +769,10 @@ export class CodexSource implements AgentSource, CodexLive {
 
   applyHookEvent(account: string | undefined, input: Record<string, unknown>): boolean {
     try {
-      return this.hookEvent(account, input);
+      return this.hooks.hookEvent(account, input);
     } catch (err) {
       log.warnOnce(`codex-hook:${errMsg(err)}`, `Codex: evento de hook ignorado (${errMsg(err)}).`);
       return false;
     }
-  }
-
-  private hookEvent(account: string | undefined, input: Record<string, unknown>): boolean {
-    const event = str(input.hook_event_name);
-    if (!event || !HOOK_EVENTS.has(event)) return false;
-    const root = str(input.session_id)?.toLowerCase();
-    const agent = str(input.agent_id)?.toLowerCase();
-    if (!isThreadId(root)) return false;
-    const target = agent && isThreadId(agent) ? agent : root;
-    const agentType = str(input.agent_type);
-    if (agentType && /guardian/i.test(agentType)) return false;
-    const acc = this.accountFor(account, input, target);
-    if (!acc) return false;
-    const now = this.now();
-    const cwd = str(input.cwd);
-    const office = this.opts.office;
-
-    if (event === 'SessionEnd') {
-      const t = this.threads.get(`${acc.id}:${root}`);
-      if (!t) return false;
-      t.endedAt = now;
-      delete t.lastHookAt;
-      this.turnTo(t, false);
-      this.reconcile(t, now);
-      this.schedule();
-      return true;
-    }
-
-    // Subagente: o thread filho vem em agent_id (o pai, até sabermos pelo session_meta, é a raiz).
-    const isSubEvent = target !== root || event === 'SubagentStart' || event === 'SubagentStop';
-    const subId = event === 'SubagentStart' || event === 'SubagentStop' ? (agent && isThreadId(agent) ? agent : undefined) : target !== root ? target : undefined;
-    if (isSubEvent && !subId) return false;
-    const rootT = this.touch(acc, root, now, cwd);
-    const t = subId ? this.touch(acc, subId, now, cwd, root, agentType) : rootT;
-    this.hintTranscript(acc, subId ?? root, event === 'SubagentStop' ? str(input.agent_transcript_path) : subId ? undefined : str(input.transcript_path));
-    this.reconcile(rootT, now, 'hook');
-
-    switch (event) {
-      case 'SubagentStart':
-        t.hookSpawned = true;
-        this.decide(t, 'working', now, undefined, true);
-        break;
-      case 'SubagentStop':
-        this.decide(t, 'idle', now, undefined, true);
-        break;
-      case 'UserPromptSubmit':
-      case 'PostToolUse':
-      case 'PreCompact':
-      case 'PostCompact':
-        this.decide(t, 'working', now, undefined, true);
-        break;
-      case 'PreToolUse': {
-        this.decide(t, 'working', now, undefined, true);
-        if (t !== rootT) this.reconcile(t, now, 'hook');
-        const toolName = str(input.tool_name) ?? 'ferramenta';
-        const toolInput = rec(input.tool_input) ?? {};
-        // Quem chama (o destino do send_message): o thread raiz é o "/root"; o subagente, o caminho do session_meta dele.
-        const { desc, tool } = describeCodexTool(toolName, toolInput, undefined, { agentPath: t === rootT ? '/root' : codexAgentPath(t.meta) });
-        const id = str(input.tool_use_id);
-        const act: Activity = { id: `${t.key}#${id ?? `hook${now.toString(36)}`}`, at: now, ...desc, tool };
-        if (t.inOffice) office.addActivity(t.key, act, true);
-        break;
-      }
-      case 'PermissionRequest': {
-        const toolName = str(input.tool_name) ?? 'ferramenta';
-        this.decide(t, 'waiting', now, codexApprovalReason(toolName, !!networkTarget(rec(input.tool_input) ?? {})), true);
-        break;
-      }
-      case 'Stop':
-      case 'Interrupt':
-        this.decide(t, 'idle', now, undefined, true);
-        break;
-      default:
-        break;
-    }
-    if (t !== rootT) this.reconcile(t, now, 'hook');
-    return true;
-  }
-
-  /** Tracker do thread (criado se preciso), com a presença dada pelo hook. */
-  private touch(acc: CodexAccount, threadId: string, now: number, cwd: string | undefined, parent?: string, agentType?: string): ThreadTracker {
-    const key = `${acc.id}:${threadId}`;
-    let t = this.threads.get(key);
-    if (!t) {
-      t = newTracker(acc, threadId);
-      this.threads.set(key, t);
-    }
-    t.lastHookAt = now;
-    delete t.missingSince;
-    if (t.endedAt !== undefined && now > t.endedAt) delete t.endedAt;
-    if (cwd) t.hookCwd ??= cwd;
-    if (parent && !t.meta && t.kind === 'main') {
-      t.kind = 'sub';
-      t.parentThreadId = parent;
-    }
-    if (agentType) t.hookRole ??= agentType;
-    if (t.inOffice && !this.opts.office.has(t.key)) t.inOffice = false;
-    this.pump(t, false);
-    return t;
-  }
-
-  /** `transcript_path` do hook, se for um rollout dentro da pasta da conta (no Docker é do host: não serve). */
-  private hintTranscript(acc: CodexAccount, threadId: string, path: string | undefined): void {
-    if (!path) return;
-    const t = this.threads.get(`${acc.id}:${threadId}`);
-    if (t?.tail) return;
-    try {
-      const real = realpathSync(path);
-      const root = realpathSync(acc.dir);
-      if (!real.startsWith(root + sep) || parseRolloutName(basename(real))?.threadId !== threadId) return;
-      acc.index.hint(threadId, real);
-      if (t) t.nextResolveAt = 0;
-    } catch {
-      // não existe aqui (Docker) ou ainda não foi criado
-    }
-  }
-
-  /**
-   * Conta de um evento: `account` (id ou pasta), senão a do `transcript_path`, senão a que já conhece o thread;
-   * com uma conta só, ela.
-   */
-  private accountFor(account: string | undefined, input: Record<string, unknown>, threadId: string): CodexAccount | undefined {
-    const norm = (p: string) => {
-      try {
-        return resolve(p);
-      } catch {
-        return p;
-      }
-    };
-    if (account) {
-      const byId = this.accs.find((a) => a.id === account);
-      if (byId) return byId;
-      const abs = norm(account);
-      const byDir = this.accs.find((a) => norm(a.dir) === abs || norm(a.configDir) === abs);
-      if (byDir) return byDir;
-    }
-    for (const raw of [str(input.transcript_path), str(input.agent_transcript_path)]) {
-      if (!raw) continue;
-      const p = norm(raw);
-      const byPath = this.accs.find((a) => p.startsWith(norm(a.dir) + sep) || p.startsWith(norm(a.configDir) + sep));
-      if (byPath) return byPath;
-    }
-    const known = this.accs.filter((a) => this.threads.has(`${a.id}:${threadId}`));
-    if (known.length === 1) return known[0];
-    if (account) {
-      const byName = this.accs.find((a) => basename(a.dir) === basename(account) || basename(a.configDir) === basename(account));
-      if (byName) return byName;
-    }
-    return this.accs.length === 1 ? this.accs[0] : undefined;
   }
 }
