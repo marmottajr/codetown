@@ -10,6 +10,10 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Corrigido
+
+- O detalhe da atividade não mostra mais o segredo de webhooks (Slack, Discord e Telegram) nem de tokens `npm_` e `hf_` colados num comando.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio
