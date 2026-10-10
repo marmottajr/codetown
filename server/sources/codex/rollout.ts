@@ -887,8 +887,10 @@ class RolloutLineParser {
         const ms = num(p.duration_ms);
         const err = rec(p.error);
         const turn = str(p.turn_id) ?? this.autoKey();
-        if (err) this.push(SPECIAL.error(undefined, firstLine(str(err.message) ?? '')), { key: `${turn}:err`, current: false });
-        this.push(SPECIAL.turnDone(ms), { key: `${turn}:done`, durationMs: ms });
+        // Com erro (ex.: limite de uso), a conclusão leva o erro: um item à parte antes dela apagaria a troca do "Concluiu"
+        // sintetizado no Office (dois "Concluiu"), e depois dela, como atual, faria o completeSub sintetizar outro.
+        const desc = err ? SPECIAL.turnFailed(ms, firstLine(str(err.message) ?? '')) : SPECIAL.turnDone(ms);
+        this.push(desc, { key: `${turn}:done`, durationMs: ms });
         return;
       }
       case 'turn_aborted':

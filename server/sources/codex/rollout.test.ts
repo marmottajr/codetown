@@ -1,6 +1,7 @@
 // Interpretação dos rollouts do Codex (linhas sintéticas nos formatos paginated e legacy).
 import { describe, expect, it } from 'vitest';
 import { R, SOURCES, threadId } from '../../test/codex-fixtures';
+import { LIMIT_MESSAGE, taskCompleteError } from '../../test/codex-fixtures-fim';
 import { envelope, fernet, spawnEncrypted } from '../../test/codex-fixtures-live';
 import {
   commandText,
@@ -71,6 +72,18 @@ describe('rollout do Codex: paginated', () => {
     // Com o turno aberto, o -1 continua sendo erro.
     const open = feed([R.taskStarted('turn2', at), R.command(T, 'turn2', 'exec-4', 'npm test', { exit: -1, status: 'failed', output: '', at: at + 1 })]);
     expect(texts(open.results)).toContain('Erro em Bash');
+  });
+
+  it('turno que termina com erro (task_complete com error, ex.: limite de uso): um "Concluiu com erro" só, atual, com o erro no detalhe', () => {
+    const at = Date.parse('2026-10-09T12:00:00Z');
+    const { state, results } = feed([R.meta(T, { at }), R.taskStarted('turn1', at + 1), R.user(T, 'turn1', 'u1', 'Rode a suíte', at + 2), taskCompleteError('turn1', at + 3, 8_000)]);
+    const end = results.at(-1)!.activities;
+    expect(end).toHaveLength(1);
+    expect(end[0]).toMatchObject({ current: true, activity: { id: 'acc:t#turn1:done', kind: 'done', icon: '⚠️', text: 'Concluiu com erro em 8s', detail: LIMIT_MESSAGE, error: true, durationMs: 8_000 } });
+    expect(texts(results)).not.toContain('Algo deu errado');
+    expect(state.current?.id).toBe('acc:t#turn1:done');
+    // Sem erro, o de sempre.
+    expect(texts(feed([R.taskComplete('turn2', at, 8_000)]).results)).toEqual(['Concluiu em 8s']);
   });
 
   it('comando: as mesmas atividades do Bash, comando em lista ou texto, erro e recusa', () => {
@@ -534,8 +547,9 @@ describe('segredos mascarados antes do corte do detalhe de erro (P15)', () => {
     const turnEnd = JSON.parse(R.taskComplete('t1'));
     turnEnd.payload.error = { message: `${prefix}${token}` };
     const { results } = feed([R.mcp(T, 't1', 'm1', 'github', 'get_me', {}, { error: `${prefix}${token}` }), JSON.stringify(turnEnd)]);
+    // O erro do turno vai na própria conclusão ("Concluiu com erro"), marcada com `error`.
     const details = acts(results)
-      .filter((a) => a.kind === 'error')
+      .filter((a) => a.error)
       .map((a) => a.detail);
     expect(details).toHaveLength(2);
     for (const d of details) {

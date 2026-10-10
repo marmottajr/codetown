@@ -11,6 +11,7 @@ import { DONE_GRACE_MS, Office } from '../../model/office';
 import { PermissionRegistry } from '../../permissions/registry';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
+import { LIMIT_MESSAGE, taskCompleteError } from '../../test/codex-fixtures-fim';
 import { envelope, spawnEncrypted } from '../../test/codex-fixtures-live';
 import { B, commandParsed, forkRollout, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { writeLines } from '../../test/fixtures';
@@ -1809,5 +1810,75 @@ describe('fonte do Codex: turno aberto e fechado para o canal paralelo (onTurn, 
     ctx.source.boot();
     expect(ctx.agent(`.codex:${U.toLowerCase()}`)?.status).toBe('working');
     expect(rec.calls).toEqual([['.codex', U, true]]);
+  });
+});
+
+describe('fonte do Codex: turno que termina com erro (task_complete com error, ex.: limite de uso)', () => {
+  const SUB = `.codex:${C}`;
+  const dones = (ctx: ReturnType<typeof setup>, id: string) => ctx.office.detail(id)!.history.filter((a) => a.kind === 'done');
+
+  /** Principal trabalhando (trava segura), com o rollout devolvido. */
+  function working(ctx: ReturnType<typeof setup>): string {
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t1', at), R.user(T, 't1', 'u', 'Rode a suíte', at)]);
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()?.status).toBe('working');
+    return path;
+  }
+
+  it('principal sem hook: o "Concluiu" sintetizado no working→idle vira o "Concluiu com erro" do rollout; um só, atual, com o erro', () => {
+    const ctx = setup();
+    const path = working(ctx);
+    ctx.advance(1_000);
+    ctx.home.append(path, [taskCompleteError('t1', ctx.now(), 8_000)]);
+    ctx.poll();
+    const a = ctx.agent()!;
+    expect(a.status).toBe('idle');
+    expect(a.recent.filter((x) => x.kind === 'done').map((x) => x.text)).toEqual(['Concluiu com erro em 8s']);
+    expect(dones(ctx, KEY)).toHaveLength(1);
+    expect(a.recent.map((x) => x.text)).not.toContain('Algo deu errado');
+    expect(a.activity).toMatchObject({ kind: 'done', text: 'Concluiu com erro em 8s', detail: LIMIT_MESSAGE, error: true });
+  });
+
+  it('principal com o Stop do hook antes da linha: um "Concluiu" só, atual, com o erro', () => {
+    const ctx = setup();
+    const path = working(ctx);
+    ctx.advance(1_000);
+    ctx.hook({ hook_event_name: 'Stop', session_id: T, cwd: '/projetos/loja', turn_id: 't1' });
+    ctx.poll();
+    expect(ctx.agent()?.recent.filter((x) => x.kind === 'done')).toHaveLength(1);
+    ctx.advance(10);
+    ctx.home.append(path, [taskCompleteError('t1', ctx.now(), 8_000)]);
+    ctx.poll();
+    const a = ctx.agent()!;
+    expect(a.recent.filter((x) => x.kind === 'done').map((x) => x.text)).toEqual(['Concluiu com erro em 8s']);
+    expect(dones(ctx, KEY)).toHaveLength(1);
+    expect(a.activity).toMatchObject({ kind: 'done', text: 'Concluiu com erro em 8s', error: true });
+  });
+
+  it('subagente, sem hook e com o SubagentStop antes: um "Concluiu" só, atual, com o erro', () => {
+    for (const hook of [false, true]) {
+      const ctx = setup();
+      const at = ctx.now() - 10_000;
+      ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue', at)]);
+      const sub = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), R.user(C, 's1', 'su', 'Revise', at)]);
+      ctx.home.lock(T, at);
+      ctx.home.lock(C, at);
+      ctx.source.boot();
+      ctx.advance(1_000);
+      if (hook) {
+        ctx.hook({ hook_event_name: 'SubagentStop', session_id: T, agent_id: C, agent_type: 'worker', cwd: '/projetos/loja', turn_id: 's1' });
+        ctx.poll();
+        ctx.advance(10);
+      }
+      ctx.home.append(sub, [taskCompleteError('s1', ctx.now(), 8_000)]);
+      ctx.poll();
+      const s = ctx.agent(SUB)!;
+      expect(s.status).toBe('done');
+      expect(s.recent.filter((x) => x.kind === 'done').map((x) => x.text)).toEqual(['Concluiu com erro em 8s']);
+      expect(dones(ctx, SUB)).toHaveLength(1);
+      expect(s.activity).toMatchObject({ kind: 'done', text: 'Concluiu com erro em 8s', error: true });
+    }
   });
 });

@@ -817,6 +817,11 @@ export const SPECIAL = {
   think: (): ActivityDescription => make('think', '💭', 'Pensando…'),
   respond: (text?: string): ActivityDescription => make('respond', '💬', 'Escrevendo a resposta', text),
   turnDone: (ms?: number): ActivityDescription => make('done', '✅', ms ? `Concluiu em ${formatDuration(ms)}` : 'Concluiu'),
+  /** Fim de um turno que terminou com erro (Codex: task_complete com `error`): ainda é a conclusão do turno, marcada como erro. */
+  turnFailed: (ms?: number, detail?: string): ActivityDescription & { error: true } => ({
+    ...make('done', '⚠️', ms ? `Concluiu com erro em ${formatDuration(ms)}` : 'Concluiu com erro', detail),
+    error: true,
+  }),
   error: (tool?: string, detail?: string): ActivityDescription => make('error', '⚠️', tool ? `Erro em ${tool}` : 'Algo deu errado', detail),
   interrupted: (): ActivityDescription => make('wait', '✋', 'Interrompido por você'),
   compact: (): ActivityDescription => make('compact', '🧹', 'Organizando a memória (compactando)'),
