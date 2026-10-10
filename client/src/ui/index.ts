@@ -83,7 +83,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
       world.setOptions(worldOptionsFrom(prefs));
       invalidate();
     },
-    now: () => Date.now() + skew,
+    now: () => timelapse?.replayTime ?? Date.now() + skew,
     account: (id) => store.snapshot?.accounts.find((a) => a.id === id),
     agent: (id) => store.agent(id),
     selection: () => selection,
@@ -224,8 +224,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
 
   // ---------------------------------------------------------------- eventos
   store.on('snapshot', (snap) => {
-    // No timelapse o "agora" da interface é o instante reproduzido (serverTime do snapshot reconstruído).
-    if (store.connection === 'open' || store.replaying) skew = snap.serverTime - Date.now();
+    // Ao vivo, o "agora" da interface segue o relógio do servidor (o aparelho pode estar adiantado ou atrasado).
+    // No timelapse, quem manda é o instante reproduzido pelo player (parado quando pausado).
+    if (store.connection === 'open' && !store.replaying) skew = snap.serverTime - Date.now();
     invalidate();
   });
   store.on('connection', () => invalidate());
