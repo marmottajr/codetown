@@ -15,6 +15,8 @@ describe('unwrapCommand: lista (CommandExecution/exec)', () => {
     [['bash', '-o', 'pipefail', '-c', 'make | tee log'], 'make | tee log'],
     // Depois da string do -c vêm os parâmetros posicionais ($0, $1...), que não são o comando.
     [['sh', '-c', 'echo "$0"', 'arg0'], 'echo "$0"'],
+    // -C maiúsculo (noclobber no bash) não é o -c.
+    [['bash', '-C', '-c', 'make'], 'make'],
   ])('POSIX %j → %s', (cmd, text) => {
     expect(unwrapCommand(cmd)).toEqual({ text, shell: 'sh' });
   });
@@ -48,6 +50,8 @@ describe('unwrapCommand: lista (CommandExecution/exec)', () => {
     expect(unwrapCommand(['pwsh', '-File', 'build.ps1'])).toEqual({ text: 'pwsh -File build.ps1', shell: null });
     expect(unwrapCommand(['pwsh', '-EncodedCommand', 'ZwBpAHQA'])).toEqual({ text: 'pwsh -EncodedCommand ZwBpAHQA', shell: null });
     expect(unwrapCommand(['cmd.exe', '/c'])).toEqual({ text: 'cmd.exe /c', shell: null });
+    // fish -C '<inicialização>' -c cmd: o -C não é o -c (o comando de inicialização nunca passa por comando).
+    expect(unwrapCommand(['fish', '-C', 'set x 1', '-c', 'make'])).toEqual({ text: "fish -C 'set x 1' -c make", shell: null });
   });
 });
 

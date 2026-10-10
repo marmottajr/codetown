@@ -44,7 +44,7 @@ function commandStart(shell: WrapperShell, words: string[]): number {
     const w = words[i];
     const lower = w.toLowerCase();
     if (shell === 'sh') {
-      if (/^-[a-z]*c[a-z]*$/i.test(w) || lower === '--command') return i + 1;
+      if (/^-[a-z]*c[a-z]*$/.test(w) || lower === '--command') return i + 1;
       if (w === '-o' || w === '+o') i++;
       else if (!/^[-+]/.test(w)) return -1;
       continue;
