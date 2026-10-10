@@ -1,7 +1,7 @@
 // Rotas de /api/permissions: a trava (desligado / Host que não é local), o guard (JSON e Origin), os
 // status (400, 404, 405, 409), o fluxo completo (registrar → esperar → decidir), o long-poll sem decisão,
 // a resposta imediata sem páginas abertas, as perguntas do AskUserQuestion e os pedidos fictícios do demo.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OfficeSnapshot, PermissionRequestInfo } from '../../shared/types';
 import { setQuiet } from '../log';
 import { hookJson, MAIN, request, servePermissions, type PermissionServer } from '../test/permission-server';
@@ -117,6 +117,16 @@ describe('rotas', () => {
     expect((await request(srv.base, `/api/permissions/${id}/decision`, { method: 'POST', body: { behavior: 'allow' } })).status).toBe(200);
     expect((await request(srv.base, `/api/permissions/${id}/decision`, { method: 'POST', body: { behavior: 'deny' } })).status).toBe(409);
     expect((await request(srv.base, `/api/permissions/${id}/wait`)).json).toEqual({ status: 'decided', behavior: 'allow' });
+  });
+
+  it('resultado de decisão que a rota não conhece: 500 (a requisição nunca fica pendurada)', async () => {
+    srv = await servePermissions();
+    const { id } = (await register(srv)).json as { id: string };
+    vi.spyOn(srv.registry!, 'decide').mockReturnValue('novo-resultado' as never);
+    const r = await request(srv.base, `/api/permissions/${id}/decision`, { method: 'POST', body: { behavior: 'allow' } });
+    expect(r.status).toBe(500);
+    expect(r.json).toMatchObject({ error: expect.any(String) });
+    vi.restoreAllMocks();
   });
 
   it('hook que desiste (conexão fechada) vira órfão e o pedido some', async () => {

@@ -16,6 +16,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { type CodexHookAuth, verifyHookCall } from '../codex/http';
 import { HttpError, readJson, sendJson } from '../http/app';
+import { log } from '../log';
 import { InvalidRequest, parseDecision, WAIT_MAX_MS, type PermissionRegistry } from './registry';
 
 const ITEM = /^\/api\/permissions\/([^/]+)(?:\/(wait|decision))?$/;
@@ -98,7 +99,8 @@ export function createPermissionRoutes(
     if (!d) {
       throw new HttpError(400, 'esperado {behavior: "allow" | "deny" | "terminal", message?, interrupt?, suggestion?, forSession?} ou {behavior: "answer", answers: [{question, options?, other?}]}');
     }
-    switch (await registry.decide(id, d)) {
+    const r = await registry.decide(id, d);
+    switch (r) {
       case 'ok':
         return sendJson(res, 200, { ok: true });
       case 'not-found':
@@ -113,6 +115,12 @@ export function createPermissionRoutes(
         return sendJson(res, 400, { error: 'o Codex não aceita esta resposta pelo Habblaud (interromper, "sempre permitir" ou uma decisão que o pedido não oferece): aprove, recuse ou responda no terminal' });
       case 'unavailable':
         return sendJson(res, 503, { error: 'o canal com o Codex não está disponível agora: responda no terminal' });
+      default: {
+        // Um DecideResult novo sem tratamento aqui: o tsc acusa (never), e a página nunca fica sem resposta.
+        const unknown: never = r;
+        log.warnOnce(`permissions-decide-result:${String(unknown)}`, `Pedidos de permissão: resultado de decisão sem tratamento na rota (${String(unknown)}).`);
+        return sendJson(res, 500, { error: 'erro interno' });
+      }
     }
   };
 
