@@ -45,7 +45,7 @@
 // `tailBytes` e até a fronteira de turno (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de
 // onde a varredura parou e o começo anterior a ela é lido depois, em segundo plano (números e linha do tempo longa).
 // Boot síncrono, com endBoot num `finally`.
-import { readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { readdirSync, realpathSync, statSync, type FSWatcher } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import { codexApprovalReason } from '../../../shared/activity';
 import type { AccountUsage, Activity, AgentStatus, SourceInfo } from '../../../shared/types';
@@ -78,6 +78,7 @@ import { createShellScan, scanShellLine } from './shells';
 import { boundaryAfter, lastLineAt, scanPrefix } from './source-scan';
 import { CodexThreadTree } from './source-tree';
 import { newTracker, type CodexAccount, type CodexSourceOptions, type ThreadTracker } from './source-types';
+import { CodexWatchers } from './source-watch';
 import { createCodexTerminalParser } from './terminal';
 
 export { scanPrefix } from './source-scan';
@@ -186,6 +187,7 @@ export class CodexSource implements AgentSource, CodexLive {
   private readonly useWatch: boolean;
   private readonly prober: LockProber;
   private readonly tree: CodexThreadTree;
+  private readonly watchers: CodexWatchers;
   private stopped = false;
 
   constructor(private readonly opts: CodexSourceOptions) {
@@ -195,6 +197,7 @@ export class CodexSource implements AgentSource, CodexLive {
     const env = opts.env ?? process.env;
     this.prober = opts.lockProber ?? createLockProber({ platform: process.platform, inDocker: detectDocker(env) });
     this.tree = new CodexThreadTree(this.threads, opts);
+    this.watchers = new CodexWatchers(this.useWatch, this.dirWatchers, () => this.schedule());
     const claude = opts.accounts.entries();
     this.detected = detectCodexAccounts(opts.dirs, {
       env,
@@ -257,7 +260,7 @@ export class CodexSource implements AgentSource, CodexLive {
     this.kick = null;
     for (const w of this.dirWatchers.values()) w.close();
     this.dirWatchers.clear();
-    for (const t of this.threads.values()) this.unwatch(t);
+    for (const t of this.threads.values()) this.watchers.unwatch(t);
   }
 
   sources(): SourceInfo[] {
@@ -344,7 +347,7 @@ export class CodexSource implements AgentSource, CodexLive {
       if (!boot && now - t.missingSince < grace) continue;
       this.leave(t);
       this.turnTo(t, false);
-      this.unwatch(t);
+      this.watchers.unwatch(t);
       this.threads.delete(key);
       // Thread fechado: os processos dele morrem junto (a sessão do Codex encerra os terminais em segundo plano).
       if (t.kind !== 'main') this.dropShells(t.key, this.treeKey(t), now);
@@ -398,7 +401,7 @@ export class CodexSource implements AgentSource, CodexLive {
     const out = new Map<string, 'lock' | 'recent' | 'hook'>();
     acc.locks = readLocks(acc.dir, this.prober);
     if (acc.locks) {
-      this.watchDir(`${acc.dir}${sep}${LOCKS_DIR}`);
+      this.watchers.watchDir(`${acc.dir}${sep}${LOCKS_DIR}`);
       for (const lock of acc.locks.values()) {
         // Órfã (o arquivo ficou e ninguém segura a trava: o Codex morreu): conta como lock sumido.
         if (lock.state === 'free') continue;
@@ -714,7 +717,7 @@ export class CodexSource implements AgentSource, CodexLive {
       }
       if (r.missing) {
         // Apagado ou trocado de lugar (arquivado, compactado): procura de novo.
-        this.unwatch(t);
+        this.watchers.unwatch(t);
         delete t.tail;
         delete t.rolloutPath;
         t.nextResolveAt = 0;
@@ -767,7 +770,7 @@ export class CodexSource implements AgentSource, CodexLive {
       this.statusToOffice(t);
     }
     this.applySummary(t);
-    this.watchFile(t, path);
+    this.watchers.watchFile(t, path);
     if (scan.start > 0) this.queuePrefix(t, path, scan.start);
   }
 
@@ -1196,38 +1199,5 @@ export class CodexSource implements AgentSource, CodexLive {
       if (byName) return byName;
     }
     return this.accs.length === 1 ? this.accs[0] : undefined;
-  }
-
-  // ---------------------------------------------------------------- fs.watch (acelerador)
-
-  private watchDir(dir: string): void {
-    if (!this.useWatch || this.dirWatchers.has(dir)) return;
-    try {
-      const w = watch(dir, { persistent: false }, () => this.schedule());
-      w.on('error', () => {
-        w.close();
-        this.dirWatchers.delete(dir);
-      });
-      this.dirWatchers.set(dir, w);
-    } catch {
-      // sem suporte: o polling cobre
-    }
-  }
-
-  private watchFile(t: ThreadTracker, path: string): void {
-    if (!this.useWatch) return;
-    this.unwatch(t);
-    try {
-      const w = watch(path, { persistent: false }, () => this.schedule());
-      w.on('error', () => w.close());
-      t.watcher = w;
-    } catch {
-      // sem suporte: o polling cobre
-    }
-  }
-
-  private unwatch(t: ThreadTracker): void {
-    t.watcher?.close();
-    delete t.watcher;
   }
 }
