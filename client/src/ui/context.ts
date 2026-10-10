@@ -46,6 +46,8 @@ export interface UiContext {
   /** Abre a ajuda; com `section`, rola até ela (ex.: "usage" = Contas e uso). */
   openHelp(section?: HelpSection): void;
   toggleSettings(): void;
+  /** Abre o campo de renomear a sala perto do ponto (px da janela); botão direito na sala (ui/roomrename.ts). */
+  renameRoom?(roomId: string, at: { x: number; y: number }): void;
   /** Abre as configurações na seção "Sobre" (versão em uso e versão nova). */
   openAbout(): void;
   /** Abre/fecha o timelapse do dia (ui/timelapse.ts). */

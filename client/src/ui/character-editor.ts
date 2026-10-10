@@ -40,7 +40,7 @@ export class CharacterEditor {
   private readonly resetBtn: HTMLButtonElement;
 
   constructor(private ctx: UiContext) {
-    this.button = iconButton(ICONS.edit, 'Editar personagem', () => (this.editing ? this.cancel() : this.start()), 'ui-icon-btn--sm ui-char-edit');
+    this.button = iconButton(ICONS.pencil, 'Editar personagem', () => (this.editing ? this.cancel() : this.start()), 'ui-icon-btn--sm ui-char-edit');
     setAttr(this.button, 'aria-expanded', 'false');
     this.button.hidden = true;
 

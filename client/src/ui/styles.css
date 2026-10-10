@@ -2477,6 +2477,22 @@
     0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
+/* Nome da sala com o lápis de renomear ao lado. */
+.ui-room-hero__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ui-room-hero__title > .ui-hero__name {
+  min-width: 0;
+}
+
+.ui-room-hero__rename {
+  flex: none;
+}
+
 .ui-room-hero__path {
   font: 11.5px var(--font-mono);
   color: var(--ui-muted);
@@ -3416,6 +3432,26 @@
   gap: 7px;
   margin: 3px 0 2px;
   font-weight: 600;
+}
+
+.ui-tip__task {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--ui-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ui-tip__since {
+  margin-left: auto;
+  padding-left: 8px;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--ui-muted);
+  white-space: nowrap;
 }
 
 .ui-tip .ui-status-dot {
@@ -7303,6 +7339,272 @@ html.is-replay #world {
   .ui-topbar__right .ui-btn-group:first-child {
     display: none;
   }
+}
+
+/* Linha do tempo do agente: "Mostrar mais" / "Mostrar menos" (15 itens por vez). */
+.ui-timeline__more {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ui-timeline__more:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
+/* Título da sessão na lista de agentes (o mesmo do hover do personagem). */
+.ui-agent__task {
+  display: block;
+  margin-top: 1px;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--ui-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Há quanto tempo o agente está ocioso, na linha do nome (no lugar do "Principal"). */
+.ui-agent__since {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ui-muted);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ janelas móveis (ui/movable.ts) */
+
+.ui-move-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.is-dragging,
+.is-dragging .ui-move-handle {
+  cursor: grabbing;
+}
+
+.ui-term.is-floating,
+.ui-drawer.is-floating {
+  right: auto;
+  bottom: auto;
+  overflow: hidden;
+  transition: none;
+  animation: none;
+}
+
+.ui-drawer.is-floating {
+  z-index: 25;
+  transform: none;
+  box-shadow: 0 24px 60px rgba(5, 7, 12, 0.55);
+}
+
+.ui-drawer.is-floating:not(.is-open) {
+  visibility: hidden;
+}
+
+.is-dragging {
+  opacity: 0.94;
+}
+
+/* Terminal expandido na tela toda do Habblaud (botão ao lado do fechar). */
+.ui-term.is-max {
+  z-index: 46;
+  inset: calc(var(--top-h) + var(--gap)) var(--gap) var(--gap) !important;
+  width: auto !important;
+  height: auto !important;
+  resize: none;
+  transition: none;
+  animation: none;
+}
+
+.ui-term.is-max .ui-move-handle {
+  cursor: default;
+}
+
+/* Alças de redimensionar nas bordas e quinas das janelas móveis (ui/movable.ts). */
+.ui-resize {
+  position: absolute;
+  z-index: 5;
+  touch-action: none;
+}
+
+.ui-resize--n,
+.ui-resize--s {
+  left: 10px;
+  right: 10px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.ui-resize--n {
+  top: -2px;
+}
+
+.ui-resize--s {
+  bottom: -2px;
+}
+
+.ui-resize--e,
+.ui-resize--w {
+  top: 10px;
+  bottom: 10px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.ui-resize--e {
+  right: -2px;
+}
+
+.ui-resize--w {
+  left: -2px;
+}
+
+.ui-resize--ne,
+.ui-resize--nw,
+.ui-resize--se,
+.ui-resize--sw {
+  width: 14px;
+  height: 14px;
+}
+
+.ui-resize--ne {
+  top: -2px;
+  right: -2px;
+  cursor: nesw-resize;
+}
+
+.ui-resize--sw {
+  bottom: -2px;
+  left: -2px;
+  cursor: nesw-resize;
+}
+
+.ui-resize--nw {
+  top: -2px;
+  left: -2px;
+  cursor: nwse-resize;
+}
+
+.ui-resize--se {
+  bottom: -2px;
+  right: -2px;
+  cursor: nwse-resize;
+}
+
+/* Expandida, em tela estreita ou fechada: sem alças. */
+.is-max > .ui-resize,
+.is-narrow .ui-resize {
+  display: none;
+}
+
+.is-resizing,
+.is-resizing * {
+  user-select: none;
+}
+
+.ui-node__head {
+  position: relative;
+}
+
+/* Arrastar agentes na lista lateral para reordenar (mesma ordem das abas do terminal). */
+.ui-node__head.is-dragging {
+  opacity: 0.45;
+}
+
+.ui-node__head.is-drop-before::before,
+.ui-node__head.is-drop-after::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ui-accent);
+  z-index: 1;
+}
+
+.ui-node__head.is-drop-before::before {
+  top: -1px;
+}
+
+.ui-node__head.is-drop-after::after {
+  bottom: -1px;
+}
+
+/* Arrastar salas na lista lateral para reordenar (ui/roomorder.ts). */
+.ui-room__head.is-dragging {
+  opacity: 0.45;
+}
+
+.ui-room__head.is-drop-before::before,
+.ui-room__head.is-drop-after::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ui-accent);
+  z-index: 1;
+}
+
+.ui-room__head.is-drop-before::before {
+  top: -2px;
+}
+
+.ui-room__head.is-drop-after::after {
+  bottom: -2px;
+}
+
+/* Renomear sala: campo flutuante do botão direito (ui/roomrename.ts). */
+.ui-rename {
+  position: fixed;
+  z-index: 60;
+  width: 260px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-line-strong);
+  box-shadow: 0 14px 40px rgba(5, 7, 12, 0.5);
+  color: var(--ui-text);
+  font: 13px/1.4 var(--font-ui);
+}
+
+.ui-rename__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--ui-muted);
+}
+
+.ui-rename__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--ui-line-strong);
+  background: var(--ui-bg-soft);
+  color: var(--ui-text);
+  font: inherit;
+}
+
+.ui-rename__input:focus {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -1px;
+}
+
+.ui-rename__hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--ui-faint);
+}
+
+.ui-rename__hint.is-error {
+  color: #ff9a8a;
 }
 
 /* Editor do personagem (gaveta do agente): lápis ao lado do nome e painel com prévia, nome e peças. */

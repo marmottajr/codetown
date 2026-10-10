@@ -1,7 +1,7 @@
 {
   "name": "habblaud-mensagens",
   "displayName": "Habblaud: mensagens pelo escritório",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Leva para a sessão do Claude Code as mensagens que você digita no Habblaud (painel do agente ou terminal), como se você as tivesse digitado no terminal.",
   "author": { "name": "Márcio Junior", "url": "https://github.com/marmottajr" },
   "homepage": "https://github.com/marmottajr/habblaud#readme",

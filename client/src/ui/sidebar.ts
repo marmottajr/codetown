@@ -2,6 +2,8 @@
 import type { AccountInfo, AgentInfo } from '../../../shared/types';
 import { roomTheme } from '../art';
 import type { UiComponent, UiContext } from './context';
+import { moveAgent, orderAgents } from './agentorder';
+import { moveRoom, orderRooms } from './roomorder';
 import { h, iconButton, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle } from './dom';
 import { plural, shortPath } from './format';
 import { ICONS } from './icons';
@@ -24,6 +26,8 @@ interface RoomRefs {
 
 interface NodeRefs {
   row: HTMLButtonElement;
+  /** Linha do agente: arrastável para reordenar os agentes da sala. */
+  head: HTMLElement;
   subsWrap: HTMLElement;
   subsCaption: HTMLElement;
   subs: KeyedList<AgentInfo>;
@@ -39,6 +43,12 @@ export class Sidebar implements UiComponent {
   private rooms: KeyedList<RoomGroup>;
   private roomRefs = new WeakMap<HTMLElement, RoomRefs>();
   private nodeRefs = new WeakMap<HTMLElement, NodeRefs>();
+  /** Agentes de cada sala na ordem mostrada (para arrastar e soltar). */
+  private shown = new Map<string, AgentNode[]>();
+  private dragging: { id: string; room: string } | null = null;
+  /** Sala sendo arrastada (reordenar as salas) e a ordem mostrada agora. */
+  private draggingRoom: string | null = null;
+  private shownRooms: string[] = [];
   private empty: HTMLElement;
   private emptyText: HTMLElement;
   private clearBtn: HTMLButtonElement;
@@ -136,7 +146,9 @@ export class Sidebar implements UiComponent {
     this.filterList.sync(accounts.length > 1 ? accounts : []);
     setHidden(this.filters, accounts.length <= 1);
 
-    const groups = groupRooms(snap, { query: this.query, hiddenAccounts: hidden });
+    // Ordem das salas escolhida pelo usuário (arrastando o cabeçalho da sala).
+    const groups = orderRooms(groupRooms(snap, { query: this.query, hiddenAccounts: hidden }), (g) => g.room.id);
+    this.shownRooms = groups.map((g) => g.room.id);
     this.rooms.sync(groups);
 
     const filtering = this.query.trim().length > 0 || hidden.size > 0;
@@ -198,6 +210,14 @@ export class Sidebar implements UiComponent {
       tasks,
     );
     head.addEventListener('click', () => this.ctx.select({ type: 'room', id: g.room.id }, { focus: true }));
+    this.wireRoomDrag(head, g.room.id);
+    // Botão direito: renomear a sala (ui/roomrename.ts).
+    head.addEventListener('contextmenu', (e) => {
+      if (!this.ctx.renameRoom) return;
+      e.preventDefault();
+      const r = head.getBoundingClientRect();
+      this.ctx.renameRoom(g.room.id, { x: r.left + 12, y: r.bottom + 4 });
+    });
     try {
       setStyleVar(head, '--room', roomTheme(g.room.seed).accent);
     } catch {
@@ -242,7 +262,95 @@ export class Sidebar implements UiComponent {
       updateProgress(r.tasksBar, t.completed, t.total, t.inProgress);
       setText(r.tasksText, `${t.completed}/${t.total} tarefas`);
     }
-    r.nodes.sync(g.nodes);
+    // Ordem escolhida pelo usuário (arrastando as linhas), guardada no navegador.
+    const ordered = orderAgents(g.room.id, g.nodes, (n) => n.agent.sessionId);
+    this.shown.set(g.room.id, ordered);
+    r.nodes.sync(ordered);
+  }
+
+  /** Arrastar o cabeçalho de uma sala reordena as salas da lista. */
+  private wireRoomDrag(head: HTMLElement, roomId: string): void {
+    head.draggable = true;
+    const after = (e: DragEvent) => {
+      const rect = head.getBoundingClientRect();
+      return e.clientY > rect.top + rect.height / 2;
+    };
+    const clear = () => {
+      for (const el of this.el.querySelectorAll('.ui-room__head.is-drop-before, .ui-room__head.is-drop-after')) el.classList.remove('is-drop-before', 'is-drop-after');
+    };
+    head.addEventListener('dragstart', (e) => {
+      this.draggingRoom = roomId;
+      head.classList.add('is-dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', roomId);
+      }
+    });
+    head.addEventListener('dragend', () => {
+      this.draggingRoom = null;
+      head.classList.remove('is-dragging');
+      clear();
+    });
+    head.addEventListener('dragover', (e) => {
+      const from = this.draggingRoom;
+      if (!from || from === roomId) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      clear();
+      head.classList.add(after(e) ? 'is-drop-after' : 'is-drop-before');
+    });
+    head.addEventListener('dragleave', () => head.classList.remove('is-drop-before', 'is-drop-after'));
+    head.addEventListener('drop', (e) => {
+      const from = this.draggingRoom;
+      clear();
+      if (!from || from === roomId) return;
+      e.preventDefault();
+      if (moveRoom(this.shownRooms, from, roomId, after(e))) this.ctx.invalidate();
+    });
+  }
+
+  /** Arrastar a linha de um agente principal reordena os agentes da mesma sala. */
+  private wireDrag(head: HTMLElement): void {
+    head.draggable = true;
+    const id = () => head.dataset.id ?? '';
+    const room = () => head.dataset.room ?? '';
+    const after = (e: DragEvent) => {
+      const rect = head.getBoundingClientRect();
+      return e.clientY > rect.top + rect.height / 2;
+    };
+    const clear = () => {
+      for (const el of this.el.querySelectorAll('.ui-node__head.is-drop-before, .ui-node__head.is-drop-after')) el.classList.remove('is-drop-before', 'is-drop-after');
+    };
+    head.addEventListener('dragstart', (e) => {
+      this.dragging = { id: id(), room: room() };
+      head.classList.add('is-dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', id());
+      }
+    });
+    head.addEventListener('dragend', () => {
+      this.dragging = null;
+      head.classList.remove('is-dragging');
+      clear();
+    });
+    head.addEventListener('dragover', (e) => {
+      const d = this.dragging;
+      if (!d || d.room !== room() || d.id === id()) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      clear();
+      head.classList.add(after(e) ? 'is-drop-after' : 'is-drop-before');
+    });
+    head.addEventListener('dragleave', () => head.classList.remove('is-drop-before', 'is-drop-after'));
+    head.addEventListener('drop', (e) => {
+      const d = this.dragging;
+      clear();
+      if (!d || d.room !== room() || d.id === id()) return;
+      e.preventDefault();
+      const shown = this.shown.get(d.room) ?? [];
+      if (moveAgent(d.room, shown, (n) => n.agent.id, (n) => n.agent.sessionId, d.id, id(), after(e))) this.ctx.invalidate();
+    });
   }
 
   // ---------------------------------------------------------------- agentes
@@ -252,19 +360,23 @@ export class Sidebar implements UiComponent {
     const subsCaption = h('span', { class: 'ui-subs__caption' });
     const subsList = h('ul', { class: 'ui-subs__list' });
     const subsWrap = h('div', { class: 'ui-subs', hidden: true }, subsCaption, subsList);
-    const li = h('li', { class: 'ui-node' }, row, subsWrap);
+    const head = h('div', { class: 'ui-node__head' }, row);
+    this.wireDrag(head);
+    const li = h('li', { class: 'ui-node' }, head, subsWrap);
     const subs = new KeyedList<AgentInfo>(subsList, {
       key: (a) => a.id,
       create: (a) => h('li', { class: 'ui-subs__item' }, createAgentRow(a, (id) => this.pick(id), 'sm')),
       update: (li2, a) => this.updateRow(li2.firstElementChild as HTMLElement, a),
     });
-    this.nodeRefs.set(li, { row, subsWrap, subsCaption, subs });
+    this.nodeRefs.set(li, { row, head, subsWrap, subsCaption, subs });
     return li;
   }
 
   private updateNode(li: HTMLElement, n: AgentNode): void {
     const r = this.nodeRefs.get(li)!;
     this.updateRow(r.row, n.agent);
+    r.head.dataset.id = n.agent.id;
+    r.head.dataset.room = n.agent.roomId;
     const has = n.subTotal > 0;
     setHidden(r.subsWrap, !has);
     if (has) {

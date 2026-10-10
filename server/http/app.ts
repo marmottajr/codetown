@@ -58,6 +58,8 @@ export interface ApiDeps {
    * que o docker:up monta. Sem ela, nenhuma chamada do hook vinda de fora do loopback é aceita.
    */
   codexHookKey?: Buffer;
+  /** Renomeia a sala (POST /api/rooms/rename {id, name}; vazio volta ao padrão). Devolve o nome em uso, ou undefined se a sala não existe. */
+  renameRoom?: (id: string, name: string) => string | undefined;
   /** Estatísticas do "Meu dia" (GET /api/stats, http/stats.ts). */
   stats?: DayStatsService;
   /** Verificação de versão nova no GitHub (GET /api/updates, POST /api/updates/check; updates/checker.ts). */
@@ -370,6 +372,23 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       const detail = office.detail(id);
       if (detail) sendJson(res, 200, detail);
       else sendJson(res, 404, { error: 'agente não encontrado' });
+      return true;
+    }
+    if (path === '/api/rooms/rename') {
+      // Como o personagem: a mesma trava do terminal (bind local + Host local).
+      if (method !== 'POST') methodNotAllowed(res, 'POST');
+      else if (!deps.terminal) sendJson(res, 403, { error: 'renomear salas desligado: só funciona com o Habblaud acessível apenas pelo próprio computador' });
+      else if (!isLoopbackHost(req.headers.host)) sendJson(res, 403, { error: 'renomear salas só pelo próprio computador (http://localhost)' });
+      else
+        readJson(req)
+          .then((body) => {
+            const b = body as { id?: unknown; name?: unknown };
+            if (typeof b?.id !== 'string' || typeof b.name !== 'string') throw new HttpError(400, 'esperado {id, name}');
+            const name = deps.renameRoom?.(b.id, b.name);
+            if (name === undefined) throw new HttpError(404, 'sala não encontrada');
+            sendJson(res, 200, { name });
+          })
+          .catch((err) => fail(res, err));
       return true;
     }
     if (path === '/api/stats' || path.startsWith('/api/stats/')) {

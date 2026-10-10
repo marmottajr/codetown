@@ -19,6 +19,7 @@ import { describeStateMigration, legacyEnvWarning, migrateLegacyStateDir } from 
 import { errMsg, log } from './log';
 import { NameStore } from './model/names';
 import { Office } from './model/office';
+import { RoomAliases } from './model/room-aliases';
 import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
@@ -52,6 +53,9 @@ if (legacyEnv) log.warn(legacyEnv);
 
 const names = new NameStore(join(config.dataDir, 'names.json'));
 names.load();
+// Nomes de sala escolhidos pelo usuário (botão direito > Renomear).
+const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
+roomAliases.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
 const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; codexAppServer?: CodexAppServerService } = {};
@@ -73,6 +77,7 @@ const accounts = new AccountsService({
 });
 const office = new Office({
   names,
+  roomAlias: (path) => roomAliases.get(path),
   version: config.version,
   // No modo dev o Vite serve o cliente direto do código-fonte: não há build para comparar.
   build: config.dev ? undefined : createBuildReader(config.rootDir),
@@ -208,6 +213,13 @@ const ticker = setInterval(() => {
 }, 250);
 
 const api = createApiHandler({
+  renameRoom: (id, name) => {
+    const path = office.roomPath(id);
+    if (!path) return undefined;
+    roomAliases.set(path, name);
+    office.refreshRoomNames();
+    return office.roomName(id);
+  },
   office,
   hub,
   accounts,

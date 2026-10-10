@@ -14,6 +14,7 @@ import type { UiComponent, UiContext } from './context';
 import { copyText, h, iconButton, prefersReducedMotion, setAttr, setHidden, setText, setTitle, setVariant } from './dom';
 import { calendarDayDiff, formatClock, formatDateTime, formatDuration, formatElapsed, relativeTime } from './format';
 import { ICONS } from './icons';
+import { maximizeButton, Movable } from './movable';
 import { renderMarkdown } from './markdown';
 import { roleLabel, shellWaitIn } from './model';
 import { providerOf } from './provider';
@@ -636,6 +637,7 @@ export class TerminalPanel implements UiComponent, TerminalControl {
   private glyph: HTMLElement;
   private statusText: HTMLElement;
   private statusTime: HTMLElement;
+  private movable: Movable;
   /** Caixa de mensagem do rodapé (só a sessão ao vivo de um agente principal). */
   private composer: MessageComposer;
 
@@ -663,6 +665,7 @@ export class TerminalPanel implements UiComponent, TerminalControl {
       h('div', { class: 'ui-term__who' }, this.accEl, this.nameEl, this.provEl, this.roleEl, this.roomEl),
       this.reconnEl,
       this.findBtn,
+      maximizeButton(() => this.movable),
       close,
     );
 
@@ -732,6 +735,8 @@ export class TerminalPanel implements UiComponent, TerminalControl {
       h('div', { class: 'ui-term__foot' }, this.status, this.composer.el),
     );
     this.el.addEventListener('keydown', (e) => this.onKey(e));
+    // Arrastar pela barra solta a janela (ui/movable.ts).
+    this.movable = new Movable(this.el, bar, { key: 'habblaud.move.term', enabled: () => !ctx.isNarrow() });
     this.renderFilter();
     // Janela redimensionada: quem está no fim continua vendo o fim.
     if (typeof ResizeObserver === 'function') new ResizeObserver(() => this.follow && this.scrollToEnd()).observe(this.scroll);
@@ -813,6 +818,7 @@ export class TerminalPanel implements UiComponent, TerminalControl {
     this.follow = true;
     this.unread = 0;
     this.lastEntryAt = 0;
+    if (this.el.hidden) this.movable.restore();
     this.el.hidden = false;
     this.el.classList.toggle('is-session', !!session);
     this.connect();

@@ -298,9 +298,9 @@ npm run docker:up        # tira o container codetown e copia os dados do volume 
 npm run mod:uninstall                       # tira o mod, os plugins de permissões e de mensagens e o marketplace
 npm run codex:uninstall                     # tira os hooks do Habblaud do Codex (os outros ficam)
 npm run docker:down                         # para o container
-docker volume rm habblaud_habblaud-data     # apaga os dados do container (nomes, linha do tempo e estatísticas)
+docker volume rm habblaud_habblaud-data     # apaga os dados do container (nomes, salas, linha do tempo e estatísticas)
 docker image rm habblaud:local              # apaga a imagem
-rm -rf ~/.habblaud                          # apaga os dados locais (uso capturado, nomes, linha do tempo e estatísticas)
+rm -rf ~/.habblaud                          # apaga os dados locais (uso capturado, nomes, salas, linha do tempo e estatísticas)
 ```
 
 Depois é só apagar a pasta do projeto — rode o `mod:uninstall` **antes**, senão o Claude Code das contas passa a
@@ -647,7 +647,7 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_HOST` | `127.0.0.1` | Interface do servidor no modo Node. Fora de `127.0.0.1`/`localhost`, o terminal (e responder e mandar mensagens pelo escritório) fica desligado. |
 | `HABBLAUD_BIND` | `127.0.0.1` | Só Docker (no `.env`): onde a porta é publicada. `0.0.0.0` libera a rede local (e desliga o terminal e o que age sobre as sessões). |
 | `HABBLAUD_CLAUDE_DIRS` | detecção automática | Pastas das contas, separadas por vírgula (ex.: `/caminho/conta1,/caminho/conta2`). |
-| `HABBLAUD_DATA_DIR` | `~/.habblaud` | Onde o Habblaud guarda os próprios dados (nomes dos personagens, linha do tempo do timelapse e estatísticas do Meu dia). |
+| `HABBLAUD_DATA_DIR` | `~/.habblaud` | Onde o Habblaud guarda os próprios dados (nomes dos personagens e das salas, linha do tempo do timelapse e estatísticas do Meu dia). |
 | `HABBLAUD_TIMELINE` | ligado | `0` desliga a gravação da linha do tempo (os dias já gravados continuam no timelapse). No Docker fica sempre ligado. |
 | `HABBLAUD_USAGE_DIR` | `~/.habblaud/usage` | Onde o mod (ou o tap de statusline) grava o uso. |
 | `HABBLAUD_DEMO` | desligado | `1` liga o modo demonstração ao iniciar. |
@@ -719,6 +719,7 @@ mod/      o mod do Habblaud e os plugins de permissões e de mensagens (plugins 
 | `GET /api/timeline/:dia` | Linha do tempo de um dia (`AAAA-MM-DD`), em JSONL (com gzip). |
 | `GET /api/health` | Saúde: versão, demonstração, Docker, terminal, responder e mandar mensagens pelo escritório, fontes e status de uso de cada conta. |
 | `POST /api/demo` | `{"enabled": true \| false}` liga ou desliga os agentes simulados. |
+| `POST /api/rooms/rename` | `{"id": sala, "name": nome}` renomeia a sala (vazio volta ao nome da pasta); o nome fica em `rooms.json`, na pasta de dados. Só com acesso local. |
 | `GET /api/mod/summary` | Para o mod do Claude Code: versão, quantos agentes, quantos trabalham e quem precisa de você (sem o demo e, com `?account=&session=`, sem a própria sessão). |
 | `/api/permissions…` | Responder pelo escritório: o hook de permissão registra o pedido (permissão ou pergunta) e espera; a página busca o detalhe e decide ou responde. Só com acesso local; as chamadas do hook do Codex vindas de fora do loopback (Docker) só valem com a prova da chave do hook. |
 | `/api/messages…` e `/api/mod/inbox…` | Mandar mensagens: a página deixa a mensagem na fila e acompanha a entrega; o plugin `habblaud-mensagens` a busca, entrega à sessão e confirma. Só com acesso local. |

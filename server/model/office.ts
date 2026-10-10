@@ -50,6 +50,8 @@ const FEED_LIMIT = 200;
 
 export interface OfficeDeps {
   names: NameStore;
+  /** Nome escolhido pelo usuário para a sala da pasta (model/room-aliases.ts), se houver. */
+  roomAlias?: (path: string) => string | undefined;
   version: string;
   /** Build do cliente servido (ver OfficeSnapshot.meta.build); ausente no modo dev e nos testes. */
   build?: () => string | undefined;
@@ -275,6 +277,11 @@ export class Office {
   /** Agentes reais presentes (inclusive em período de graça). */
   list(): AgentInfo[] {
     return [...this.agents.values()].map((r) => r.info);
+  }
+
+  /** Pasta do projeto da sala (cwd original, sem normalizar). */
+  roomPath(roomId: string): string | undefined {
+    return this.rooms.get(roomId)?.path;
   }
 
   roomName(roomId: string): string {
@@ -811,10 +818,19 @@ export class Office {
     const rec = this.editable(id);
     if (!rec) return { result: 'not-found' };
     const info = rec.info;
-    const conflict = this.nameConflict(input.name, id, info.roomId);
+    // Quem está saindo conta aqui: ao reabrir dentro do período de graça, ele volta com o nome dele.
+    const conflict = this.nameConflict(input.name, id, info.roomId, true);
     if (conflict) return { result: 'conflict', message: conflict };
     const before = info.name;
     const parts = Object.keys(input.parts).length ? { ...input.parts } : undefined;
+    // Outro principal da sala que estava com o personagem continua com o nome atual, agora guardado como o da sessão
+    // dele: depois de um reinício, cada sessão volta quem era, e não com o personagem que esta salvou.
+    for (const r of this.agents.values()) {
+      const o = r.info;
+      if (o.id === id || o.kind !== 'main' || o.roomId !== info.roomId || !o.custom) continue;
+      this.deps.names.remember(o.sessionId, { name: o.name, look: o.look });
+      delete o.custom;
+    }
     this.deps.names.setCharacter(info.roomId, { name: input.name, look: info.look, seed: input.seed, ...(parts ? { parts } : {}), owner: info.sessionId });
     info.name = input.name;
     info.seed = input.seed;
@@ -828,12 +844,16 @@ export class Office {
     return { result: 'ok' };
   }
 
-  /** "Voltar ao sorteio": a sala perde o personagem e o agente volta ao nome da sessão e à seed do id. */
+  /**
+   * "Voltar ao sorteio": o agente volta ao nome da sessão e à seed do id; a sala só perde o personagem se ele for desta
+   * sessão (o que outra sessão da sala salvou depois continua dela).
+   */
   resetCharacter(id: string): 'ok' | 'not-found' {
     const rec = this.editable(id);
     if (!rec) return 'not-found';
     const info = rec.info;
-    this.deps.names.clearCharacter(info.roomId);
+    const owner = this.deps.names.character(info.roomId)?.owner;
+    if (owner === undefined || owner === info.sessionId) this.deps.names.clearCharacter(info.roomId);
     if (info.custom) {
       const person = this.deps.names.assign(info.sessionId, this.takenNames(id));
       info.name = person.name;
@@ -867,11 +887,14 @@ export class Office {
     return c;
   }
 
-  /** Por que `name` não pode ser o personagem de `id` na sala `roomId` (undefined = pode). Quem está saindo não conta. */
-  private nameConflict(name: string, id: string, roomId: string): string | undefined {
+  /**
+   * Por que `name` não pode ser o personagem de `id` na sala `roomId` (undefined = pode). Quem está saindo só conta com
+   * `leaving`: na chegada costuma ser a mesma sessão reaberta; no editor, é alguém que pode voltar com esse nome.
+   */
+  private nameConflict(name: string, id: string, roomId: string, leaving = false): string | undefined {
     const key = nameKey(name);
     for (const r of this.agents.values()) {
-      if (r.info.id === id || r.removeAt !== undefined || nameKey(r.info.name) !== key) continue;
+      if (r.info.id === id || (r.removeAt !== undefined && !leaving) || nameKey(r.info.name) !== key) continue;
       return `${r.info.name} já está no escritório em ${this.roomName(r.info.roomId)}`;
     }
     for (const a of this.demoSnap?.agents ?? []) {
@@ -1019,6 +1042,16 @@ export class Office {
     const paths = new Map([...this.rooms].map(([id, r]) => [id, r.path]));
     for (const r of this.demoSnap?.rooms ?? []) paths.set(r.id, r.path);
     this.roomNames = roomDisplayNames(paths);
+    for (const [id, path] of paths) {
+      const alias = this.deps.roomAlias?.(path);
+      if (alias) this.roomNames.set(id, alias);
+    }
+  }
+
+  /** Um nome de sala mudou (renomear): recalcula e transmite. */
+  refreshRoomNames(): void {
+    this.recomputeRoomNames();
+    this.markDirty();
   }
 
   private pushFeed(items: FeedItem[]): void {

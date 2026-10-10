@@ -17,10 +17,6 @@ mudou.
 
 ### Adicionado
 
-- **Editar o personagem de um projeto.** Nos detalhes do agente principal, o lápis ao lado do nome abre um editor
-  com o nome, **Sortear** e as peças (pele, cabelo, barba, olhos, roupa, sapatos e acessório), com prévia. A escolha
-  vale para o projeto: a próxima sessão na mesma sala chega com o mesmo personagem, e **Voltar ao sorteio** desfaz.
-  Só funciona pelo próprio computador, como o terminal.
 - **Aprovar o Codex do terminal pelo escritório, ao mesmo tempo que o terminal.** O `codex` no terminal, que roda as
   sessões no daemon do app-server, mostra o pedido de aprovação no cartão **Pede permissão** e no terminal juntos, sem
   prazo: vale o que você responder primeiro, e o cartão fecha sozinho quando a resposta é no terminal. Os botões são
@@ -41,18 +37,6 @@ mudou.
 
 ### Corrigido
 
-- No Windows, as mensagens ao Codex procuravam `codex` no PATH e achavam o script que o npm instala ao lado do
-  executável: o Habblaud dizia que as mensagens estavam ligadas, mas cada entrega falhava, porque o script não roda
-  sem shell. Agora a busca é pelo `codex.exe`. Com o Codex instalado só pelo npm, aponte `HABBLAUD_CODEX_BIN` para o
-  executável nativo (`codex.exe`).
-- No Windows, o comando de statusline que já existia antes do `npm run usage:install` (o Habblaud o guarda e
-  continua rodando) era executado pelo `cmd.exe`, e o que funcionava no Claude Code (aspas simples, variáveis, pipes)
-  quebrava. Agora ele roda no Git Bash, como no Claude Code: o de `CLAUDE_CODE_GIT_BASH_PATH` ou o da instalação do
-  Git. Sem o Git Bash, continua no `cmd.exe`.
-- No Windows, os instaladores (`usage:install`, `hooks:install`, `codex:install` e `mod:install`) mostravam os
-  caminhos da pasta do usuário por inteiro (`C:\Users\...`) em vez de `~/...`.
-- A suíte de testes (`npm test`) passa no Windows: os testes que supunham caminhos, shell ou permissões do Linux e do
-  macOS agora valem nos três sistemas, e os poucos que dependem de algo que o Windows não tem são pulados nele.
 - Uma sessão do Codex aberta e parada sumia do escritório depois de 12 horas, e uma que fechou à força ficava até lá.
   Agora o Habblaud confere se o Codex ainda segura a trava da sessão (sem nunca travá-la): no Windows e no Linux, a
   sessão fica enquanto estiver aberta e sai segundos depois de o processo que segura a trava fechar, mesmo à força; no
@@ -93,6 +77,53 @@ mudou.
   só decide com a prova da mesma chave. Depois de atualizar, reinicie o Habblaud.
 - Um token cortado ao meio podia escapar da máscara de segredos nos textos que o Codex mostra (prompts, comandos,
   buscas, perguntas, plano, títulos, detalhes de erro e pedidos de subagente): a máscara agora vem antes do corte.
+
+## [0.8.0] - 2026-10-09
+
+Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio
+computador (a mesma trava do terminal). Os nomes das salas ficam em `rooms.json` e os personagens em `names.json`, na
+pasta de dados do Habblaud; voltar para a 0.7 faz os personagens escolhidos sumirem na primeira gravação.
+
+### Adicionado
+
+- A lista lateral e a dica do personagem mostram o título da sessão (nos subagentes, a tarefa) embaixo do nome. Na
+  lista, o agente principal parado há 1 minuto ou mais mostra **ocioso 12 min** no lugar de "Principal"; na dica, o
+  estado vem com há quanto tempo ele está assim (**há 12 min**).
+- **Janelas móveis:** o terminal e a gaveta do agente se soltam do lugar arrastando pela barra, mudam de tamanho por
+  qualquer borda ou quina e voltam ao lugar com um duplo clique na barra. O terminal ganha o botão **Expandir na tela
+  toda**. Posição e tamanho ficam guardados no navegador; em tela estreita tudo continua fixo. Solta, a gaveta deixa de
+  reservar a lateral do escritório.
+- **Reordenar a lista lateral:** arrastar a linha de um agente principal muda a ordem dos agentes da sala, e arrastar
+  o cabeçalho de uma sala muda a ordem das salas (no prédio elas ficam onde estão). A ordem fica guardada no
+  navegador; a dos agentes vai pela sessão do Claude Code e sobrevive a retomar a sessão.
+- **Renomear sala:** botão direito numa sala (na lista lateral ou no escritório) abre um campo para dar outro nome a
+  ela; vazio volta ao nome da pasta. O nome fica no servidor (`rooms.json`, na pasta de dados do Habblaud), por pasta:
+  vale em qualquer navegador e sobrevive a reinícios. Na gaveta da sala, um lápis ao lado do nome abre o mesmo campo.
+  Só pelo próprio computador; as salas de demonstração não mudam.
+- **Editar o personagem de um projeto.** Nos detalhes do agente principal, o lápis ao lado do nome abre um editor
+  com o nome, **Sortear** e as peças (pele, cabelo, barba, olhos, roupa, sapatos e acessório), com prévia. A escolha
+  vale para o projeto: a próxima sessão na mesma sala chega com o mesmo personagem, e **Voltar ao sorteio** desfaz.
+  Só funciona pelo próprio computador, como o terminal.
+
+### Alterado
+
+- A linha do tempo do agente mostra os 15 itens mais recentes, com **Mostrar mais** (mais 15 a cada clique, até
+  os 200 guardados) e **Mostrar menos** (volta aos 15). Antes eram 80 de uma vez.
+
+### Corrigido
+
+- No Windows, as mensagens ao Codex procuravam `codex` no PATH e achavam o script que o npm instala ao lado do
+  executável: o Habblaud dizia que as mensagens estavam ligadas, mas cada entrega falhava, porque o script não roda
+  sem shell. Agora a busca é pelo `codex.exe`. Com o Codex instalado só pelo npm, aponte `HABBLAUD_CODEX_BIN` para um
+  `codex.exe`.
+- No Windows, o comando de statusline que já existia antes do `npm run usage:install` (o Habblaud o guarda e
+  continua rodando) era executado pelo `cmd.exe`, e o que funcionava no Claude Code (aspas simples, variáveis, pipes)
+  quebrava. Agora ele roda no Git Bash, como no Claude Code: o de `CLAUDE_CODE_GIT_BASH_PATH` ou o da instalação do
+  Git. Sem o Git Bash, continua no `cmd.exe`.
+- No Windows, os instaladores (`usage:install`, `hooks:install`, `codex:install` e `mod:install`) mostravam os
+  caminhos da pasta do usuário por inteiro (`C:\Users\...`) em vez de `~/...`.
+- A suíte de testes (`npm test`) passa no Windows: os testes que supunham caminhos, shell ou permissões do Linux e do
+  macOS agora valem nos três sistemas, e os poucos que dependem de algo que o Windows não tem são pulados nele.
 
 ## [0.7.0] - 2026-10-09
 

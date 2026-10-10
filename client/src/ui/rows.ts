@@ -1,7 +1,7 @@
 // Linha de agente (avatar, nome, conta, papel, status e atividade), usada na barra lateral e na gaveta.
 import type { AccountInfo, AgentInfo } from '../../../shared/types';
 import { createAvatar, updateAvatar, type AvatarSize } from './avatar';
-import { h, setAttr, setStyleVar, setText, setVariant } from './dom';
+import { h, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
 import { formatDuration } from './format';
 import { activityFallback, shellLine, shellWaitIn, statusLabel } from './model';
 import {
@@ -23,6 +23,10 @@ interface RowRefs {
   role: HTMLElement;
   dot: HTMLElement;
   activity: HTMLElement;
+  /** Título da sessão (do que se trata), como no hover do personagem. */
+  task: HTMLElement;
+  /** Há quanto tempo está ocioso (no lugar do "Principal"). */
+  since: HTMLElement;
   size: AvatarSize;
 }
 
@@ -35,16 +39,18 @@ export function createAgentRow(agent: AgentInfo, onPick: (id: string) => void, s
   const role = createRoleBadge();
   const dot = createStatusDot();
   const activity = createActivityLine();
+  const task = h('span', { class: 'ui-agent__task', hidden: true });
+  const since = h('span', { class: 'ui-agent__since', hidden: true });
   const row = h(
     'button',
     { class: 'ui-agent', type: 'button' },
     avatar,
-    h('span', { class: 'ui-agent__main' }, h('span', { class: 'ui-agent__top' }, name, chip, role), activity),
+    h('span', { class: 'ui-agent__main' }, h('span', { class: 'ui-agent__top' }, name, chip, since, role), task, activity),
     dot,
   );
   row.dataset.id = agent.id;
   row.addEventListener('click', () => onPick(row.dataset.id!));
-  refs.set(row, { avatar, name, chip, role, dot, activity, size });
+  refs.set(row, { avatar, name, chip, role, dot, activity, task, since, size });
   return row;
 }
 
@@ -68,6 +74,17 @@ export function updateAgentRow(
   setText(r.name, agent.name);
   updateAccountChip(r.chip, account, agent.account, agent.provider);
   updateRoleBadge(r.role, agent);
+  const title = agent.title?.trim() ?? '';
+  setText(r.task, title);
+  setTitle(r.task, title);
+  setHidden(r.task, !title);
+  // Agente principal ocioso há 1 min ou mais: o tempo aparece no lugar do "Principal".
+  const idleFor = agent.kind === 'main' && agent.status === 'idle' && agent.statusSince ? now - agent.statusSince : 0;
+  const showIdle = idleFor >= 60_000;
+  setText(r.since, showIdle ? `ocioso ${formatDuration(idleFor)}` : '');
+  setTitle(r.since, showIdle ? `Ocioso há ${formatDuration(idleFor)}` : '');
+  setHidden(r.since, !showIdle);
+  setHidden(r.role, showIdle);
   // Esperando um shell (ou parado num comando longo): ampulheta no ponto e o cronômetro na linha de atividade.
   const wait = shellWaitIn(agent, agents, now);
   const status = wait ? 'shell' : agent.status;
