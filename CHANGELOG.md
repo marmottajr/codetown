@@ -10,6 +10,10 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Corrigido
+
+- Listas de tarefas malformadas do Claude Code não interrompem a leitura; o escritório preserva as demais atividades do mesmo lote, inclusive nos subagentes.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio

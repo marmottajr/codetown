@@ -691,7 +691,7 @@ export function describeTool(name: string, rawInput: unknown): ActivityDescripti
       return make('web', '🌐', url ? `Lendo ${domainOf(url)}` : 'Lendo uma página', url);
     }
     case 'TodoWrite': {
-      const todos = Array.isArray(input.todos) ? (input.todos as Array<Record<string, unknown>>) : [];
+      const todos = Array.isArray(input.todos) ? input.todos.filter((t): t is Record<string, unknown> => !!t && typeof t === 'object') : [];
       const done = todos.filter((t) => t.status === 'completed').length;
       return make('plan', '🗒️', 'Atualizando a lista de tarefas', todos.length ? `${done}/${todos.length} concluídas` : undefined);
     }

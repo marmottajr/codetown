@@ -37,6 +37,7 @@ import {
   scanPrefix,
   titleOf,
   type LineResult,
+  type ParseContext,
   type ShellEvent,
   type SpawnInfo,
   type TranscriptSignal,
@@ -150,6 +151,16 @@ const IDLE_CLEARS_SHELLS_MS = 30_000;
 function addBounded(set: Set<string>, v: string): void {
   set.add(v);
   if (set.size > MAX_SET) set.delete(set.values().next().value as string);
+}
+
+/** Uma linha que falha não descarta as demais já consumidas pelo tail. */
+function parseWatchedLine(state: TranscriptState, line: string, ctx: ParseContext): LineResult {
+  try {
+    return parseLine(state, line, ctx);
+  } catch (err) {
+    log.warnOnce(`line:${ctx.idPrefix}:${errMsg(err)}`, `Linha do transcript de ${ctx.idPrefix} ignorada: ${errMsg(err)}`);
+    return { activities: [], signals: [], changed: false, at: ctx.now };
+  }
 }
 
 export class ClaudeWatcher implements AgentSource {
@@ -495,7 +506,7 @@ export class ClaudeWatcher implements AgentSource {
    * (no lugar certo do feed) em vez de um "Fazendo uma pergunta" atrasado.
    */
   private applyMainLines(t: SessionTracker, lines: string[], live: boolean): void {
-    const results = lines.map((line) => parseLine(t.state, line, { idPrefix: t.key, now: this.now() }));
+    const results = lines.map((line) => parseWatchedLine(t.state, line, { idPrefix: t.key, now: this.now() }));
     for (const r of results) {
       for (const a of r.activities) {
         if (a.activity.kind === 'ask' && a.toolUseId && !t.state.pendingTools.has(a.toolUseId)) {
@@ -731,7 +742,7 @@ export class ClaudeWatcher implements AgentSource {
     const results: LineResult[] = [];
     for (let i = 0; i < 64; i++) {
       const r = tail.read();
-      for (const line of r.lines) results.push(parseLine(state, line, { idPrefix: id, now }));
+      for (const line of r.lines) results.push(parseWatchedLine(state, line, { idPrefix: id, now }));
       if (!r.more) break;
     }
     const finished =
@@ -800,7 +811,7 @@ export class ClaudeWatcher implements AgentSource {
           break;
         }
         for (const line of r.lines) {
-          const res = parseLine(sub.state, line, { idPrefix: sub.id, now });
+          const res = parseWatchedLine(sub.state, line, { idPrefix: sub.id, now });
           fresh += res.activities.length;
           this.applyResult(t, sub.id, res, true);
         }
