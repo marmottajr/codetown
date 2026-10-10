@@ -35,6 +35,7 @@ import {
   shellWaitIn,
   sortByUrgency,
   statusLabel,
+  subagentsOf,
   taskProgress,
   visibleShells,
 } from './model';
@@ -238,6 +239,9 @@ class AgentView {
   private teamSec: ReturnType<typeof section>;
   private team: KeyedList<AgentInfo>;
   private teamEmpty: HTMLElement;
+  /** Subagentes de um sub do Codex (o neto do principal); escondida quando não há. */
+  private childSec: ReturnType<typeof section>;
+  private children: KeyedList<AgentInfo>;
   private timeline: KeyedList<Activity>;
   private timelineSec: ReturnType<typeof section>;
   private timelineMore: HTMLButtonElement;
@@ -355,6 +359,13 @@ class AgentView {
       create: (a) => createAgentRow(a, (id) => ctx.select({ type: 'agent', id }, { focus: true }), 'sm'),
       update: (row, a) => updateAgentRow(row, a, ctx.account(a.account), false, ctx.now(), ctx.store.snapshot?.agents),
     });
+    const childList = h('div', { class: 'ui-team' });
+    this.childSec = section('Subagentes', childList);
+    this.children = new KeyedList<AgentInfo>(childList, {
+      key: (a) => a.id,
+      create: (a) => createAgentRow(a, (id) => ctx.select({ type: 'agent', id }, { focus: true }), 'sm'),
+      update: (row, a) => updateAgentRow(row, a, ctx.account(a.account), false, ctx.now(), ctx.store.snapshot?.agents),
+    });
 
     const tl = h('ol', { class: 'ui-timeline' });
     this.timelineMore = h('button', { class: 'ui-btn ui-btn--sm', type: 'button', on: { click: () => this.showTimeline(this.timelineShown + TIMELINE_STEP) } });
@@ -401,6 +412,7 @@ class AgentView {
       this.social.el,
       this.tasksSec.el,
       this.teamSec.el,
+      this.childSec.el,
       this.timelineSec.el,
       statsSec.el,
       this.codexHint,
@@ -563,9 +575,10 @@ class AgentView {
     setText(this.tasksSec.extra, `${tp.completed}/${tp.total}`);
     this.tasks.sync(a.tasks);
 
-    // Equipe: subagentes (principal) ou responsável (sub).
+    // Equipe: subagentes (principal) ou responsável (sub); o sub do Codex que disparou outros também os lista.
+    const subs = subagentsOf(a, this.ctx.store.snapshot?.agents ?? []);
     if (a.kind === 'main') {
-      const subs = sortByUrgency((this.ctx.store.snapshot?.agents ?? []).filter((s) => s.parentId === a.id));
+      setHidden(this.childSec.el, true);
       setText(this.teamSec.title, 'Subagentes');
       setText(this.teamSec.extra, subs.length ? String(subs.length) : '');
       setText(this.teamEmpty, a.stats.subagents ? `Nenhum ativo agora (${plural(a.stats.subagents, 'disparado', 'disparados')} nesta sessão).` : 'Nenhum subagente disparado ainda.');
@@ -578,6 +591,9 @@ class AgentView {
       setText(this.teamEmpty, 'O agente principal já não está no escritório.');
       setHidden(this.teamEmpty, !!parent);
       this.team.sync(parent ? [parent] : []);
+      setHidden(this.childSec.el, subs.length === 0);
+      setText(this.childSec.extra, subs.length ? String(subs.length) : '');
+      this.children.sync(subs);
     }
 
     // Linha do tempo (mais recente primeiro).

@@ -24,6 +24,7 @@ import {
   shortcutHint,
   sortByUrgency,
   statusLabel,
+  subagentsOf,
   visibleShells,
   waitingAgents,
 } from './model';
@@ -120,7 +121,60 @@ describe('groupRooms', () => {
   it('sem snapshot devolve lista vazia', () => {
     expect(groupRooms(null)).toEqual([]);
   });
+
+  // Sub de sub: o Codex liga o neto ao sub que o disparou (o Claude também pode ter netos, e segue como sempre foi).
+  const tree = (provider?: 'codex') => {
+    const p = provider ? { provider } : {};
+    return {
+      rooms: [room('api', 0)],
+      accounts,
+      agents: [
+        agent({ id: 'chefe', roomId: 'api', startedAt: 1, ...p }),
+        agent({ id: 'filho1', kind: 'sub', parentId: 'chefe', roomId: 'api', startedAt: 2, ...p }),
+        agent({ id: 'filho2', kind: 'sub', parentId: 'chefe', roomId: 'api', startedAt: 3, ...p }),
+        agent({ id: 'neto', name: 'Neto', kind: 'sub', parentId: 'filho1', roomId: 'api', startedAt: 4, ...p }),
+        agent({ id: 'bisneto', name: 'Bia', kind: 'sub', parentId: 'neto', roomId: 'api', startedAt: 5, ...p }),
+      ],
+    };
+  };
+  it('Codex: neto e bisneto aparecem sob o pai (logo depois dele) e contam no total', () => {
+    const [api] = groupRooms(tree('codex'));
+    expect(api.nodes.map((n) => n.agent.id)).toEqual(['chefe']);
+    expect(api.nodes[0].subs.map((s) => s.id)).toEqual(['filho1', 'neto', 'bisneto', 'filho2']);
+    expect(api.nodes[0].subTotal).toBe(4);
+    const found = groupRooms(tree('codex'), { query: 'neto', hiddenAccounts: new Set() });
+    expect(found[0].nodes[0].subs.map((s) => s.id)).toEqual(['neto']);
+    expect(found[0].matches).toBe(1);
+  });
+  it('Claude: a barra continua só com os filhos diretos', () => {
+    const [api] = groupRooms(tree());
+    expect(api.nodes[0].subs.map((s) => s.id)).toEqual(['filho1', 'filho2']);
+    expect(api.nodes[0].subTotal).toBe(2);
+  });
 });
+
+describe('subagentsOf (gaveta)', () => {
+  it('principal: os filhos diretos por urgência; sub do Codex: os dele (o neto); sub do Claude: nenhum, como antes', () => {
+    const codex = tree2('codex');
+    const byId = (id: string) => codex.find((a) => a.id === id)!;
+    expect(subagentsOf(byId('chefe'), codex).map((a) => a.id)).toEqual(['filho2', 'filho1']);
+    expect(subagentsOf(byId('filho1'), codex).map((a) => a.id)).toEqual(['neto']);
+    expect(subagentsOf(byId('filho2'), codex)).toEqual([]);
+    const claude = tree2();
+    expect(subagentsOf(claude.find((a) => a.id === 'chefe')!, claude).map((a) => a.id)).toEqual(['filho2', 'filho1']);
+    expect(subagentsOf(claude.find((a) => a.id === 'filho1')!, claude)).toEqual([]);
+  });
+});
+
+function tree2(provider?: 'codex'): AgentInfo[] {
+  const p = provider ? { provider } : {};
+  return [
+    agent({ id: 'chefe', roomId: 'api', startedAt: 1, ...p }),
+    agent({ id: 'filho1', kind: 'sub', parentId: 'chefe', roomId: 'api', startedAt: 2, ...p }),
+    agent({ id: 'filho2', kind: 'sub', parentId: 'chefe', roomId: 'api', startedAt: 3, status: 'waiting', ...p }),
+    agent({ id: 'neto', kind: 'sub', parentId: 'filho1', roomId: 'api', startedAt: 4, ...p }),
+  ];
+}
 
 describe('utilidades', () => {
   it('matchesQuery exige todos os termos', () => {
