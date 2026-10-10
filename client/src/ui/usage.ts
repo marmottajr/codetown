@@ -184,7 +184,7 @@ export function usageSubtitle(a: Pick<AccountInfo, 'email' | 'plan' | 'configDir
 export function usageMessage(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>): [string, string] {
   const state = cardState(a);
   if (state === 'noquota') return ['sem cota', 'sem cota'];
-  if (isOpencode(a)) return ['o OpenCode não tem cota única', 'sem cota'];
+  if (isOpencode(a)) return ['o OpenCode não tem cota única', 'sem dados de cota'];
   if (isAntigravity(a)) return ['sem dados: npm run antigravity:install -- --uso', 'sem dados'];
   if (isCodex(a)) return ['sem dados ainda', 'sem dados'];
   return ['sem dados de uso', 'sem dados'];
@@ -424,7 +424,7 @@ export class UsageCards {
     }
     // OpenCode: vários provedores e contas, sem cota única; a dica não manda instalar nada.
     if (isOpencode(a)) {
-      setText(r.tipNote, 'O OpenCode usa vários provedores e contas, sem uma cota única para mostrar aqui. Além disso, o OpenCode não informa cota ao Habblaud: não há número de uso para ler.');
+      setText(r.tipNote, 'O OpenCode usa vários provedores e contas, sem uma cota única para mostrar aqui. Além disso, o OpenCode não informa cota ao Habblaud: não há um número único para ler. O uso (tokens e custo, do banco local) aparece em `opencode stats`. Já os limites do OpenCode Go (5 horas, semanal e mensal, em dólares, por modelo) ficam no console do OpenCode, não em arquivo local. Por isso o cartão não mostra barra.');
       setHidden(r.tipNote, false);
       setHidden(r.tipSetup, !usageSetupVisible(a));
       return;

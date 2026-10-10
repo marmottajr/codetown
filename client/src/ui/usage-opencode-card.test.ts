@@ -1,4 +1,4 @@
-// Cartão de uso do OpenCode no DOM: o texto do cartão segue "sem cota" e a dica explica por quê (o OpenCode não
+// Cartão de uso do OpenCode no DOM: o cartão diz "sem dados de cota" e a dica explica por quê (o OpenCode não
 // informa cota ao Habblaud), sem mandar instalar nada.
 import { afterAll, describe, expect, it } from 'vitest';
 import type { AccountInfo } from '../../../shared/types';
@@ -11,8 +11,8 @@ const oc: AccountInfo = { id: 'opencode', provider: 'opencode', short: 'OC', nam
 
 describe('cartão de uso do OpenCode', () => {
   const [card] = renderCards([oc], Date.parse('2026-10-10T16:00:00Z'));
-  it('o cartão continua dizendo "sem cota", sem botão "Ativar"', () => {
-    expect(card!.one('ui-usage-card__msg-short').textContent).toBe('sem cota');
+  it('o cartão diz "sem dados de cota", sem botão "Ativar"', () => {
+    expect(card!.one('ui-usage-card__msg-short').textContent).toBe('sem dados de cota');
     expect(card!.one('ui-usage-card__msg').visible).toBe(true);
     expect(card!.one('ui-usage-card__how').visible).toBe(false);
   });
@@ -21,6 +21,10 @@ describe('cartão de uso do OpenCode', () => {
     expect(note.visible).toBe(true);
     expect(note.textContent).toContain('o OpenCode não informa cota ao Habblaud');
     expect(note.textContent).toContain('vários provedores');
+    expect(note.textContent).toContain('opencode stats');
+    expect(note.textContent).toContain('OpenCode Go (5 horas, semanal e mensal, em dólares, por modelo)');
+    expect(note.textContent).toContain('console do OpenCode, não em arquivo local');
+    expect(note.textContent).toContain('o cartão não mostra barra');
     expect(card!.one('ui-usage-tip__setup').visible).toBe(false);
   });
 });

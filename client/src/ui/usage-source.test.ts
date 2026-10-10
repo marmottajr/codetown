@@ -56,7 +56,7 @@ describe('cartão de uso: Ativar só onde faz sentido', () => {
   it('OpenCode sem uso: sem botão, mensagem neutra, sem o passo a passo da dica', () => {
     const oc = { ...base, provider: 'opencode' as const };
     expect(usageHowVisible(oc)).toBe(false);
-    expect(usageMessage(oc)).toEqual(['o OpenCode não tem cota única', 'sem cota']);
+    expect(usageMessage(oc)).toEqual(['o OpenCode não tem cota única', 'sem dados de cota']);
     expect(usageSetupVisible(oc)).toBe(false);
   });
   it('Claude sem uso: botão e "sem dados de uso" continuam, com o passo a passo', () => {
