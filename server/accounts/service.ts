@@ -10,6 +10,7 @@ import { log } from '../log';
 import { detectAccounts, type DetectedAccount } from './detect';
 import { StatuslineUsageReader, type StatuslineUsage } from './statusline';
 import { usageFromCache, UsageStore, type UsageSource, type UsageView } from './usage';
+import { tr } from '../../shared/i18n';
 
 export interface AccountEntry {
   id: string;
@@ -71,7 +72,7 @@ export class AccountsService {
     try {
       detected = detectAccounts(this.opts.dirs, { home: this.opts.home, env: this.opts.env });
     } catch (err) {
-      log.warnOnce('detect-accounts', `Falha ao detectar contas: ${String(err).slice(0, 120)}`);
+      log.warnOnce('detect-accounts', tr('Falha ao detectar contas: {0}', [String(err).slice(0, 120)]));
       return;
     }
     const next = this.opts.dirs.map((dir, i): AccountEntry => ({ id: detected[i].id, provider: 'claude', dir, detected: detected[i] }));
@@ -97,7 +98,7 @@ export class AccountsService {
     try {
       files = this.statusline.read(this.now());
     } catch (err) {
-      log.warnOnce('statusline-read', `Falha ao ler o uso do statusline: ${String(err).slice(0, 120)}`);
+      log.warnOnce('statusline-read', tr('Falha ao ler o uso do statusline: {0}', [String(err).slice(0, 120)]));
       return;
     }
     let changed = false;

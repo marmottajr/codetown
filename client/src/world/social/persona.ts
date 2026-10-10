@@ -5,6 +5,7 @@
 // Os rótulos são substantivos ("Competição", "Vaidade"): não dependem do gênero de ninguém.
 import { mulberry32 } from '../../../../shared/hash';
 import { IDLE_WEIGHTS, type IdleActivity } from '../sim/behavior';
+import { tr } from '../../../../shared/i18n';
 
 export type TraitId =
   | 'competicao'
@@ -31,20 +32,20 @@ export interface Trait {
 }
 
 export const TRAITS: Readonly<Record<TraitId, Trait>> = {
-  competicao: { id: 'competicao', emoji: '🏆', label: 'Competição', desc: 'Adora competir: desafia os colegas no ping-pong, no videogame e no jokenpô.' },
-  apostas: { id: 'apostas', emoji: '🎲', label: 'Apostas', desc: 'Topa qualquer aposta e aposta alto no jokenpô.' },
-  games: { id: 'games', emoji: '🎮', label: 'Games', desc: 'Vive no videogame do lounge e nos fliperamas — e costuma ganhar.' },
-  series: { id: 'series', emoji: '📺', label: 'Séries e TV', desc: 'Não perde um programa na TV do lounge (de preferência com pipoca).' },
-  fofoca: { id: 'fofoca', emoji: '🗣️', label: 'Fofoca', desc: 'Puxa papo na copa e sabe de tudo o que acontece nas salas.' },
-  vaidade: { id: 'vaidade', emoji: '💄', label: 'Vaidade', desc: 'Passa no espelho do banheiro para se arrumar sempre que pode.' },
-  cafeina: { id: 'cafeina', emoji: '☕', label: 'Cafeína', desc: 'Movido a café: a cafeteira da copa é a segunda casa.' },
-  piadas: { id: 'piadas', emoji: '😂', label: 'Piadas', desc: 'Conta piada em toda conversa e faz a roda rir.' },
-  esporte: { id: 'esporte', emoji: '🏓', label: 'Esporte', desc: 'Joga ping-pong, se alonga e vibra com o futebol na TV.' },
-  timidez: { id: 'timidez', emoji: '🙈', label: 'Timidez', desc: 'Prefere ficar na sua: lê, olha a janela e entra menos nas rodas.' },
-  economia: { id: 'economia', emoji: '💰', label: 'Economia', desc: 'Pão-duro: aposta pouco e às vezes foge da aposta.' },
-  sonecas: { id: 'sonecas', emoji: '😴', label: 'Sonecas', desc: 'Qualquer sofá ou puff vira cama.' },
-  calma: { id: 'calma', emoji: '🧘', label: 'Calma', desc: 'Zen: alongamentos, janela e conversas tranquilas.' },
-  leitura: { id: 'leitura', emoji: '📚', label: 'Leitura', desc: 'Sempre com um livro da estante (ou o celular) na mão.' },
+  competicao: { id: 'competicao', emoji: '🏆', label: tr('Competição'), desc: tr('Adora competir: desafia os colegas no ping-pong, no videogame e no jokenpô.') },
+  apostas: { id: 'apostas', emoji: '🎲', label: tr('Apostas'), desc: tr('Topa qualquer aposta e aposta alto no jokenpô.') },
+  games: { id: 'games', emoji: '🎮', label: tr('Games'), desc: tr('Vive no videogame do lounge e nos fliperamas — e costuma ganhar.') },
+  series: { id: 'series', emoji: '📺', label: tr('Séries e TV'), desc: tr('Não perde um programa na TV do lounge (de preferência com pipoca).') },
+  fofoca: { id: 'fofoca', emoji: '🗣️', label: tr('Fofoca'), desc: tr('Puxa papo na copa e sabe de tudo o que acontece nas salas.') },
+  vaidade: { id: 'vaidade', emoji: '💄', label: tr('Vaidade'), desc: tr('Passa no espelho do banheiro para se arrumar sempre que pode.') },
+  cafeina: { id: 'cafeina', emoji: '☕', label: tr('Cafeína'), desc: tr('Movido a café: a cafeteira da copa é a segunda casa.') },
+  piadas: { id: 'piadas', emoji: '😂', label: tr('Piadas'), desc: tr('Conta piada em toda conversa e faz a roda rir.') },
+  esporte: { id: 'esporte', emoji: '🏓', label: tr('Esporte'), desc: tr('Joga ping-pong, se alonga e vibra com o futebol na TV.') },
+  timidez: { id: 'timidez', emoji: '🙈', label: tr('Timidez'), desc: tr('Prefere ficar na sua: lê, olha a janela e entra menos nas rodas.') },
+  economia: { id: 'economia', emoji: '💰', label: tr('Economia'), desc: tr('Pão-duro: aposta pouco e às vezes foge da aposta.') },
+  sonecas: { id: 'sonecas', emoji: '😴', label: tr('Sonecas'), desc: tr('Qualquer sofá ou puff vira cama.') },
+  calma: { id: 'calma', emoji: '🧘', label: tr('Calma'), desc: tr('Zen: alongamentos, janela e conversas tranquilas.') },
+  leitura: { id: 'leitura', emoji: '📚', label: tr('Leitura'), desc: tr('Sempre com um livro da estante (ou o celular) na mão.') },
 };
 
 /** Ordem fixa (o sorteio depende dela: não reordene). */
@@ -65,18 +66,18 @@ function clashes(a: TraitId, b: TraitId): boolean {
 
 /** Bordões: cada um tem o seu (aparece de vez em quando nas falas). */
 export const CATCHPHRASES = [
-  'Bora!',
-  'Partiu!',
-  'Tá pago!',
-  'É hoje!',
-  'Simbora!',
-  'Bora codar!',
-  'Deu bom!',
-  'Que isso!',
-  'Show de bola!',
-  'Tamo junto!',
-  'Sem estresse.',
-  'Vai dar certo!',
+  tr('Bora!'),
+  tr('Partiu!'),
+  tr('Tá pago!'),
+  tr('É hoje!'),
+  tr('Simbora!'),
+  tr('Bora codar!'),
+  tr('Deu bom!'),
+  tr('Que isso!'),
+  tr('Show de bola!'),
+  tr('Tamo junto!'),
+  tr('Sem estresse.'),
+  tr('Vai dar certo!'),
 ] as const;
 
 export interface Persona {

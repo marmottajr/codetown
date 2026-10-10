@@ -17,6 +17,7 @@ import {
   type TimelineFrame,
   type TimelineRecord,
 } from '../../../shared/timeline';
+import { tr } from '../../../shared/i18n';
 
 export interface TimelineDayInfo {
   /** AAAA-MM-DD. */
@@ -42,7 +43,7 @@ export async function fetchTimelineDays(signal?: AbortSignal): Promise<TimelineD
 }
 
 export async function fetchTimelineDay(day: string, signal?: AbortSignal): Promise<TimelineRecord[]> {
-  if (!isDayKey(day)) throw new Error('dia inválido');
+  if (!isDayKey(day)) throw new Error(tr('dia inválido'));
   const res = await fetch(`/api/timeline/${day}`, { signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return parseTimeline(await res.text());

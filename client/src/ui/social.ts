@@ -4,6 +4,7 @@ import type { AgentSocial } from '../world/api';
 import type { UiContext } from './context';
 import { h, setHidden, setText, setTitle } from './dom';
 import { plural, relativeTime } from './format';
+import { tr } from '../../../shared/i18n';
 
 /** "+🪙10" / "−🪙10" (sinal tipográfico de menos). */
 export function coinDelta(delta: number): string {
@@ -12,8 +13,8 @@ export function coinDelta(delta: number): string {
 
 /** "3 vitórias · 1 derrota" (ou "Sem partidas ainda"). */
 export function recordText(wins: number, losses: number): string {
-  if (!wins && !losses) return 'Sem partidas ainda';
-  return `${plural(wins, 'vitória', 'vitórias')} · ${plural(losses, 'derrota', 'derrotas')}`;
+  if (!wins && !losses) return tr('Sem partidas ainda');
+  return `${plural(wins, tr('vitória'), tr('vitórias'))} · ${plural(losses, tr('derrota'), tr('derrotas'))}`;
 }
 
 const LEDGER_SHOWN = 6;
@@ -37,7 +38,7 @@ export class SocialSection {
   private keys = { traits: '', bonds: '', ledger: '' };
 
   constructor(private ctx: UiContext) {
-    const title = h('h3', { class: 'ui-sec__title', text: 'Vida social' });
+    const title = h('h3', { class: 'ui-sec__title', text: tr('Vida social') });
     this.extra = h('span', { class: 'ui-sec__extra ui-social__balance' });
     this.doing = h('p', { class: 'ui-social__doing' });
     this.coins = h('strong', { class: 'ui-social__coins' });
@@ -47,17 +48,17 @@ export class SocialSection {
     this.phrase = h('p', { class: 'ui-social__phrase' });
     this.friends = h('span', { class: 'ui-social__names' });
     this.rivals = h('span', { class: 'ui-social__names' });
-    this.friendsRow = h('p', { class: 'ui-social__bond' }, h('span', { class: 'ui-social__bond-label', text: '💛 Amizades' }), this.friends);
-    this.rivalsRow = h('p', { class: 'ui-social__bond' }, h('span', { class: 'ui-social__bond-label', text: '⚔️ Rivalidades' }), this.rivals);
+    this.friendsRow = h('p', { class: 'ui-social__bond' }, h('span', { class: 'ui-social__bond-label', text: tr('💛 Amizades') }), this.friends);
+    this.rivalsRow = h('p', { class: 'ui-social__bond' }, h('span', { class: 'ui-social__bond-label', text: tr('⚔️ Rivalidades') }), this.rivals);
     this.ledger = h('ol', { class: 'ui-social__ledger' });
-    this.ledgerBox = h('details', { class: 'ui-social__extract' }, h('summary', { text: 'Extrato' }), this.ledger);
+    this.ledgerBox = h('details', { class: 'ui-social__extract' }, h('summary', { text: tr('Extrato') }), this.ledger);
     const wallet = h(
       'div',
       { class: 'ui-social__wallet' },
       h('span', { class: 'ui-social__purse', attrs: { 'aria-hidden': 'true' }, text: '🪙' }),
       h('div', { class: 'ui-social__wallet-body' }, h('div', { class: 'ui-social__wallet-line' }, this.coins, this.record), this.earned),
     );
-    setTitle(wallet, 'Moedinhas fictícias: entra no escritório com um saldo, ganha 🪙10 por tarefa concluída e 🪙5 por pedido atendido, e aposta com os colegas. Ficam salvas neste navegador.');
+    setTitle(wallet, tr('Moedinhas fictícias: entra no escritório com um saldo, ganha 🪙10 por tarefa concluída e 🪙5 por pedido atendido, e aposta com os colegas. Ficam salvas neste navegador.'));
     this.el = h(
       'section',
       { class: 'ui-sec ui-social' },
@@ -80,10 +81,10 @@ export class SocialSection {
     setText(this.extra, `🪙 ${s.coins}`);
     setText(this.doing, s.doing ?? '');
     setHidden(this.doing, !s.doing);
-    setText(this.coins, `${s.coins} moedinhas`);
+    setText(this.coins, tr('{0} moedinhas', [s.coins]));
     setText(this.record, recordText(s.wins, s.losses));
-    setText(this.earned, `${coinDelta(s.earned)} ganhos trabalhando`);
-    setText(this.phrase, `Bordão: “${s.catchphrase}”`);
+    setText(this.earned, tr('{0} ganhos trabalhando', [coinDelta(s.earned)]));
+    setText(this.phrase, tr('Bordão: “{0}”', [s.catchphrase]));
 
     const tk = s.traits.map((t) => t.label).join('|');
     if (tk !== this.keys.traits) {
@@ -100,7 +101,7 @@ export class SocialSection {
           class: 'ui-social__name',
           type: 'button',
           text: label,
-          title: b.record ? `Retrospecto contra ${b.name}: ${recordText(b.record[0], b.record[1])}` : `Ver ${b.name}`,
+          title: b.record ? tr('Retrospecto contra {0}: {1}', [b.name, recordText(b.record[0], b.record[1])]) : tr('Ver {0}', [b.name]),
           on: { click: () => this.ctx.select({ type: 'agent', id: b.id }, { focus: true }) },
         });
       };

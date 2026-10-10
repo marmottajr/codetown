@@ -4,6 +4,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { errMsg, log } from '../log';
+import { tr } from '../../shared/i18n';
 
 export const ROOM_NAME_MAX = 40;
 
@@ -25,7 +26,7 @@ export class RoomAliases {
       const j = JSON.parse(readFileSync(this.file, 'utf8')) as { aliases?: Record<string, unknown> };
       for (const [k, v] of Object.entries(j.aliases ?? {})) if (typeof v === 'string' && v.trim()) this.aliases.set(pathKey(k), v.trim().slice(0, ROOM_NAME_MAX));
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warn(`rooms.json ilegível (${errMsg(err)}); sem nomes de sala personalizados.`);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warn(tr('rooms.json ilegível ({0}); sem nomes de sala personalizados.', [errMsg(err)]));
     }
   }
 
@@ -56,7 +57,7 @@ export class RoomAliases {
       writeFileSync(`${this.file}.tmp`, JSON.stringify({ version: 1, aliases: Object.fromEntries(this.aliases) }, null, 2));
       renameSync(`${this.file}.tmp`, this.file);
     } catch (err) {
-      log.warn(`Não consegui gravar ${this.file}: ${errMsg(err)}`);
+      log.warn(tr('Não consegui gravar {0}: {1}', [this.file, errMsg(err)]));
     }
   }
 }

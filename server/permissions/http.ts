@@ -9,19 +9,20 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { InvalidRequest, parseDecision, WAIT_MAX_MS, type PermissionRegistry } from './registry';
+import { tr } from '../../shared/i18n';
 
 const ITEM = /^\/api\/permissions\/([^/]+)(?:\/(wait|decision))?$/;
 
 function methodNotAllowed(res: ServerResponse, allow: string): void {
   res.setHeader('Allow', allow);
-  sendJson(res, 405, { error: 'método não permitido' });
+  sendJson(res, 405, { error: tr('método não permitido') });
 }
 
 function fail(res: ServerResponse, err: unknown): void {
   if (res.headersSent) return void res.destroy();
   if (err instanceof HttpError) sendJson(res, err.status, { error: err.message });
   else if (err instanceof InvalidRequest) sendJson(res, 400, { error: err.message });
-  else sendJson(res, 500, { error: 'erro interno' });
+  else sendJson(res, 500, { error: tr('erro interno') });
 }
 
 /** Tempo de espera pedido em `?timeout=` (segundos), limitado a WAIT_MAX_MS. */
@@ -41,7 +42,7 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
 
   const wait = (req: IncomingMessage, res: ServerResponse, id: string) => {
     const w = registry.wait(id, waitMs(new URL(req.url ?? '/', 'http://localhost')));
-    if (!w) return sendJson(res, 404, { error: 'pedido desconhecido' });
+    if (!w) return sendJson(res, 404, { error: tr('pedido desconhecido') });
     req.socket.setTimeout(0);
     // Conexão fechada antes da resposta (o hook morreu ou desistiu): larga a espera.
     res.on('close', () => {
@@ -64,15 +65,15 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
       case 'ok':
         return sendJson(res, 200, { ok: true });
       case 'not-found':
-        return sendJson(res, 404, { error: 'pedido desconhecido: já foi respondido, expirou ou foi respondido no terminal' });
+        return sendJson(res, 404, { error: tr('pedido desconhecido: já foi respondido, expirou ou foi respondido no terminal') });
       case 'conflict':
-        return sendJson(res, 409, { error: 'este pedido já foi respondido' });
+        return sendJson(res, 409, { error: tr('este pedido já foi respondido') });
       case 'invalid':
-        return sendJson(res, 400, { error: 'sugestão de regra desconhecida para este pedido' });
+        return sendJson(res, 400, { error: tr('sugestão de regra desconhecida para este pedido') });
       case 'invalid-answer':
-        return sendJson(res, 400, { error: 'resposta que não serve para este pedido: pergunta se responde com "answer" (cada pergunta uma vez, com as opções dela); os outros pedidos, com "allow" ou "deny"' });
+        return sendJson(res, 400, { error: tr('resposta que não serve para este pedido: pergunta se responde com "answer" (cada pergunta uma vez, com as opções dela); os outros pedidos, com "allow" ou "deny"') });
       case 'unsupported':
-        return sendJson(res, 400, { error: 'o Codex não aceita interromper nem "sempre permitir" pelo Habblaud: aprove, recuse (com um motivo, se quiser) ou responda no terminal' });
+        return sendJson(res, 400, { error: tr('o Codex não aceita interromper nem "sempre permitir" pelo Habblaud: aprove, recuse (com um motivo, se quiser) ou responda no terminal') });
     }
   };
 
@@ -84,12 +85,12 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
       return;
     }
     const m = ITEM.exec(path);
-    if (!m) return sendJson(res, 404, { error: 'rota desconhecida' });
+    if (!m) return sendJson(res, 404, { error: tr('rota desconhecida') });
     let id: string;
     try {
       id = decodeURIComponent(m[1]);
     } catch {
-      return sendJson(res, 400, { error: 'id inválido' });
+      return sendJson(res, 400, { error: tr('id inválido') });
     }
     if (m[2] === 'wait') {
       if (method !== 'GET') return methodNotAllowed(res, 'GET');
@@ -103,6 +104,6 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
     if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET');
     const detail = registry.detail(id);
     if (detail) sendJson(res, 200, detail);
-    else sendJson(res, 404, { error: 'pedido desconhecido' });
+    else sendJson(res, 404, { error: tr('pedido desconhecido') });
   };
 }

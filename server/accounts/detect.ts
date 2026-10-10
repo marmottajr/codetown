@@ -11,6 +11,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import type { Provider } from '../../shared/types';
+import { tr } from '../../shared/i18n';
 
 export interface DetectedAccount {
   id: string;
@@ -379,7 +380,7 @@ export function detectAccounts(dirs: string[], opts: { home?: string; env?: Node
       id: p.id,
       configDir: str(p.ov?.configDir) ?? p.dir,
       short,
-      name: str(p.ov?.name) ?? `Conta ${short}`,
+      name: str(p.ov?.name) ?? tr('Conta {0}', [short]),
       color: str(p.ov?.color) ?? ACCOUNT_COLORS[i % ACCOUNT_COLORS.length],
     };
     const email = str(p.ov?.email) ?? p.cfg.email;

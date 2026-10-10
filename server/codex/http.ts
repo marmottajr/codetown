@@ -13,6 +13,7 @@ import type { AccountEntry } from '../accounts/service';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { errMsg, log } from '../log';
 import type { CodexLive } from '../sources/codex/live';
+import { tr } from '../../shared/i18n';
 
 type Rec = Record<string, unknown>;
 
@@ -71,7 +72,7 @@ export async function handleCodexEvent(
     try {
       ok = deps.live.applyHookEvent(codexAccountOf(deps.entries(), body.account, body.codexHome), body.event) === true;
     } catch (err) {
-      log.warnOnce(`codex-event:${errMsg(err)}`, `Eventos do Codex: falha ao aplicar um evento (${errMsg(err)}).`);
+      log.warnOnce(`codex-event:${errMsg(err)}`, tr('Eventos do Codex: falha ao aplicar um evento ({0}).', [errMsg(err)]));
     }
   }
   sendJson(res, 200, { ok });

@@ -2,6 +2,7 @@
 // nome antigo fica aqui, para sair de uma vez quando ninguém mais vier de uma instalação da 0.3.
 import { existsSync, readdirSync, renameSync, rmdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { tr } from '../shared/i18n';
 
 /** Nome antigo em minúsculas: pasta de estado, plugins, marketplace, projeto e volume do Docker. */
 export const LEGACY_NAME = 'codetown';
@@ -18,10 +19,10 @@ export function legacyEnvVars(keys: Iterable<string>): Array<{ from: string; to:
 }
 
 /** Aviso para as variáveis antigas (que não valem mais), ou undefined se não houver nenhuma. */
-export function legacyEnvWarning(keys: Iterable<string>, where = 'no ambiente'): string | undefined {
+export function legacyEnvWarning(keys: Iterable<string>, where = tr('no ambiente')): string | undefined {
   const vars = legacyEnvVars(keys);
   if (!vars.length) return undefined;
-  return `${vars.length === 1 ? 'variável do nome antigo ignorada' : 'variáveis do nome antigo ignoradas'} ${where}: ${vars.map((v) => `${v.from} → ${v.to}`).join(', ')}. Renomeie para valer de novo.`;
+  return tr('{0} {1}: {2}. Renomeie para valer de novo.', [vars.length === 1 ? tr('variável do nome antigo ignorada') : tr('variáveis do nome antigo ignoradas'), where, vars.map((v) => `${v.from} → ${v.to}`).join(', ')]);
 }
 
 const isDir = (p: string) => {
@@ -77,7 +78,7 @@ export function migrateLegacyStateDir(home: string): { moved: string[]; error?: 
       renameSync(from, to);
       moved.push('.');
     } else if (isDir(to)) mergeInto(from, to, moved, '');
-    else return { moved, error: `${to} existe e não é uma pasta` };
+    else return { moved, error: tr('{0} existe e não é uma pasta', [to]) };
     return { moved };
   } catch (err) {
     return { moved, error: (err as Error).message };
@@ -86,7 +87,7 @@ export function migrateLegacyStateDir(home: string): { moved: string[]; error?: 
 
 /** Frase curta para o log de quem migrou (undefined se nada mudou). */
 export function describeStateMigration(r: { moved: string[]; error?: string }): string | undefined {
-  if (r.error) return `não consegui levar ~/.${LEGACY_NAME} para ~/.habblaud (${r.error}); mova a pasta à mão.`;
+  if (r.error) return tr('não consegui levar ~/.{0} para ~/.habblaud ({1}); mova a pasta à mão.', [LEGACY_NAME, r.error]);
   if (!r.moved.length) return undefined;
-  return r.moved[0] === '.' ? `~/.${LEGACY_NAME} (nome antigo) agora é ~/.habblaud.` : `de ~/.${LEGACY_NAME} (nome antigo) para ~/.habblaud: ${r.moved.join(', ')}.`;
+  return r.moved[0] === '.' ? tr('~/.{0} (nome antigo) agora é ~/.habblaud.', [LEGACY_NAME]) : tr('de ~/.{0} (nome antigo) para ~/.habblaud: {1}.', [LEGACY_NAME, r.moved.join(', ')]);
 }

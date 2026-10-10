@@ -14,13 +14,14 @@ import {
   type WaitDayStats,
 } from '../../../shared/daystats';
 import { formatInt, formatTokens, formatUSD } from './format';
+import { intlLocale, tr } from '../../../shared/i18n';
 
 /** Rótulos dos status no painel (o mesmo vocabulário do escritório, do ponto de vista de quem espera). */
 export const STATUS_TEXT: Record<TimedStatus, string> = {
-  waiting: 'Esperando você',
-  working: 'Trabalhando',
-  idle: 'Ocioso',
-  shell: 'Esperando o shell',
+  waiting: tr('Esperando você'),
+  working: tr('Trabalhando'),
+  idle: tr('Ocioso'),
+  shell: tr('Esperando o shell'),
 };
 
 /**
@@ -61,7 +62,7 @@ export function segments(ms: StatusMs, visible: Visible, scale: number): Segment
 /** Frase com cada status (para leitores de tela e tabelas): "esperando você 12 min, trabalhando 1 h 5 min". */
 export function statusSummary(ms: StatusMs, visible: Visible = ALL_VISIBLE): string {
   const parts = TIMED_STATUSES.filter((s) => visible.has(s) && ms[s] > 0).map((s) => `${STATUS_TEXT[s].toLowerCase()} ${formatAgentTime(ms[s])}`);
-  return parts.length ? parts.join(', ') : 'sem tempo registrado';
+  return parts.length ? parts.join(', ') : tr('sem tempo registrado');
 }
 
 // ---------------------------------------------------------------- destaques
@@ -99,27 +100,27 @@ export function highlights(stats: DayStats, clock: (t: number) => string, codex 
   return {
     waiting: formatAgentTime(t.ms.waiting),
     waitingMs: t.ms.waiting,
-    longest: top ? `${formatAgentTime(top.ms)} · ${top.agentName} em ${top.roomName}, às ${clock(top.start)}${top.ongoing ? ' (ainda esperando)' : ''}` : '',
-    wall: t.waitWallMs > 0 ? `Alguém esperou por você durante ${formatAgentTime(t.waitWallMs)} do dia` : '',
-    waits: t.waits ? plural(t.waits, 'espera', 'esperas') : t.ms.waiting > 0 ? 'só esperas de poucos segundos' : 'nenhuma espera',
+    longest: top ? tr('{0} · {1} em {2}, às {3}{4}', [formatAgentTime(top.ms), top.agentName, top.roomName, clock(top.start), top.ongoing ? tr(' (ainda esperando)') : '']) : '',
+    wall: t.waitWallMs > 0 ? tr('Alguém esperou por você durante {0} do dia', [formatAgentTime(t.waitWallMs)]) : '',
+    waits: t.waits ? plural(t.waits, tr('espera'), tr('esperas')) : t.ms.waiting > 0 ? tr('só esperas de poucos segundos') : tr('nenhuma espera'),
     working: formatAgentTime(t.ms.working),
     sessions: formatInt(t.sessions),
-    subagents: plural(t.subagents, 'subagente', 'subagentes'),
+    subagents: plural(t.subagents, tr('subagente'), tr('subagentes')),
     tokens: formatTokens(c.tokensIn + c.tokensOut),
-    tokensDetail: `${formatTokens(c.tokensIn)} entrada · ${formatTokens(c.tokensOut)} saída`,
+    tokensDetail: tr('{0} entrada · {1} saída', [formatTokens(c.tokensIn), formatTokens(c.tokensOut)]),
     cost: c.costUSD > 0 ? formatUSD(c.costUSD) : '—',
     costHint:
       c.costUSD > 0
         ? codex
-          ? 'Só do Claude Code: o Codex não grava custo, só tokens'
-          : 'Custo calculado pelo próprio Claude Code'
+          ? tr('Só do Claude Code: o Codex não grava custo, só tokens')
+          : tr('Custo calculado pelo próprio Claude Code')
         : c.tokensIn + c.tokensOut > 0
           ? codex
-            ? 'O Codex não grava custo, só tokens'
-            : 'Os transcripts não trouxeram o custo'
-          : 'Nenhum gasto registrado',
+            ? tr('O Codex não grava custo, só tokens')
+            : tr('Os transcripts não trouxeram o custo')
+          : tr('Nenhum gasto registrado'),
     prompts: formatInt(c.prompts),
-    activity: `${plural(c.toolCalls, 'ferramenta', 'ferramentas')} · ${plural(c.tasksDone, 'tarefa concluída', 'tarefas concluídas')}`,
+    activity: `${plural(c.toolCalls, tr('ferramenta'), tr('ferramentas'))} · ${plural(c.tasksDone, tr('tarefa concluída'), tr('tarefas concluídas'))}`,
   };
 }
 
@@ -151,8 +152,8 @@ export function roomRows(rooms: readonly RoomDayStats[], visible: Visible): Room
         ms: r.ms,
         total,
         segments: segments(r.ms, visible, scale),
-        waiting: `${formatAgentTime(r.ms.waiting)} esperando você`,
-        totalText: `${formatAgentTime(total)} no total`,
+        waiting: tr('{0} esperando você', [formatAgentTime(r.ms.waiting)]),
+        totalText: tr('{0} no total', [formatAgentTime(total)]),
         label: `${r.name}: ${statusSummary(r.ms, visible)}`,
       };
     });
@@ -269,10 +270,10 @@ export function accountCards(accounts: readonly AccountDayStats[], isCodex: (id:
         short: a.short,
         color: a.color,
         share,
-        shareText: `${share}% do trabalho do dia`,
+        shareText: tr('{0}% do trabalho do dia', [share]),
         working: formatAgentTime(a.ms.working),
         waiting: formatAgentTime(a.ms.waiting),
-        sessions: `${formatInt(a.sessions)} ${a.sessions === 1 ? 'sessão' : 'sessões'}${a.subagents ? ` · ${formatInt(a.subagents)} sub` : ''}`,
+        sessions: `${formatInt(a.sessions)} ${a.sessions === 1 ? tr('sessão') : tr('sessões')}${a.subagents ? ` · ${formatInt(a.subagents)} sub` : ''}`,
         tokens: formatTokens(a.counts.tokensIn + a.counts.tokensOut),
         cost: codex ? null : a.counts.costUSD > 0 ? formatUSD(a.counts.costUSD) : '—',
         codex,
@@ -301,7 +302,7 @@ export interface WaitRow {
 export function waitRows(waits: readonly WaitDayStats[], clock: (t: number) => string): WaitRow[] {
   const longest = Math.max(1, ...waits.map((w) => w.ms));
   return waits.map((w, i) => {
-    const when = w.ongoing ? `desde ${clock(w.start)}` : `${clock(w.start)}–${clock(w.end)}`;
+    const when = w.ongoing ? tr('desde {0}', [clock(w.start)]) : `${clock(w.start)}–${clock(w.end)}`;
     const row: WaitRow = {
       key: `${w.agentId}|${w.start}`,
       rank: i + 1,
@@ -312,7 +313,7 @@ export function waitRows(waits: readonly WaitDayStats[], clock: (t: number) => s
       account: w.account,
       when,
       ongoing: !!w.ongoing,
-      label: `${i + 1}º: ${formatAgentTime(w.ms)}, ${w.agentName} em ${w.roomName}, ${when}${w.reason ? `, para ${w.reason}` : ''}${w.ongoing ? ', ainda esperando' : ''}`,
+      label: `${i + 1}º: ${formatAgentTime(w.ms)}, ${w.agentName} em ${w.roomName}, ${when}${w.reason ? tr(', para {0}', [w.reason]) : ''}${w.ongoing ? tr(', ainda esperando') : ''}`,
     };
     if (w.reason) row.reason = w.reason;
     return row;
@@ -332,15 +333,15 @@ export function statusTable<T extends { ms: StatusMs }>(items: readonly T[], nam
 
 // ---------------------------------------------------------------- dias, URLs e atualização
 
-const weekdayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', timeZone: 'UTC' });
+const weekdayFmt = new Intl.DateTimeFormat(intlLocale(), { weekday: 'short', day: '2-digit', month: '2-digit', timeZone: 'UTC' });
 
 /** "Hoje", "Ontem" ou "qui., 01/10" (a data de "AAAA-MM-DD", sem depender do fuso). */
 export function dayLabel(day: string, today: string): string {
-  if (day === today) return 'Hoje';
+  if (day === today) return tr('Hoje');
   const [y, m, d] = day.split('-').map(Number);
   const t = Date.UTC(y, m - 1, d);
   const [ty, tm, td] = today.split('-').map(Number);
-  if (Date.UTC(ty, tm - 1, td) - t === 86_400_000) return 'Ontem';
+  if (Date.UTC(ty, tm - 1, td) - t === 86_400_000) return tr('Ontem');
   return weekdayFmt.format(t);
 }
 

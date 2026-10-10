@@ -1,101 +1,102 @@
 // Falas curtas dos personagens (balõezinhos) — puro. `{nome}` = um colega, `{sala}` = um projeto,
 // `{v}` = valor da aposta, `{a}`/`{b}` = placar. Nada aqui depende do gênero de quem fala.
 import type { TraitId } from './persona';
+import { tr } from '../../../../shared/i18n';
 
 export type Pool = readonly string[];
 
 export const INVITE = {
-  tv: ['Bora ver TV? 📺', 'Sessão pipoca? 🍿', 'Vai começar o programa!', 'Bora ver um pouco de TV?'],
-  futebol: ['Vai começar o jogo! ⚽', 'Bora ver o futebol?', 'Tá passando o clássico! ⚽'],
-  novela: ['Tá passando a novela! 📺', 'Bora ver o capítulo de hoje?'],
-  desenho: ['Tá passando desenho! 😄', 'Bora ver desenho?'],
-  videogame: ['Bora uma partida no videogame? 🎮', 'Duvido você me ganhar 🎮', 'Videogame? Melhor de três!'],
-  arcade: ['Fliperama? 👾', 'Aposto que bato teu recorde 👾', 'Bora no fliperama?'],
-  pingpong: ['Pingue-pongue? 🏓', 'Bora uma partidinha? 🏓', 'Vem jogar ping-pong!'],
-  pingpongRival: ['Vem tomar uma surra no ping-pong 😏', 'Revanche no ping-pong? 🏓'],
-  kitchen: ['Bora tomar um café? ☕', 'Pausa pro café? ☕', 'Bora dar uma pausa na copa?'],
-  kitchenGossip: ['Tenho uma fofoca… 👀', 'Copa. Agora. Tenho novidade 👀'],
-  talk: ['E aí, tudo certo?', 'Ei, {nome}!', 'Bora trocar uma ideia?', 'Opa, {nome}! Beleza?'],
-  rps: ['Jokenpô valendo 🪙{v}?', 'Aposto 🪙{v} no jokenpô!', 'Pedra, papel e tesoura? 🪙{v}!'],
-  rpsHonor: ['Jokenpô? Só pela honra 😅', 'Jokenpô valendo nada?'],
-  mirror: ['Bora dar um tapa no visual? 💄', 'Espelho? Preciso me arrumar ✨'],
+  tv: [tr('Bora ver TV? 📺'), tr('Sessão pipoca? 🍿'), tr('Vai começar o programa!'), tr('Bora ver um pouco de TV?')],
+  futebol: [tr('Vai começar o jogo! ⚽'), tr('Bora ver o futebol?'), tr('Tá passando o clássico! ⚽')],
+  novela: [tr('Tá passando a novela! 📺'), tr('Bora ver o capítulo de hoje?')],
+  desenho: [tr('Tá passando desenho! 😄'), tr('Bora ver desenho?')],
+  videogame: [tr('Bora uma partida no videogame? 🎮'), tr('Duvido você me ganhar 🎮'), tr('Videogame? Melhor de três!')],
+  arcade: [tr('Fliperama? 👾'), tr('Aposto que bato teu recorde 👾'), tr('Bora no fliperama?')],
+  pingpong: [tr('Pingue-pongue? 🏓'), tr('Bora uma partidinha? 🏓'), tr('Vem jogar ping-pong!')],
+  pingpongRival: [tr('Vem tomar uma surra no ping-pong 😏'), tr('Revanche no ping-pong? 🏓')],
+  kitchen: [tr('Bora tomar um café? ☕'), tr('Pausa pro café? ☕'), tr('Bora dar uma pausa na copa?')],
+  kitchenGossip: [tr('Tenho uma fofoca… 👀'), tr('Copa. Agora. Tenho novidade 👀')],
+  talk: [tr('E aí, tudo certo?'), tr('Ei, {nome}!'), tr('Bora trocar uma ideia?'), tr('Opa, {nome}! Beleza?')],
+  rps: [tr('Jokenpô valendo 🪙{v}?'), tr('Aposto 🪙{v} no jokenpô!'), tr('Pedra, papel e tesoura? 🪙{v}!')],
+  rpsHonor: [tr('Jokenpô? Só pela honra 😅'), tr('Jokenpô valendo nada?')],
+  mirror: [tr('Bora dar um tapa no visual? 💄'), tr('Espelho? Preciso me arrumar ✨')],
 } satisfies Record<string, Pool>;
 
-export const ACCEPT: Pool = ['Bora!', 'Partiu!', 'Fechado! 🤝', 'Só se for agora!', 'Opa!', 'Já é!', 'Demorou!'];
-export const ACCEPT_BET: Pool = ['Fechado! 🤝', 'Prepara o bolso 💰', 'Vai perder!', 'Aceito!'];
-export const ACCEPT_BROKE: Pool = ['Tô liso 😅 Só pela honra!', 'Sem 🪙… valendo nada?'];
-export const ACCEPT_SLEEPY: Pool = ['Hã? Ah… bora 😴', 'Acordei! Bora.', 'Cinco minutinhos… tá, bora.'];
-export const ACCEPT_SHELL: Pool = ['Enquanto o build roda… bora! ⏳', 'Meu comando tá rodando, dá tempo ⏳', 'Tô esperando o terminal mesmo…'];
-export const ACCEPT_STINGY: Pool = ['Aposta? Só um pouquinho 💰', 'Valendo pouco, hein'];
+export const ACCEPT: Pool = [tr('Bora!'), tr('Partiu!'), 'Fechado! 🤝', tr('Só se for agora!'), tr('Opa!'), tr('Já é!'), tr('Demorou!')];
+export const ACCEPT_BET: Pool = ['Fechado! 🤝', tr('Prepara o bolso 💰'), tr('Vai perder!'), tr('Aceito!')];
+export const ACCEPT_BROKE: Pool = [tr('Tô liso 😅 Só pela honra!'), tr('Sem 🪙… valendo nada?')];
+export const ACCEPT_SLEEPY: Pool = [tr('Hã? Ah… bora 😴'), tr('Acordei! Bora.'), tr('Cinco minutinhos… tá, bora.')];
+export const ACCEPT_SHELL: Pool = [tr('Enquanto o build roda… bora! ⏳'), tr('Meu comando tá rodando, dá tempo ⏳'), tr('Tô esperando o terminal mesmo…')];
+export const ACCEPT_STINGY: Pool = [tr('Aposta? Só um pouquinho 💰'), tr('Valendo pouco, hein')];
 
 export const TV = {
   futebol: {
-    goal: ['GOOOL! ⚽', 'É GOL!!', 'GOLAÇO! ⚽', 'Que golaço!'],
-    miss: ['Uuuuh! 😱', 'Na trave!', 'Quase!', 'Perdeu essa?!'],
-    against: ['Ah não! Gol deles 😩', 'Que fase…', 'Acorda, zaga!', 'Não acredito…'],
-    talk: ['Juiz ladrão! 😤', 'Que jogada!', 'Esse goleiro é bom demais', 'Bora, time!', 'Isso foi pênalti!', 'Tá jogando muito!'],
+    goal: ['GOOOL! ⚽', tr('É GOL!!'), tr('GOLAÇO! ⚽'), tr('Que golaço!')],
+    miss: ['Uuuuh! 😱', tr('Na trave!'), tr('Quase!'), tr('Perdeu essa?!')],
+    against: [tr('Ah não! Gol deles 😩'), tr('Que fase…'), tr('Acorda, zaga!'), tr('Não acredito…')],
+    talk: [tr('Juiz ladrão! 😤'), tr('Que jogada!'), tr('Esse goleiro é bom demais'), tr('Bora, time!'), tr('Isso foi pênalti!'), tr('Tá jogando muito!')],
   },
   novela: {
-    twist: ['Não acredito! 😱', 'Eu sabia!', 'Que reviravolta!', 'Mentira!!'],
-    love: ['Esse casal! 😍', 'Finalmente! 😍', 'Que romance…'],
-    talk: ['Shhh, vai começar!', 'Chora não… 😭', 'Esse vilão não presta', 'Amanhã é o último capítulo!'],
+    twist: [tr('Não acredito! 😱'), tr('Eu sabia!'), tr('Que reviravolta!'), tr('Mentira!!')],
+    love: [tr('Esse casal! 😍'), 'Finalmente! 😍', tr('Que romance…')],
+    talk: [tr('Shhh, vai começar!'), tr('Chora não… 😭'), tr('Esse vilão não presta'), tr('Amanhã é o último capítulo!')],
   },
   desenho: {
-    funny: ['KKKKK 😂', 'Hahaha!', 'Muito bom 😂', 'Esse desenho é demais!'],
-    talk: ['Eu assistia isso criança!', 'Clássico!', 'Olha a cara dele 😂'],
+    funny: ['KKKKK 😂', tr('Hahaha!'), tr('Muito bom 😂'), tr('Esse desenho é demais!')],
+    talk: [tr('Eu assistia isso criança!'), tr('Clássico!'), tr('Olha a cara dele 😂')],
   },
-  end: ['Bom demais!', 'Amanhã tem mais 📺', 'Que episódio!', 'Valeu a pausa!'],
+  end: [tr('Bom demais!'), tr('Amanhã tem mais 📺'), tr('Que episódio!'), tr('Valeu a pausa!')],
 } as const;
 
 export const GAME = {
-  trash: ['Vou te passar! 🏎️', 'Que lag é esse?!', 'Combo! 💥', 'Não vale!', 'Tá fácil 😎', 'Só aquecendo…', 'Ninguém me para!', 'Olha essa!'],
-  round: ['Ganhei essa! 🏆', 'Uma a zero!', 'Toma!'],
-  cheer: ['Vai, {nome}!', 'Uooou!', 'Que jogada!', 'Aperta o botão!'],
+  trash: [tr('Vou te passar! 🏎️'), tr('Que lag é esse?!'), 'Combo! 💥', tr('Não vale!'), tr('Tá fácil 😎'), tr('Só aquecendo…'), tr('Ninguém me para!'), tr('Olha essa!')],
+  round: [tr('Ganhei essa! 🏆'), tr('Uma a zero!'), tr('Toma!')],
+  cheer: [tr('Vai, {nome}!'), tr('Uooou!'), tr('Que jogada!'), tr('Aperta o botão!')],
 };
 
 export const PINGPONG = {
-  point: ['Ponto! 🏓', 'Toma!', 'Na quina!', 'Corta!', 'Defende essa!'],
-  cheer: ['Boa!', 'Vai, {nome}!', 'Uooou!', 'Que ralo!'],
-  final: ['{a} a {b}! 🏆', 'Ganhei de {a} a {b}! 🏆'],
+  point: [tr('Ponto! 🏓'), tr('Toma!'), tr('Na quina!'), tr('Corta!'), tr('Defende essa!')],
+  cheer: [tr('Boa!'), tr('Vai, {nome}!'), tr('Uooou!'), tr('Que ralo!')],
+  final: ['{a} a {b}! 🏆', tr('Ganhei de {a} a {b}! 🏆')],
 };
 
 export const RPS = {
-  count: ['Jo…', 'Ken…', 'Pô!'],
-  tie: ['Empate! De novo!', 'Pensamos igual 😂', 'De novo!'],
-  win: ['Ganhei! 💰', 'Hoje é meu dia!', 'Passa o 🪙!', 'Mole demais 😎', 'Sabia!'],
-  winHonor: ['Ganhei! 😎', 'Sabia!', 'Hoje é meu dia!'],
-  lose: ['Não valeu!', 'Sorte sua…', 'Meu dinheiro… 😭', 'Tá, tá…', 'Era pra ser pedra!'],
-  rematch: ['Revanche!', 'Melhor de três!', 'De novo, valendo!'],
-  stalemate: ['Deixa quieto 😅', 'Empatamos, então.'],
-  watch: ['KKKKK', 'Uou!', 'Eita!', 'Paga!'],
+  count: ['Jo…', tr('Ken…'), tr('Pô!')],
+  tie: [tr('Empate! De novo!'), tr('Pensamos igual 😂'), tr('De novo!')],
+  win: [tr('Ganhei! 💰'), tr('Hoje é meu dia!'), tr('Passa o 🪙!'), tr('Mole demais 😎'), tr('Sabia!')],
+  winHonor: [tr('Ganhei! 😎'), tr('Sabia!'), tr('Hoje é meu dia!')],
+  lose: [tr('Não valeu!'), tr('Sorte sua…'), tr('Meu dinheiro… 😭'), tr('Tá, tá…'), tr('Era pra ser pedra!')],
+  rematch: [tr('Revanche!'), tr('Melhor de três!'), tr('De novo, valendo!')],
+  stalemate: [tr('Deixa quieto 😅'), tr('Empatamos, então.')],
+  watch: ['KKKKK', tr('Uou!'), tr('Eita!'), tr('Paga!')],
 };
 
 export const MIRROR = {
-  solo: ['Arrasei ✨', 'Hoje eu tô on 😎', 'Cabelo no lugar ✅', 'Look aprovado ✨', 'Esse cabelo não colabora…', 'Pronto pra próxima reunião ✨'],
-  lipstick: ['Batom perfeito 💄', 'Agora sim 💋'],
-  duo: ['Empresta o pente?', 'Ficou ótimo!', 'Que tal?', 'Tá arrasando!'],
+  solo: ['Arrasei ✨', tr('Hoje eu tô on 😎'), tr('Cabelo no lugar ✅'), tr('Look aprovado ✨'), tr('Esse cabelo não colabora…'), tr('Pronto pra próxima reunião ✨')],
+  lipstick: [tr('Batom perfeito 💄'), tr('Agora sim 💋')],
+  duo: [tr('Empresta o pente?'), tr('Ficou ótimo!'), tr('Que tal?'), tr('Tá arrasando!')],
 };
 
 export const CHAT = {
-  fofoca: ['Viram o commit de {nome}? 👀', 'Dizem que {sala} vai pro ar hoje…', '{nome} tá há horas no mesmo bug 🤫', 'Ouvi dizer que vai ter pizza 🍕', 'Sabia que {nome} aposta tudo no jokenpô?'],
-  work: ['Meu build passou de primeira 😎', 'Esse bug em {sala} tá osso', 'Deploy na sexta? 😈', 'Quem mexeu no package-lock?!', 'Os testes estão verdes ✅', 'Tô esperando o review…', 'Escrevi 300 linhas e apaguei 400', 'Refatorei {sala} inteiro hoje'],
-  cafeina: ['Esse café tá forte!', 'Já é o quinto café ☕', 'Sem café não compila ☕'],
-  piadas: ['Funciona na minha máquina! 😂', 'Por que o dev foi ao médico? Muitos bugs 🐛', 'Existem 10 tipos de pessoas… 😏', 'Commit: "ajustes finais (agora vai)"', 'Meu código não tem bug, tem feature surpresa'],
-  esporte: ['Viu o jogo ontem? ⚽', 'Bora correr no fim de semana?'],
-  series: ['Viram o último episódio? 📺', 'Sem spoiler, por favor!'],
-  games: ['Zerei aquele jogo ontem 🎮', 'Bora jogar online hoje?'],
-  leitura: ['Tô lendo um livro ótimo 📚', 'Terminei aquele livro!'],
-  calma: ['Respira… tudo vai compilar 🧘', 'Um passo de cada vez.'],
-  apostas: ['Quem topa um jokenpô depois? 🎲', 'Tô com sorte hoje 🍀'],
-  economia: ['Tô juntando 🪙 pra férias', 'Café de graça é o melhor café'],
-  generic: ['E o fim de semana?', 'Preciso de férias 🏖️', 'Que dia, hein', 'Tá tudo corrido hoje'],
-  react: ['KKKKK', 'Sério?!', 'Não acredito 😮', 'Verdade!', 'Hahaha', 'Nem me fala…', '👀', 'Pois é', 'Mentira!', 'Que isso!'],
-  laugh: ['KKKKK', 'Hahaha!', '😂😂😂'],
+  fofoca: [tr('Viram o commit de {nome}? 👀'), tr('Dizem que {sala} vai pro ar hoje…'), tr('{nome} tá há horas no mesmo bug 🤫'), tr('Ouvi dizer que vai ter pizza 🍕'), tr('Sabia que {nome} aposta tudo no jokenpô?')],
+  work: [tr('Meu build passou de primeira 😎'), tr('Esse bug em {sala} tá osso'), tr('Deploy na sexta? 😈'), tr('Quem mexeu no package-lock?!'), tr('Os testes estão verdes ✅'), tr('Tô esperando o review…'), tr('Escrevi 300 linhas e apaguei 400'), tr('Refatorei {sala} inteiro hoje')],
+  cafeina: [tr('Esse café tá forte!'), tr('Já é o quinto café ☕'), tr('Sem café não compila ☕')],
+  piadas: [tr('Funciona na minha máquina! 😂'), tr('Por que o dev foi ao médico? Muitos bugs 🐛'), tr('Existem 10 tipos de pessoas… 😏'), tr('Commit: "ajustes finais (agora vai)"'), tr('Meu código não tem bug, tem feature surpresa')],
+  esporte: [tr('Viu o jogo ontem? ⚽'), tr('Bora correr no fim de semana?')],
+  series: [tr('Viram o último episódio? 📺'), tr('Sem spoiler, por favor!')],
+  games: [tr('Zerei aquele jogo ontem 🎮'), tr('Bora jogar online hoje?')],
+  leitura: [tr('Tô lendo um livro ótimo 📚'), tr('Terminei aquele livro!')],
+  calma: [tr('Respira… tudo vai compilar 🧘'), tr('Um passo de cada vez.')],
+  apostas: [tr('Quem topa um jokenpô depois? 🎲'), tr('Tô com sorte hoje 🍀')],
+  economia: [tr('Tô juntando 🪙 pra férias'), tr('Café de graça é o melhor café')],
+  generic: [tr('E o fim de semana?'), tr('Preciso de férias 🏖️'), tr('Que dia, hein'), tr('Tá tudo corrido hoje')],
+  react: ['KKKKK', tr('Sério?!'), tr('Não acredito 😮'), tr('Verdade!'), tr('Hahaha'), tr('Nem me fala…'), '👀', tr('Pois é'), tr('Mentira!'), tr('Que isso!')],
+  laugh: ['KKKKK', tr('Hahaha!'), '😂😂😂'],
 };
 
 /** Saindo de uma roda porque o trabalho chamou. */
-export const CALLED: Pool = ['Opa, me chamaram! 🏃', 'Fui! Trabalho chegou', 'Volto já!', 'Ih, tenho que ir!'];
-export const SHELL_DONE: Pool = ['Meu comando terminou! 🏃', 'Terminou o build, fui!'];
+export const CALLED: Pool = [tr('Opa, me chamaram! 🏃'), tr('Fui! Trabalho chegou'), tr('Volto já!'), tr('Ih, tenho que ir!')];
+export const SHELL_DONE: Pool = [tr('Meu comando terminou! 🏃'), tr('Terminou o build, fui!')];
 
 /** Temas de papo que cada traço puxa. */
 export const TRAIT_TOPICS: Partial<Record<TraitId, keyof typeof CHAT>> = {
@@ -115,11 +116,11 @@ export const TRAIT_TOPICS: Partial<Record<TraitId, keyof typeof CHAT>> = {
 export function timeLine(d: Date): string | null {
   const day = d.getDay();
   const h = d.getHours();
-  if (day === 5 && h >= 12) return 'Sextou! 🎉';
-  if (day === 1 && h < 12) return 'Segunda-feira, né…';
-  if (h >= 6 && h < 10) return 'Bom dia! ☀️';
-  if (h >= 11 && h < 14) return 'Que fome… almoço? 🍽️';
-  if (h >= 20 || h < 5) return 'Ainda aqui a essa hora? 🌙';
+  if (day === 5 && h >= 12) return tr('Sextou! 🎉');
+  if (day === 1 && h < 12) return tr('Segunda-feira, né…');
+  if (h >= 6 && h < 10) return tr('Bom dia! ☀️');
+  if (h >= 11 && h < 14) return tr('Que fome… almoço? 🍽️');
+  if (h >= 20 || h < 5) return tr('Ainda aqui a essa hora? 🌙');
   return null;
 }
 

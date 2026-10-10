@@ -10,6 +10,14 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Interface em francês.** Os textos passam por `tr()` (`shared/i18n.ts`), com o português como língua de origem:
+  um texto sem tradução continua em PT. O idioma da interface segue o navegador e pode ser escolhido em
+  **Configurações › Idioma**; os textos montados pelo servidor (atividades, avisos, terminal) seguem o idioma do
+  sistema ou `HABBLAUD_LANG` (`pt-BR` ou `fr`), assim como os logs do servidor, os scripts de instalação
+  (`mod:install`, `docker:up`…) e o modo demonstração. `npm run i18n:check` lista os textos ainda sem tradução.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio

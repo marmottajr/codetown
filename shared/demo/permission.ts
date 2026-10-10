@@ -3,6 +3,7 @@
 // Puro: usado pelo simulador no servidor (HABBLAUD_DEMO=1) e no navegador (?mock=1).
 import type { PermissionRequestInfo } from '../types';
 import { describeTool } from '../activity';
+import { tr } from '../i18n';
 
 export interface DemoPermissionSource {
   /** Arquivos do projeto fictício (relativos à raiz). */
@@ -33,39 +34,39 @@ const DEMO_QUESTIONS: readonly DemoQuestion[][] = [
   [
     {
       header: 'Cache',
-      question: 'Onde guardo o cache das sessões de login?',
+      question: tr('Onde guardo o cache das sessões de login?'),
       options: [
-        { label: 'Redis', description: 'Rápido, e já roda no docker-compose do projeto' },
-        { label: 'PostgreSQL', description: 'Uma tabela a mais no banco que já existe' },
-        { label: 'Memória', description: 'Mais simples, mas some quando o servidor reinicia' },
+        { label: 'Redis', description: tr('Rápido, e já roda no docker-compose do projeto') },
+        { label: 'PostgreSQL', description: tr('Uma tabela a mais no banco que já existe') },
+        { label: tr('Memória'), description: tr('Mais simples, mas some quando o servidor reinicia') },
       ],
     },
     {
-      header: 'Testes',
-      question: 'Quais testes eu rodo antes do commit?',
+      header: tr('Testes'),
+      question: tr('Quais testes eu rodo antes do commit?'),
       multiSelect: true,
       options: [
-        { label: 'Unidade', description: 'npm test, cerca de 40 s' },
-        { label: 'Integração', description: 'Sobe um banco de teste no Docker' },
-        { label: 'E2E', description: 'Playwright no navegador, uns 5 min' },
+        { label: tr('Unidade'), description: tr('npm test, cerca de 40 s') },
+        { label: tr('Integração'), description: tr('Sobe um banco de teste no Docker') },
+        { label: 'E2E', description: tr('Playwright no navegador, uns 5 min') },
       ],
     },
   ],
   [
     {
-      header: 'Erro de rede',
-      question: 'Como trato a falha de rede no checkout?',
+      header: tr('Erro de rede'),
+      question: tr('Como trato a falha de rede no checkout?'),
       options: [
-        { label: 'Tentar de novo', description: 'Até 3 tentativas, com espera crescente' },
-        { label: 'Avisar o cliente', description: 'Mensagem com um botão para tentar de novo' },
-        { label: 'Guardar e enviar depois', description: 'Fila local até a conexão voltar' },
+        { label: tr('Tentar de novo'), description: tr('Até 3 tentativas, com espera crescente') },
+        { label: tr('Avisar o cliente'), description: tr('Mensagem com um botão para tentar de novo') },
+        { label: tr('Guardar e enviar depois'), description: tr('Fila local até a conexão voltar') },
       ],
     },
     {
-      header: 'Telas',
-      question: 'Em quais telas aplico a mudança?',
+      header: tr('Telas'),
+      question: tr('Em quais telas aplico a mudança?'),
       multiSelect: true,
-      options: [{ label: 'Carrinho' }, { label: 'Pagamento' }, { label: 'Confirmação do pedido' }],
+      options: [{ label: tr('Carrinho') }, { label: tr('Pagamento') }, { label: tr('Confirmação do pedido') }],
     },
   ],
 ];
@@ -120,7 +121,7 @@ export function demoPermission(id: string, src: DemoPermissionSource, rng: () =>
     title: `WebFetch(${url})`,
     text: d.text,
     icon: d.icon,
-    input: 'Resuma como tratar erros de rede com fetch',
+    input: tr('Resuma como tratar erros de rede com fetch'),
     inputKind: 'text',
     suggestions: [{ index: 0, rules: ['WebFetch(domain:developer.mozilla.org)'], destination: 'localSettings' }],
   };
@@ -160,7 +161,7 @@ export function demoCodexPermission(id: string, src: DemoPermissionSource, rng: 
   }
   if (roll < 0.45) {
     const [host, command] = pick(DEMO_NETWORK);
-    return { ...base, tool: 'Bash', title: `Bash(${command})`, text: `Acesso à rede: ${host}`, icon: '🌐', input: command, inputKind: 'command' };
+    return { ...base, tool: 'Bash', title: `Bash(${command})`, text: tr('Acesso à rede: {0}', [host]), icon: '🌐', input: command, inputKind: 'command' };
   }
   const command = src.commands.length ? pick(src.commands) : 'npm test';
   const d = describeTool('Bash', { command });

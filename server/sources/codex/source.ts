@@ -47,6 +47,7 @@ import {
   type RolloutMeta,
 } from './rollout';
 import { createCodexTerminalParser } from './terminal';
+import { tr } from '../../../shared/i18n';
 
 /** Idade mínima do lock para valer como sessão aberta (os locks de manutenção duram menos). */
 export const LOCK_SETTLE_MS = 3_000;
@@ -70,8 +71,8 @@ const PREFIX_HISTORY = 120;
 const BACKLOG_MAX = 400;
 /** Conta sem sessão aberta ao subir: quantos rollouts recentes tentar até achar um com o uso do plano. */
 const SEED_USAGE_FILES = 8;
-const MAIN_ROLE = 'Agente principal (Codex)';
-const SUB_ROLE = 'Subagente (Codex)';
+const MAIN_ROLE = tr('Agente principal (Codex)');
+const SUB_ROLE = tr('Subagente (Codex)');
 
 const HOOK_EVENTS = new Set([
   'SessionStart',
@@ -280,7 +281,7 @@ export class CodexSource implements AgentSource, CodexLive {
     try {
       this.poll(false);
     } catch (err) {
-      log.warnOnce(`codex-poll:${errMsg(err)}`, `Codex: falha no ciclo de leitura: ${errMsg(err)}`);
+      log.warnOnce(`codex-poll:${errMsg(err)}`, tr('Codex: falha no ciclo de leitura: {0}', [errMsg(err)]));
     }
   }
 
@@ -309,7 +310,7 @@ export class CodexSource implements AgentSource, CodexLive {
         try {
           this.syncThread(t, via, now, boot);
         } catch (err) {
-          log.warnOnce(`codex-thread:${key}:${errMsg(err)}`, `Codex: thread ${key}: ${errMsg(err)}`);
+          log.warnOnce(`codex-thread:${key}:${errMsg(err)}`, tr('Codex: thread {0}: {1}', [key, errMsg(err)]));
         }
         seen.add(key);
       }
@@ -522,7 +523,7 @@ export class CodexSource implements AgentSource, CodexLive {
       const path = t.acc.index.find(t.threadId);
       if (!path) {
         if (t.acc.index.isCompressedOnly(t.threadId)) {
-          log.warnOnce('codex-zst', 'Codex: há conversas compactadas (.jsonl.zst) que o Habblaud ainda não lê; elas ficam sem detalhes.');
+          log.warnOnce('codex-zst', tr('Codex: há conversas compactadas (.jsonl.zst) que o Habblaud ainda não lê; elas ficam sem detalhes.'));
         }
         return;
       }
@@ -534,7 +535,7 @@ export class CodexSource implements AgentSource, CodexLive {
       try {
         r = t.tail.read();
       } catch (err) {
-        log.warnOnce(`codex-read:${t.key}`, `Codex: rollout de ${t.key} ilegível (${errMsg(err)}).`);
+        log.warnOnce(`codex-read:${t.key}`, tr('Codex: rollout de {0} ilegível ({1}).', [t.key, errMsg(err)]));
         return;
       }
       if (r.missing) {
@@ -713,7 +714,7 @@ export class CodexSource implements AgentSource, CodexLive {
         this.applySummary(t);
         if (t.inOffice) this.opts.office.mergeHistory(t.key, prefix.activities);
       })
-      .catch((err) => log.warnOnce(`codex-prefix:${path}`, `Codex: não foi possível ler o início de um rollout (${errMsg(err)}).`));
+      .catch((err) => log.warnOnce(`codex-prefix:${path}`, tr('Codex: não foi possível ler o início de um rollout ({0}).', [errMsg(err)])));
   }
 
   // ---------------------------------------------------------------- uso do plano
@@ -791,7 +792,7 @@ export class CodexSource implements AgentSource, CodexLive {
     try {
       return this.hookEvent(account, input);
     } catch (err) {
-      log.warnOnce(`codex-hook:${errMsg(err)}`, `Codex: evento de hook ignorado (${errMsg(err)}).`);
+      log.warnOnce(`codex-hook:${errMsg(err)}`, tr('Codex: evento de hook ignorado ({0}).', [errMsg(err)]));
       return false;
     }
   }
@@ -856,7 +857,7 @@ export class CodexSource implements AgentSource, CodexLive {
         break;
       }
       case 'PermissionRequest':
-        this.decide(t, 'waiting', now, 'aprovar um comando', true);
+        this.decide(t, 'waiting', now, tr('aprovar um comando'), true);
         break;
       case 'Stop':
       case 'Interrupt':

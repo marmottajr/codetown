@@ -27,6 +27,7 @@ import {
 } from '../../shared/daystats';
 import { seedDemoHistory } from '../../shared/demo/daystats';
 import { errMsg, log } from '../log';
+import { tr } from '../../shared/i18n';
 
 /** Prefixo dos ids dos agentes do modo demonstração no servidor (ver Office.setDemo). */
 export const DEMO_ID_PREFIX = 'demo:';
@@ -196,7 +197,7 @@ export class DayStatsService {
     try {
       return readdirSync(this.deps.dir).filter((n) => FILE_RE.test(n));
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warnOnce('stats-dir', `Não foi possível ler ${this.deps.dir} (${errMsg(err)}).`);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warnOnce('stats-dir', tr('Não foi possível ler {0} ({1}).', [this.deps.dir, errMsg(err)]));
       return [];
     }
   }
@@ -209,7 +210,7 @@ export class DayStatsService {
     try {
       raw = readFileSync(file, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warnOnce(`stats-read:${key}`, `Não foi possível ler ${file} (${errMsg(err)}).`);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warnOnce(`stats-read:${key}`, tr('Não foi possível ler {0} ({1}).', [file, errMsg(err)]));
       return null;
     }
     let data: DayData | null = null;
@@ -219,7 +220,7 @@ export class DayStatsService {
       data = null;
     }
     if (data) return data;
-    log.warnOnce(`stats-corrupt:${key}`, `${file} está ilegível; guardado como .corrupt e o dia recomeça do zero.`);
+    log.warnOnce(`stats-corrupt:${key}`, tr('{0} está ilegível; guardado como .corrupt e o dia recomeça do zero.', [file]));
     try {
       renameSync(file, `${file}.corrupt`);
     } catch {
@@ -240,7 +241,7 @@ export class DayStatsService {
       log.clearOnce('stats-write');
       return true;
     } catch (err) {
-      log.warnOnce('stats-write', `Não foi possível gravar ${file} (${errMsg(err)}); as estatísticas seguem só na memória.`);
+      log.warnOnce('stats-write', tr('Não foi possível gravar {0} ({1}); as estatísticas seguem só na memória.', [file, errMsg(err)]));
       return false;
     }
   }
@@ -256,7 +257,7 @@ export class DayStatsService {
       try {
         unlinkSync(join(this.deps.dir!, name));
       } catch (err) {
-        log.warnOnce(`stats-rm:${key}`, `Não foi possível apagar ${name} (${errMsg(err)}).`);
+        log.warnOnce(`stats-rm:${key}`, tr('Não foi possível apagar {0} ({1}).', [name, errMsg(err)]));
       }
     }
   }
@@ -266,7 +267,7 @@ export class DayStatsService {
       fn();
       log.clearOnce(`stats-${what}-fail`);
     } catch (err) {
-      log.warnOnce(`stats-${what}-fail`, `Falha nas estatísticas do dia (${what}): ${errMsg(err)}`);
+      log.warnOnce(`stats-${what}-fail`, tr('Falha nas estatísticas do dia ({0}): {1}', [what, errMsg(err)]));
     }
   }
 }

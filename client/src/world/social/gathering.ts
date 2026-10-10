@@ -3,6 +3,7 @@
 // comemora, paga) fica em social.ts.
 import type { Dir, HeldItem, Pose } from '../../art/api';
 import { hasTrait, type Bond, type Persona, type TraitId } from './persona';
+import { tr } from '../../../../shared/i18n';
 
 export type GatherKind = 'tv' | 'videogame' | 'arcade' | 'pingpong' | 'kitchen' | 'talk' | 'rps' | 'mirror';
 export type Role = 'player' | 'watcher' | 'talker';
@@ -27,14 +28,14 @@ export interface KindInfo {
 }
 
 export const KINDS: Readonly<Record<GatherKind, KindInfo>> = {
-  tv: { label: 'Vendo TV', emoji: '📺', min: 2, max: 5 },
-  videogame: { label: 'Jogando videogame', emoji: '🎮', min: 2, max: 5, match: true },
-  arcade: { label: 'Duelo no fliperama', emoji: '👾', min: 2, max: 2, match: true },
-  pingpong: { label: 'Jogando pingue-pongue', emoji: '🏓', min: 2, max: 4, match: true },
-  kitchen: { label: 'Papo na copa', emoji: '☕', min: 2, max: 4 },
-  talk: { label: 'Conversando', emoji: '💬', min: 2, max: 2 },
-  rps: { label: 'Jokenpô', emoji: '✊', min: 2, max: 4, match: true },
-  mirror: { label: 'Se arrumando no espelho', emoji: '💄', min: 1, max: 2, solo: true },
+  tv: { label: tr('Vendo TV'), emoji: '📺', min: 2, max: 5 },
+  videogame: { label: tr('Jogando videogame'), emoji: '🎮', min: 2, max: 5, match: true },
+  arcade: { label: tr('Duelo no fliperama'), emoji: '👾', min: 2, max: 2, match: true },
+  pingpong: { label: tr('Jogando pingue-pongue'), emoji: '🏓', min: 2, max: 4, match: true },
+  kitchen: { label: tr('Papo na copa'), emoji: '☕', min: 2, max: 4 },
+  talk: { label: tr('Conversando'), emoji: '💬', min: 2, max: 2 },
+  rps: { label: tr('Jokenpô'), emoji: '✊', min: 2, max: 4, match: true },
+  mirror: { label: tr('Se arrumando no espelho'), emoji: '💄', min: 1, max: 2, solo: true },
 };
 
 export interface Member {

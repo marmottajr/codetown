@@ -6,6 +6,7 @@ import { dirname } from 'node:path';
 import { parseAppearanceParts, parseCharacterName, parseSeed, type AppearanceParts } from '../../shared/appearance';
 import { pickName, type PersonName } from '../../shared/names';
 import { errMsg, log } from '../log';
+import { tr } from '../../shared/i18n';
 
 interface StoredName {
   name: string;
@@ -85,7 +86,7 @@ export class NameStore {
         if (c) this.rooms.set(roomId, c);
       }
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warn(`names.json ilegível (${errMsg(err)}); começando do zero.`);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warn(tr('names.json ilegível ({0}); começando do zero.', [errMsg(err)]));
     }
   }
 
@@ -177,7 +178,7 @@ export class NameStore {
       renameSync(tmp, this.file);
       log.clearOnce('names-write');
     } catch (err) {
-      log.warnOnce('names-write', `Não foi possível gravar ${this.file} (${errMsg(err)}); os nomes valem só nesta execução.`);
+      log.warnOnce('names-write', tr('Não foi possível gravar {0} ({1}); os nomes valem só nesta execução.', [this.file, errMsg(err)]));
     }
   }
 }

@@ -3,6 +3,7 @@
 //
 // Fica no navegador (localStorage), por agente: cada navegador tem a sua economia (as apostas são
 // sorteadas na simulação local). Sem localStorage (testes, aba anônima bloqueada), só em memória.
+import { tr } from '../../../../shared/i18n';
 
 /** Saldo de quem chega ao escritório. */
 export const START_COINS: Readonly<Record<'main' | 'sub', number>> = { main: 100, sub: 30 };
@@ -106,14 +107,14 @@ export class Wallets {
     const start = START_COINS[a.kind] ?? START_COINS.main;
     w = { name: a.name, coins: start, earned: start, wins: 0, losses: 0, vs: {}, paid: [], ledger: [], createdAt: now, seenAt: now };
     this.map.set(a.id, w);
-    this.log(w, { at: now, delta: start, icon: '🏢', text: 'Chegou ao escritório' });
+    this.log(w, { at: now, delta: start, icon: '🏢', text: tr('Chegou ao escritório') });
     const done = a.tasks.filter((t) => t.status === 'completed');
     if (done.length) {
       for (const t of done) w.paid.push(taskKey(t));
       const v = done.length * TASK_REWARD;
       w.coins += v;
       w.earned += v;
-      this.log(w, { at: now, delta: v, icon: '✅', text: done.length === 1 ? '1 tarefa já concluída' : `${done.length} tarefas já concluídas` });
+      this.log(w, { at: now, delta: v, icon: '✅', text: done.length === 1 ? tr('1 tarefa já concluída') : tr('{0} tarefas já concluídas', [done.length]) });
     }
     this.dirty = true;
     return { entry: w, created: true };
@@ -133,7 +134,7 @@ export class Wallets {
       w.coins += TASK_REWARD;
       w.earned += TASK_REWARD;
       total += TASK_REWARD;
-      this.log(w, { at: now, delta: TASK_REWARD, icon: '✅', text: `Tarefa concluída: ${t.title}` });
+      this.log(w, { at: now, delta: TASK_REWARD, icon: '✅', text: tr('Tarefa concluída: {0}', [t.title]) });
     }
     if (total) this.dirty = true;
     return total;
@@ -162,8 +163,8 @@ export class Wallets {
     if (!v) return 0;
     from.coins -= v;
     to.coins += v;
-    this.log(from, { at: now, delta: -v, icon, text: `Perdeu ${what} para ${to.name}` });
-    this.log(to, { at: now, delta: v, icon, text: `Ganhou ${what} de ${from.name}` });
+    this.log(from, { at: now, delta: -v, icon, text: tr('Perdeu {0} para {1}', [what, to.name]) });
+    this.log(to, { at: now, delta: v, icon, text: tr('Ganhou {0} de {1}', [what, from.name]) });
     this.dirty = true;
     return v;
   }

@@ -13,6 +13,7 @@ import type { SessionLookup } from '../sources/source';
 import { sendJson } from './app';
 import { isLoopbackHost } from './guard';
 import type { TerminalStreams } from './terminal';
+import { tr } from '../../shared/i18n';
 
 export interface SessionRoutesDeps {
   /** Ausente = recurso desligado (sem bind local). */
@@ -27,8 +28,8 @@ const TERMINAL_ROUTE = /^\/api\/sessions\/([^/]+)\/([^/]+)\/terminal$/;
 
 /** Por que a trava recusa a requisição (undefined = liberada): os mesmos textos do terminal do agente. */
 export function sessionsLockError(enabled: boolean, host: string | undefined): string | undefined {
-  if (!enabled) return 'terminal desligado: ele só funciona com o Habblaud acessível apenas pelo próprio computador';
-  if (!isLoopbackHost(host)) return 'o terminal só abre pelo próprio computador (http://localhost ou http://127.0.0.1)';
+  if (!enabled) return tr('terminal desligado: ele só funciona com o Habblaud acessível apenas pelo próprio computador');
+  if (!isLoopbackHost(host)) return tr('o terminal só abre pelo próprio computador (http://localhost ou http://127.0.0.1)');
   return undefined;
 }
 
@@ -45,10 +46,10 @@ export function handleSessionsRoute(req: IncomingMessage, res: ServerResponse, p
   const method = req.method ?? 'GET';
   const terminalMatch = TERMINAL_ROUTE.exec(path);
   const recent = path === RECENT_ROUTE;
-  if (!recent && !terminalMatch) return sendJson(res, 404, { error: 'rota desconhecida' });
+  if (!recent && !terminalMatch) return sendJson(res, 404, { error: tr('rota desconhecida') });
   if (method !== 'GET' && !(recent && method === 'HEAD')) {
     res.setHeader('Allow', recent ? 'GET, HEAD' : 'GET');
-    return sendJson(res, 405, { error: 'método não permitido' });
+    return sendJson(res, 405, { error: tr('método não permitido') });
   }
   const { history, terminals } = deps;
   const locked = sessionsLockError(!!history && !!terminals, req.headers.host);
@@ -62,15 +63,15 @@ export function handleSessionsRoute(req: IncomingMessage, res: ServerResponse, p
         sendJson(res, 200, body);
       })
       .catch((err) => {
-        log.warnOnce(`history-list:${errMsg(err)}`, `Histórico de sessões: falha ao listar (${errMsg(err)}).`);
-        if (!res.headersSent) sendJson(res, 500, { error: 'não foi possível listar as sessões' });
+        log.warnOnce(`history-list:${errMsg(err)}`, tr('Histórico de sessões: falha ao listar ({0}).', [errMsg(err)]));
+        if (!res.headersSent) sendJson(res, 500, { error: tr('não foi possível listar as sessões') });
       });
     return;
   }
 
   const account = decode(terminalMatch![1]);
   const sessionId = decode(terminalMatch![2]);
-  if (account === undefined || sessionId === undefined) return sendJson(res, 400, { error: 'endereço inválido' });
+  if (account === undefined || sessionId === undefined) return sendJson(res, 400, { error: tr('endereço inválido') });
   const found = history.resolve(account, sessionId);
   if ('error' in found) return sendJson(res, found.status, { error: found.error });
   terminals.attachSession(req, res, `session:${account}:${sessionId}`, found.path, found.createParser);

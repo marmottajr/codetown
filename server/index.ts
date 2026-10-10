@@ -35,6 +35,7 @@ import { CodexHistory } from './sources/codex/history';
 import { CodexSource } from './sources/codex/source';
 import { createBuildReader } from './build';
 import { UpdateChecker } from './updates/checker';
+import { tr } from '../shared/i18n';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -168,7 +169,7 @@ const ticker = setInterval(() => {
   try {
     office.tick();
   } catch (err) {
-    log.warnOnce(`tick:${errMsg(err)}`, `Falha no relógio do escritório: ${errMsg(err)}`);
+    log.warnOnce(`tick:${errMsg(err)}`, tr('Falha no relógio do escritório: {0}', [errMsg(err)]));
   }
 }, 250);
 
@@ -234,64 +235,64 @@ server.on('request', (req, res) => {
     if (guard(req, res)) return;
     if (!api(req, res, url)) fallback(req, res, url);
   } catch (err) {
-    log.warn(`Erro ao responder ${req.method} ${url.pathname}: ${errMsg(err)}`);
-    if (!res.headersSent) sendJson(res, 500, { error: 'erro interno' });
+    log.warn(tr('Erro ao responder {0} {1}: {2}', [req.method, url.pathname, errMsg(err)]));
+    if (!res.headersSent) sendJson(res, 500, { error: tr('erro interno') });
     else res.destroy();
   }
 });
 
 server.on('error', (err: NodeJS.ErrnoException) => {
-  if (err.code === 'EADDRINUSE') log.error(`A porta ${config.port} já está em uso (defina HABBLAUD_PORT para usar outra).`);
-  else log.error(`Erro no servidor HTTP: ${errMsg(err)}`);
+  if (err.code === 'EADDRINUSE') log.error(tr('A porta {0} já está em uso (defina HABBLAUD_PORT para usar outra).', [config.port]));
+  else log.error(tr('Erro no servidor HTTP: {0}', [errMsg(err)]));
   process.exit(1);
 });
 
 server.listen(config.port, config.host, () => {
   const host = config.host === '0.0.0.0' || config.host === '::' ? 'localhost' : config.host;
-  log.info(`🏢 Habblaud ${config.version}${config.dev ? ' (dev)' : ''}${config.inDocker ? ' (docker)' : ''} em http://${host}:${config.port}`);
+  log.info(tr('🏢 Habblaud {0}{1}{2} em http://{3}:{4}', [config.version, config.dev ? ' (dev)' : '', config.inDocker ? ' (docker)' : '', host, config.port]));
   const list = accounts.entries();
-  if (!list.length) log.warn('Nenhuma pasta do Claude Code encontrada (defina HABBLAUD_CLAUDE_DIRS).');
+  if (!list.length) log.warn(tr('Nenhuma pasta do Claude Code encontrada (defina HABBLAUD_CLAUDE_DIRS).'));
   for (const dir of codexDirsRefused(process.env, config.home)) {
-    log.warn(`${dir} é uma pasta do Codex, não do Claude Code: fica fora das contas do Claude Code.`);
+    log.warn(tr('{0} é uma pasta do Codex, não do Claude Code: fica fora das contas do Claude Code.', [dir]));
   }
   for (const a of list) {
     const src = agents.sources().find((s) => s.label === a.id);
     const usage = accounts.usageView(a.id).status;
-    log.info(`   Conta ${a.detected.short} (${a.id}): ${src?.sessions ?? 0} sessão(ões) aberta(s) · uso: ${usage} · ${a.dir}`);
+    log.info(tr('   Conta {0} ({1}): {2} sessão(ões) aberta(s) · uso: {3} · {4}', [a.detected.short, a.id, src?.sessions ?? 0, usage, a.dir]));
   }
   if (codex) {
     const codexAccounts = codex.accountEntries();
     const open = codex.sources().reduce((n, s) => n + s.sessions, 0);
-    log.info(`   Codex: ${codexAccounts.length} conta(s), ${open} sessão(ões) aberta(s).`);
+    log.info(tr('   Codex: {0} conta(s), {1} sessão(ões) aberta(s).', [codexAccounts.length, open]));
     for (const a of codexAccounts) {
-      log.info(`   Conta ${a.detected.short} do Codex (${a.id}): uso: ${accounts.usageView(a.id).status} · ${a.detected.configDir}`);
+      log.info(tr('   Conta {0} do Codex ({1}): uso: {2} · {3}', [a.detected.short, a.id, accounts.usageView(a.id).status, a.detected.configDir]));
     }
   } else {
-    log.info(`   Codex: ${config.codex ? 'nenhuma pasta do Codex encontrada (defina HABBLAUD_CODEX_DIRS)' : 'desligado (HABBLAUD_CODEX=0)'}.`);
+    log.info(tr('   Codex: {0}.', [config.codex ? tr('nenhuma pasta do Codex encontrada (defina HABBLAUD_CODEX_DIRS)') : tr('desligado (HABBLAUD_CODEX=0)')]));
   }
-  if (office.isDemo()) log.info('   Modo demonstração ligado (agentes simulados misturados aos reais).');
-  if (config.terminal) log.info('   Terminal: ligado (acesso só local).');
-  else log.info(`   Terminal: desligado (${terminalOffReason(process.env, config.host, config.inDocker)}).`);
-  log.info(timeline ? `   Linha do tempo (timelapse): gravando em ${timelineDir}.` : '   Linha do tempo (timelapse): gravação desligada (HABBLAUD_TIMELINE).');
-  log.info(`   Responder pelo escritório: ${config.terminal ? 'ligado (precisa do mod: npm run mod:install; ou do hook antigo: npm run hooks:install)' : 'desligado (mesma trava do terminal)'}.`);
+  if (office.isDemo()) log.info(tr('   Modo demonstração ligado (agentes simulados misturados aos reais).'));
+  if (config.terminal) log.info(tr('   Terminal: ligado (acesso só local).'));
+  else log.info(tr('   Terminal: desligado ({0}).', [terminalOffReason(process.env, config.host, config.inDocker)]));
+  log.info(timeline ? tr('   Linha do tempo (timelapse): gravando em {0}.', [timelineDir]) : tr('   Linha do tempo (timelapse): gravação desligada (HABBLAUD_TIMELINE).'));
+  log.info(tr('   Responder pelo escritório: {0}.', [config.terminal ? tr('ligado (precisa do mod: npm run mod:install; ou do hook antigo: npm run hooks:install)') : tr('desligado (mesma trava do terminal)')]));
   log.info(
     config.messages
-      ? '   Mensagens pelo escritório: ligadas (precisa do plugin habblaud-mensagens: npm run mod:install).'
-      : `   Mensagens pelo escritório: desligadas (${messagesOffReason(process.env, config.host, config.inDocker)}).`,
+      ? tr('   Mensagens pelo escritório: ligadas (precisa do plugin habblaud-mensagens: npm run mod:install).')
+      : tr('   Mensagens pelo escritório: desligadas ({0}).', [messagesOffReason(process.env, config.host, config.inDocker)]),
   );
   if (config.messages) {
     log.info(
       codexBin
-        ? `   Mensagens ao Codex: pelo codex queue (${codexBin}).`
+        ? tr('   Mensagens ao Codex: pelo codex queue ({0}).', [codexBin])
         : config.inDocker
-          ? '   Mensagens ao Codex: pelo auxiliar do host (deixe npm run codex:bridge rodando no Mac).'
-          : '   Mensagens ao Codex: sem o binário do Codex (codex no PATH ou HABBLAUD_CODEX_BIN); o auxiliar npm run codex:bridge também serve.',
+          ? tr('   Mensagens ao Codex: pelo auxiliar do host (deixe npm run codex:bridge rodando no Mac).')
+          : tr('   Mensagens ao Codex: sem o binário do Codex (codex no PATH ou HABBLAUD_CODEX_BIN); o auxiliar npm run codex:bridge também serve.'),
     );
   }
   log.info(
     updates.enabled
-      ? `   Versão nova: verificando as releases de github.com/${config.repo} a cada 6 h.`
-      : `   Versão nova: verificação desligada (${config.repo ? 'HABBLAUD_UPDATE_CHECK' : 'package.json sem repositório no GitHub'}).`,
+      ? tr('   Versão nova: verificando as releases de github.com/{0} a cada 6 h.', [config.repo])
+      : tr('   Versão nova: verificação desligada ({0}).', [config.repo ? 'HABBLAUD_UPDATE_CHECK' : tr('package.json sem repositório no GitHub')]),
   );
 });
 
@@ -299,7 +300,7 @@ let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  log.info(`Encerrando (${signal})…`);
+  log.info(tr('Encerrando ({0})…', [signal]));
   clearInterval(ticker);
   stats.stop();
   agents.stop();

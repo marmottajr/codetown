@@ -22,6 +22,7 @@ import { describeMessage, MESSAGE_MAX } from '../../shared/messages';
 import type { Activity, AgentInfo, InboxMessage, OutboxMessage } from '../../shared/types';
 import { errMsg, log } from '../log';
 import type { CodexQueueResult, CodexQueueRunner } from './codex';
+import { tr } from '../../shared/i18n';
 
 /** Sessão que perguntou pela caixa de entrada há até este tempo: recebe mensagens (canMessage). */
 export const PRESENCE_MS = 10_000;
@@ -39,17 +40,17 @@ export const MAX_OPEN = 5;
 /** Mensagens entregues ao plugin por rodada. */
 export const INBOX_BATCH = 5;
 
-export const ERR_NOT_FETCHED = 'a sessão não buscou a mensagem: o plugin habblaud-mensagens está instalado e a sessão aberta?';
-export const ERR_NOT_CONFIRMED = 'a sessão não confirmou a entrega';
-export const ERR_GONE = 'o agente saiu do escritório';
-export const ERR_REFUSED = 'a sessão não aceitou a mensagem';
+export const ERR_NOT_FETCHED = tr('a sessão não buscou a mensagem: o plugin habblaud-mensagens está instalado e a sessão aberta?');
+export const ERR_NOT_CONFIRMED = tr('a sessão não confirmou a entrega');
+export const ERR_GONE = tr('o agente saiu do escritório');
+export const ERR_REFUSED = tr('a sessão não aceitou a mensagem');
 export const ERR_CODEX_UNAVAILABLE =
-  'não há como entregar ao Codex agora: rode o Habblaud fora do Docker com o `codex` no PATH (ou HABBLAUD_CODEX_BIN) ou, no Docker, deixe o npm run codex:bridge rodando no Mac';
-export const ERR_CODEX_NOT_FETCHED = 'o auxiliar do Codex não buscou a mensagem: o npm run codex:bridge está rodando no Mac?';
-export const ERR_CODEX_SLOW = 'o Codex demorou demais com as mensagens anteriores a este agente';
-export const ERR_CODEX_NOT_CONFIRMED = 'o auxiliar do Codex não confirmou a entrega';
-export const ERR_CODEX_HOME = 'a pasta da conta do Codex deste agente é desconhecida';
-export const ERR_CODEX_REFUSED = 'o codex queue não aceitou a mensagem';
+  tr('não há como entregar ao Codex agora: rode o Habblaud fora do Docker com o `codex` no PATH (ou HABBLAUD_CODEX_BIN) ou, no Docker, deixe o npm run codex:bridge rodando no Mac');
+export const ERR_CODEX_NOT_FETCHED = tr('o auxiliar do Codex não buscou a mensagem: o npm run codex:bridge está rodando no Mac?');
+export const ERR_CODEX_SLOW = tr('o Codex demorou demais com as mensagens anteriores a este agente');
+export const ERR_CODEX_NOT_CONFIRMED = tr('o auxiliar do Codex não confirmou a entrega');
+export const ERR_CODEX_HOME = tr('a pasta da conta do Codex deste agente é desconhecida');
+export const ERR_CODEX_REFUSED = tr('o codex queue não aceitou a mensagem');
 
 const ERROR_MAX = 300;
 const ID_MAX = 300;
@@ -145,9 +146,9 @@ const isFinal = (e: Entry) => e.msg.status === 'delivered' || e.msg.status === '
  * no Codex, há entregador).
  */
 function unavailableReason(a: AgentInfo, reachable: boolean): string | undefined {
-  if (a.kind !== 'main') return 'subagentes não recebem mensagens: mande para o agente principal';
-  if (!present(a)) return 'o agente já saiu do escritório';
-  if (!reachable) return a.provider === 'codex' ? ERR_CODEX_UNAVAILABLE : 'a sessão não está com o plugin habblaud-mensagens conectado (npm run mod:install)';
+  if (a.kind !== 'main') return tr('subagentes não recebem mensagens: mande para o agente principal');
+  if (!present(a)) return tr('o agente já saiu do escritório');
+  if (!reachable) return a.provider === 'codex' ? ERR_CODEX_UNAVAILABLE : tr('a sessão não está com o plugin habblaud-mensagens conectado (npm run mod:install)');
   return undefined;
 }
 
@@ -156,8 +157,8 @@ export function parseSend(raw: unknown): { agentId: string; text: string } {
   const r = rec(raw);
   const agentId = shortStr(r?.agentId, ID_MAX);
   if (!r || !agentId || typeof r.text !== 'string') throw new InvalidRequest('esperado {agentId, text}');
-  if (!r.text.trim()) throw new InvalidRequest('a mensagem está vazia');
-  if (r.text.length > MAX_TEXT) throw new InvalidRequest('a mensagem passa de 20.000 caracteres');
+  if (!r.text.trim()) throw new InvalidRequest(tr('a mensagem está vazia'));
+  if (r.text.length > MAX_TEXT) throw new InvalidRequest(tr('a mensagem passa de 20.000 caracteres'));
   return { agentId, text: r.text };
 }
 
@@ -205,7 +206,7 @@ export class MessageRegistry {
       try {
         this.tick();
       } catch (err) {
-        log.warnOnce(`messages-tick:${errMsg(err)}`, `Mensagens: falha no relógio (${errMsg(err)}).`);
+        log.warnOnce(`messages-tick:${errMsg(err)}`, tr('Mensagens: falha no relógio ({0}).', [errMsg(err)]));
       }
     }, this.opts.tickMs ?? 500);
     this.timer.unref?.();
@@ -338,7 +339,7 @@ export class MessageRegistry {
    * quem entrega é o servidor: nada sai por aqui (sem entrega dobrada).
    */
   codexPoll(raw: unknown): CodexBridgeMessage[] {
-    if (!rec(raw)) throw new InvalidRequest('esperado um objeto JSON ({})');
+    if (!rec(raw)) throw new InvalidRequest(tr('esperado um objeto JSON ({})'));
     const c = this.opts.codex;
     if (!c) return [];
     const now = this.now();

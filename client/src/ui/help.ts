@@ -7,92 +7,93 @@ import { SHELL_STAGES, STATUS_LABEL } from './model';
 import { CODEX_LIVE_HINT } from './provider';
 import { createUsageSetup, richText } from './usage';
 import { createAccountChip, updateAccountChip } from './widgets';
+import { tr } from '../../../shared/i18n';
 
 const STATUS_HELP: [AgentStatus, string][] = [
-  ['working', 'Na mesa, digitando: está processando um pedido.'],
-  ['waiting', 'Mão levantada: espera uma resposta sua no terminal (permissão, pergunta ou escolha).'],
-  ['shell', 'Ampulheta sobre a cabeça: terminou o turno e fica na mesa esperando um shell terminar.'],
-  ['idle', 'Terminou o turno e circula pelo escritório até a próxima instrução.'],
-  ['done', 'Subagente que concluiu: entrega o resultado e vai embora.'],
-  ['offline', 'A sessão foi fechada: o personagem vai até o elevador e sai.'],
+  ['working', tr('Na mesa, digitando: está processando um pedido.')],
+  ['waiting', tr('Mão levantada: espera uma resposta sua no terminal (permissão, pergunta ou escolha).')],
+  ['shell', tr('Ampulheta sobre a cabeça: terminou o turno e fica na mesa esperando um shell terminar.')],
+  ['idle', tr('Terminou o turno e circula pelo escritório até a próxima instrução.')],
+  ['done', tr('Subagente que concluiu: entrega o resultado e vai embora.')],
+  ['offline', tr('A sessão foi fechada: o personagem vai até o elevador e sai.')],
 ];
 
 const ICON_HELP: [string, string][] = [
-  ['📨', 'Recebeu um pedido'],
-  ['💭', 'Pensando'],
-  ['📖', 'Lendo arquivo'],
-  ['🔎', 'Buscando no código'],
-  ['✏️', 'Editando'],
-  ['📝', 'Escrevendo arquivo'],
-  ['💻', 'Comando no terminal'],
-  ['⏳', 'Esperando um shell'],
-  ['🧪', 'Rodando testes'],
-  ['🌐', 'Pesquisando na web'],
-  ['🗒️', 'Organizando tarefas'],
-  ['👥', 'Chamando subagentes'],
-  ['✋', 'Precisa de você'],
-  ['✅', 'Concluiu'],
-  ['❌', 'Shell falhou'],
-  ['🛑', 'Shell interrompido'],
-  ['⚠️', 'Algo deu errado'],
+  ['📨', tr('Recebeu um pedido')],
+  ['💭', tr('Pensando')],
+  ['📖', tr('Lendo arquivo')],
+  ['🔎', tr('Buscando no código')],
+  ['✏️', tr('Editando')],
+  ['📝', tr('Escrevendo arquivo')],
+  ['💻', tr('Comando no terminal')],
+  ['⏳', tr('Esperando um shell')],
+  ['🧪', tr('Rodando testes')],
+  ['🌐', tr('Pesquisando na web')],
+  ['🗒️', tr('Organizando tarefas')],
+  ['👥', tr('Chamando subagentes')],
+  ['✋', tr('Precisa de você')],
+  ['✅', tr('Concluiu')],
+  ['❌', tr('Shell falhou')],
+  ['🛑', tr('Shell interrompido')],
+  ['⚠️', tr('Algo deu errado')],
 ];
 
 /** Rodas da vida social (quem está à toa se junta com os colegas). */
 const SOCIAL_HELP: [string, string][] = [
-  ['📺', 'TV no lounge: futebol (comemoram o gol junto com a tela), novela ou desenho, com pipoca.'],
-  ['🎮', 'Videogame no sofá (melhor de 3) ou duelo nos fliperamas, com torcida.'],
-  ['🏓', 'Pingue-pongue até 5 pontos, com placar e torcida atrás da mesa.'],
-  ['☕', 'Papo na copa: pegam café e sentam para fofocar, contar piada e falar de trabalho.'],
-  ['✊', 'Jokenpô valendo moedinhas: jo-ken-pô, revelação, quem ganha leva o 🪙 (e quem perde pede revanche).'],
-  ['💄', 'Espelho do banheiro: se arrumam (batom, pente) e aparecem refletidos no vidro.'],
-  ['🪙', 'Carteira: entram com 🪙100 (subagentes 🪙30), ganham 🪙10 por tarefa concluída, 🪙5 por pedido atendido e 🪙15 por entrega de subagente.'],
+  ['📺', tr('TV no lounge: futebol (comemoram o gol junto com a tela), novela ou desenho, com pipoca.')],
+  ['🎮', tr('Videogame no sofá (melhor de 3) ou duelo nos fliperamas, com torcida.')],
+  ['🏓', tr('Pingue-pongue até 5 pontos, com placar e torcida atrás da mesa.')],
+  ['☕', tr('Papo na copa: pegam café e sentam para fofocar, contar piada e falar de trabalho.')],
+  ['✊', tr('Jokenpô valendo moedinhas: jo-ken-pô, revelação, quem ganha leva o 🪙 (e quem perde pede revanche).')],
+  ['💄', tr('Espelho do banheiro: se arrumam (batom, pente) e aparecem refletidos no vidro.')],
+  ['🪙', tr('Carteira: entram com 🪙100 (subagentes 🪙30), ganham 🪙10 por tarefa concluída, 🪙5 por pedido atendido e 🪙15 por entrega de subagente.')],
 ];
 
 /** Eventos do GitHub vistos ao vivo nas sessões (gh, git push, MCP do GitHub). */
 const GITHUB_HELP: [string, string][] = [
-  ['🎉', 'Festa: PR aberto ou mergeado, release publicada (ou CI verde depois de um alarme). Confete cai na sala, todos comemoram e uma faixa diz o motivo (~12 s).'],
-  ['🚨', 'Alarme: o CI ficou vermelho. Giroflex nos cantos da sala, chão avermelhado e um balão “!” sobre quem viu a falha, até um CI verde na sala (ou 10 min).'],
-  ['🚀', 'Push: só o aviso e o feed, sem mexer na sala.'],
+  ['🎉', tr('Festa: PR aberto ou mergeado, release publicada (ou CI verde depois de um alarme). Confete cai na sala, todos comemoram e uma faixa diz o motivo (~12 s).')],
+  ['🚨', tr('Alarme: o CI ficou vermelho. Giroflex nos cantos da sala, chão avermelhado e um balão “!” sobre quem viu a falha, até um CI verde na sala (ou 10 min).')],
+  ['🚀', tr('Push: só o aviso e o feed, sem mexer na sala.')],
 ];
 
 /** O Codex no escritório: o que muda em relação ao Claude Code (trechos `assim` viram código). */
 const CODEX_HELP: string[] = [
-  'Cada projeto aberto no Codex (no terminal ou no app) vira uma sala: a mesma do Claude Code naquela pasta, e os dois dividem a sala.',
-  'Os agentes do Codex têm o chip da conta vazado (só a borda na cor da conta) e o selo CODEX na etiqueta e nos detalhes.',
-  `${CODEX_LIVE_HINT} Sem os hooks, o escritório lê os arquivos de sessão do Codex: cada passo aparece quando termina.`,
-  'Aprovar pelo escritório: no Codex, a aprovação só aparece no terminal depois que você responder aqui ou o prazo acabar (alguns segundos). Não há “não perguntar de novo” nem “interromper”, e recusar pede um motivo.',
-  'Mensagens: entram na fila da sessão e viram o próximo prompt quando o Codex terminar o que está fazendo (até ~10 s). Com o Habblaud no Docker, deixe `npm run codex:bridge` rodando; no modo Node funciona sozinho.',
-  'Perguntas do Codex são respondidas no próprio Codex.',
-  'Uso: vem dos arquivos de sessão do Codex, sem instalar nada, e só se renova enquanto alguma sessão roda (por isso o cartão mostra a idade, ex.: “há 12 min”). “sem cota” quer dizer sem cota nem créditos para usar agora.',
-  'Meu dia: o Codex conta tokens, mas não grava custo.',
+  tr('Cada projeto aberto no Codex (no terminal ou no app) vira uma sala: a mesma do Claude Code naquela pasta, e os dois dividem a sala.'),
+  tr('Os agentes do Codex têm o chip da conta vazado (só a borda na cor da conta) e o selo CODEX na etiqueta e nos detalhes.'),
+  tr('{0} Sem os hooks, o escritório lê os arquivos de sessão do Codex: cada passo aparece quando termina.', [CODEX_LIVE_HINT]),
+  tr('Aprovar pelo escritório: no Codex, a aprovação só aparece no terminal depois que você responder aqui ou o prazo acabar (alguns segundos). Não há “não perguntar de novo” nem “interromper”, e recusar pede um motivo.'),
+  tr('Mensagens: entram na fila da sessão e viram o próximo prompt quando o Codex terminar o que está fazendo (até ~10 s). Com o Habblaud no Docker, deixe `npm run codex:bridge` rodando; no modo Node funciona sozinho.'),
+  tr('Perguntas do Codex são respondidas no próprio Codex.'),
+  tr('Uso: vem dos arquivos de sessão do Codex, sem instalar nada, e só se renova enquanto alguma sessão roda (por isso o cartão mostra a idade, ex.: “há 12 min”). “sem cota” quer dizer sem cota nem créditos para usar agora.'),
+  tr('Meu dia: o Codex conta tokens, mas não grava custo.'),
 ];
 
 /** O fim da espera (o servidor marca com uma atividade ✅ ou ❌). */
 const SHELL_END_HELP: [string, string][] = [
-  ['🎉', 'Terminou bem: levanta, comemora com confete e uma estrela.'],
-  ['🌧️', 'Falhou ou foi interrompido: nuvenzinha de chuva sobre a cabeça e ombros caídos.'],
+  ['🎉', tr('Terminou bem: levanta, comemora com confete e uma estrela.')],
+  ['🌧️', tr('Falhou ou foi interrompido: nuvenzinha de chuva sobre a cabeça e ombros caídos.')],
 ];
 
 const INTRO =
-  'Cada projeto aberto no Claude Code ou no Codex vira uma sala (os dois no mesmo projeto dividem a sala), e cada sessão aberta é um personagem com nome próprio. ' +
-  'Subagentes chegam como colegas novos, trabalham na mesma sala e vão embora quando terminam. ' +
-  'Quando a última sessão de uma sala é fechada, quem sai apaga a luz e a sala é desmontada.';
+  tr('Cada projeto aberto no Claude Code ou no Codex vira uma sala (os dois no mesmo projeto dividem a sala), e cada sessão aberta é um personagem com nome próprio. ') +
+  tr('Subagentes chegam como colegas novos, trabalham na mesma sala e vão embora quando terminam. ') +
+  tr('Quando a última sessão de uma sala é fechada, quem sai apaga a luz e a sala é desmontada.');
 
 const SHORTCUTS: [string[], string][] = [
-  [['/'], 'Buscar agente, projeto ou conta'],
-  [['F'], 'Seguir o agente selecionado'],
-  [['T'], 'Abrir ou fechar o terminal do agente selecionado'],
-  [['Ctrl+F'], 'Com o terminal em foco: buscar na conversa (⌘F no Mac); Enter e Shift+Enter navegam'],
-  [['L'], 'Abrir ou fechar o timelapse do dia'],
-  [['P'], 'Ir até o próximo pedido de permissão ou pergunta para responder pelo escritório'],
-  [['M'], 'Meu dia: para onde foi o tempo (trabalhando, esperando você...)'],
-  [['O', '0'], 'Visão geral do prédio'],
-  [['Esc'], 'Fechar a busca do terminal, depois o terminal; depois, a gaveta e a seleção'],
-  [['['], 'Mostrar ou ocultar o painel lateral'],
-  [[']'], 'Mostrar ou ocultar o feed de atividade'],
-  [['?'], 'Abrir esta ajuda'],
-  [['←', '↑', '→', '↓'], 'Mover a câmera (também W A S D)'],
-  [['+', '−'], 'Aproximar e afastar'],
+  [['/'], tr('Buscar agente, projeto ou conta')],
+  [['F'], tr('Seguir o agente selecionado')],
+  [['T'], tr('Abrir ou fechar o terminal do agente selecionado')],
+  [['Ctrl+F'], tr('Com o terminal em foco: buscar na conversa (⌘F no Mac); Enter e Shift+Enter navegam')],
+  [['L'], tr('Abrir ou fechar o timelapse do dia')],
+  [['P'], tr('Ir até o próximo pedido de permissão ou pergunta para responder pelo escritório')],
+  [['M'], tr('Meu dia: para onde foi o tempo (trabalhando, esperando você...)')],
+  [['O', '0'], tr('Visão geral do prédio')],
+  [['Esc'], tr('Fechar a busca do terminal, depois o terminal; depois, a gaveta e a seleção')],
+  [['['], tr('Mostrar ou ocultar o painel lateral')],
+  [[']'], tr('Mostrar ou ocultar o feed de atividade')],
+  [['?'], tr('Abrir esta ajuda')],
+  [['←', '↑', '→', '↓'], tr('Mover a câmera (também W A S D)')],
+  [['+', '−'], tr('Aproximar e afastar')],
 ];
 
 function keys(list: string[]): HTMLElement {
@@ -104,7 +105,7 @@ export class HelpDialog {
   private sections = new Map<HelpSection, HTMLElement>();
 
   constructor() {
-    const close = iconButton(ICONS.close, 'Fechar ajuda', () => this.el.close(), 'ui-icon-btn--sm');
+    const close = iconButton(ICONS.close, tr('Fechar ajuda'), () => this.el.close(), 'ui-icon-btn--sm');
     const statusList = h(
       'ul',
       { class: 'ui-legend' },
@@ -122,37 +123,37 @@ export class HelpDialog {
     this.el = h(
       'dialog',
       { class: 'ui-dialog ui-help', attrs: { 'aria-labelledby': 'ui-help-title' } },
-      h('div', { class: 'ui-dialog__head' }, h('h2', { text: 'Como ler o escritório', attrs: { id: 'ui-help-title' } }), close),
+      h('div', { class: 'ui-dialog__head' }, h('h2', { text: tr('Como ler o escritório'), attrs: { id: 'ui-help-title' } }), close),
       h(
         'div',
         { class: 'ui-dialog__body' },
         h('section', { class: 'ui-help__intro' }, h('p', { text: INTRO })),
         h('section', {}, h('h3', { text: 'Status' }), statusList),
-        h('section', {}, h('h3', { text: 'Atividades' }), iconList),
+        h('section', {}, h('h3', { text: tr('Atividades') }), iconList),
         this.shellSection(),
         this.socialSection(),
         this.githubSection(),
         h(
           'section',
           {},
-          h('h3', { text: 'Controles' }),
+          h('h3', { text: tr('Controles') }),
           h(
             'ul',
             { class: 'ui-help__list' },
-            h('li', { text: 'Arraste o escritório para mover a câmera e use a rolagem do mouse (ou pinça) para dar zoom.' }),
-            h('li', { text: 'Clique em um personagem ou sala para ver os detalhes; duplo clique aproxima a câmera.' }),
-            h('li', { text: 'Passe o mouse sobre um personagem para ver o que ele está fazendo.' }),
+            h('li', { text: tr('Arraste o escritório para mover a câmera e use a rolagem do mouse (ou pinça) para dar zoom.') }),
+            h('li', { text: tr('Clique em um personagem ou sala para ver os detalhes; duplo clique aproxima a câmera.') }),
+            h('li', { text: tr('Passe o mouse sobre um personagem para ver o que ele está fazendo.') }),
             h('li', {
-              text: 'Nos detalhes de um agente, “Abrir terminal” mostra a conversa da sessão como no Claude Code (ou no Codex), ao vivo (precisa do acesso local, bind 127.0.0.1).',
+              text: tr('Nos detalhes de um agente, “Abrir terminal” mostra a conversa da sessão como no Claude Code (ou no Codex), ao vivo (precisa do acesso local, bind 127.0.0.1).'),
             }),
             h('li', {
-              text: 'Com o plugin habblaud-mensagens (npm run mod:install), dá para mandar mensagens ao agente principal pelos detalhes dele ou pela caixa no rodapé do terminal: o texto entra na sessão como se você o tivesse digitado. Enter manda, Shift+Enter quebra a linha.',
+              text: tr('Com o plugin habblaud-mensagens (npm run mod:install), dá para mandar mensagens ao agente principal pelos detalhes dele ou pela caixa no rodapé do terminal: o texto entra na sessão como se você o tivesse digitado. Enter manda, Shift+Enter quebra a linha.'),
             }),
             h('li', {
-              text: 'No terminal: busca (lupa ou Ctrl/⌘+F), filtro “Tudo / Só prompts / Sem ferramentas” e um botão de copiar em cada entrada. O relógio da barra superior abre o histórico das sessões dos últimos 7 dias, inclusive as já encerradas.',
+              text: tr('No terminal: busca (lupa ou Ctrl/⌘+F), filtro “Tudo / Só prompts / Sem ferramentas” e um botão de copiar em cada entrada. O relógio da barra superior abre o histórico das sessões dos últimos 7 dias, inclusive as já encerradas.'),
             }),
             h('li', {
-              text: 'Com o mod do Habblaud instalado (npm run mod:install, que inclui o plugin de permissões), quem “pede permissão” mostra nos detalhes o comando ou a edição e os botões Aprovar, Recusar e Responder no terminal; quem faz uma pergunta mostra as opções (e um “Outro” para escrever) para responder por aqui. O diálogo continua no terminal: vale o que você responder primeiro.',
+              text: tr('Com o mod do Habblaud instalado (npm run mod:install, que inclui o plugin de permissões), quem “pede permissão” mostra nos detalhes o comando ou a edição e os botões Aprovar, Recusar e Responder no terminal; quem faz uma pergunta mostra as opções (e um “Outro” para escrever) para responder por aqui. O diálogo continua no terminal: vale o que você responder primeiro.'),
             }),
           ),
           shortcuts,
@@ -189,12 +190,12 @@ export class HelpDialog {
     return h(
       'section',
       { class: 'ui-help__shell' },
-      h('h3', { text: 'Esperando o shell' }),
+      h('h3', { text: tr('Esperando o shell') }),
       h('p', {
         class: 'ui-help__lead',
         text:
-          'Quando o agente termina o turno com um comando rodando em segundo plano (ou fica mais de 10 s parado num comando), ele não sai para passear: ' +
-          'fica na mesa com a ampulheta virando, o monitor mostra o progresso e um balão diz qual shell ele espera e há quanto tempo. Quanto mais demora…',
+          tr('Quando o agente termina o turno com um comando rodando em segundo plano (ou fica mais de 10 s parado num comando), ele não sai para passear: ') +
+          tr('fica na mesa com a ampulheta virando, o monitor mostra o progresso e um balão diz qual shell ele espera e há quanto tempo. Quanto mais demora…'),
       }),
       h('ul', { class: 'ui-shell-legend' }, ...SHELL_STAGES.map((s) => item(s.emoji, s.help)), ...SHELL_END_HELP.map(([e, t]) => item(e, t))),
     );
@@ -207,13 +208,13 @@ export class HelpDialog {
     return h(
       'section',
       { class: 'ui-help__shell' },
-      h('h3', { text: 'Vida social' }),
+      h('h3', { text: tr('Vida social') }),
       h('p', {
         class: 'ui-help__lead',
         text:
-          'Quando dois ou mais agentes estão à toa (ociosos, ou esperando um shell há mais de 40 s), eles se juntam. Cada um tem 2 ou 3 traços de personalidade ' +
-          '(competição, fofoca, vaidade, sonecas…), amizades e rivalidades, e isso decide o que preferem fazer, com quem e o que falam. ' +
-          'Os detalhes do agente mostram a personalidade, a carteira e o extrato; as partidas e apostas aparecem no feed.',
+          tr('Quando dois ou mais agentes estão à toa (ociosos, ou esperando um shell há mais de 40 s), eles se juntam. Cada um tem 2 ou 3 traços de personalidade ') +
+          tr('(competição, fofoca, vaidade, sonecas…), amizades e rivalidades, e isso decide o que preferem fazer, com quem e o que falam. ') +
+          tr('Os detalhes do agente mostram a personalidade, a carteira e o extrato; as partidas e apostas aparecem no feed.'),
       }),
       h('ul', { class: 'ui-shell-legend' }, ...SOCIAL_HELP.map(([e, t]) => item(e, t))),
     );
@@ -226,12 +227,12 @@ export class HelpDialog {
     return h(
       'section',
       { class: 'ui-help__shell' },
-      h('h3', { text: 'GitHub no escritório' }),
+      h('h3', { text: tr('GitHub no escritório') }),
       h('p', {
         class: 'ui-help__lead',
         text:
-          'O que os agentes fazem no GitHub (gh pr create/merge, git push, gh run watch, gh pr checks, gh release create e o MCP do GitHub) vira aviso, ' +
-          'entra no feed e anima a sala do projeto. Só o que acontece ao vivo: o que já estava nos transcripts quando o Habblaud abriu fica só no histórico.',
+          tr('O que os agentes fazem no GitHub (gh pr create/merge, git push, gh run watch, gh pr checks, gh release create e o MCP do GitHub) vira aviso, ') +
+          tr('entra no feed e anima a sala do projeto. Só o que acontece ao vivo: o que já estava nos transcripts quando o Habblaud abriu fica só no histórico.'),
       }),
       h('ul', { class: 'ui-shell-legend' }, ...GITHUB_HELP.map(([e, t]) => item(e, t))),
     );
@@ -241,18 +242,18 @@ export class HelpDialog {
     const el = h(
       'section',
       { class: 'ui-help__usage', attrs: { 'aria-labelledby': 'ui-help-usage' } },
-      h('h3', { text: 'Contas e uso', tabIndex: -1, attrs: { id: 'ui-help-usage' } }),
+      h('h3', { text: tr('Contas e uso'), tabIndex: -1, attrs: { id: 'ui-help-usage' } }),
       h(
         'ul',
         { class: 'ui-help__list' },
-        h('li', { text: 'O chip colorido com a letra (C, D…) mostra de qual conta do Claude Code é cada agente: cada atalho de terminal usa uma pasta de configuração diferente.' }),
-        h('li', {}, accountSample('C', '#f08a3c'), ' Conta do Claude Code · ', accountSample('X', '#a77bf3', true), ' Conta do Codex (chip vazado, com o selo CODEX onde há espaço).'),
+        h('li', { text: tr('O chip colorido com a letra (C, D…) mostra de qual conta do Claude Code é cada agente: cada atalho de terminal usa uma pasta de configuração diferente.') }),
+        h('li', {}, accountSample('C', '#f08a3c'), tr(' Conta do Claude Code · '), accountSample('X', '#a77bf3', true), tr(' Conta do Codex (chip vazado, com o selo CODEX onde há espaço).')),
         h('li', {
-          text: 'No topo, cada conta mostra o uso da sessão de 5 horas e da semana. O ↻ indica quando cada limite reinicia (contagem regressiva se faltar menos de um dia). Verde abaixo de 50%, âmbar até 80% e vermelho a partir daí.',
+          text: tr('No topo, cada conta mostra o uso da sessão de 5 horas e da semana. O ↻ indica quando cada limite reinicia (contagem regressiva se faltar menos de um dia). Verde abaixo de 50%, âmbar até 80% e vermelho a partir daí.'),
         }),
-        h('li', { text: 'Números antigos ficam acinzentados com a idade ao lado (ex.: “há 3 h”); uma janela que já reiniciou desde a leitura mostra “—” e “renovada”.' }),
+        h('li', { text: tr('Números antigos ficam acinzentados com a idade ao lado (ex.: “há 3 h”); uma janela que já reiniciou desde a leitura mostra “—” e “renovada”.') }),
       ),
-      h('p', { class: 'ui-help__lead', text: 'Para ver o uso de uma conta (“sem dados de uso”), em ordem de preferência:' }),
+      h('p', { class: 'ui-help__lead', text: tr('Para ver o uso de uma conta (“sem dados de uso”), em ordem de preferência:') }),
       createUsageSetup(),
     );
     this.sections.set('usage', el);
@@ -279,7 +280,7 @@ export class HelpDialog {
 /** Um chip de conta de exemplo (legenda). */
 function accountSample(short: string, color: string, codex = false): HTMLElement {
   const chip = createAccountChip('sm');
-  updateAccountChip(chip, { id: short, short, name: codex ? 'Codex' : `Conta ${short}`, color, configDir: '', sessions: 0, usageStatus: 'disabled', ...(codex ? { provider: 'codex' as const } : {}) });
+  updateAccountChip(chip, { id: short, short, name: codex ? 'Codex' : tr('Conta {0}', [short]), color, configDir: '', sessions: 0, usageStatus: 'disabled', ...(codex ? { provider: 'codex' as const } : {}) });
   chip.setAttribute('aria-hidden', 'true');
   return chip;
 }

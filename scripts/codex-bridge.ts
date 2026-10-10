@@ -17,22 +17,14 @@ import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isClaudeDir } from '../server/accounts/detect';
 import { createCodexQueueRunner, findCodexBin, THREAD_ID, type CodexQueueResult, type CodexQueueRunner } from '../server/messages/codex';
+import { tr } from '../shared/i18n';
 
 export const DEFAULT_PORT = 4747;
 /** Intervalo entre as rodadas. */
 export const POLL_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 5_000;
 
-const USAGE = `Uso: npm run codex:bridge [-- opções]
-
-Entrega as mensagens do escritório às sessões do Codex quando o Habblaud roda no Docker (deixe rodando no Mac).
-
-Opções:
-  --port <n>   porta do Habblaud (padrão: HABBLAUD_PORT ou ${DEFAULT_PORT})
-  --once       faz uma rodada só e sai
-  -h, --help   mostra esta ajuda
-
-Binário do Codex: HABBLAUD_CODEX_BIN ou \`codex\` do PATH.`;
+const USAGE = tr('Uso: npm run codex:bridge [-- opções]\n\nEntrega as mensagens do escritório às sessões do Codex quando o Habblaud roda no Docker (deixe rodando no Mac).\n\nOpções:\n  --port <n>   porta do Habblaud (padrão: HABBLAUD_PORT ou {0})\n  --once       faz uma rodada só e sai\n  -h, --help   mostra esta ajuda\n\nBinário do Codex: HABBLAUD_CODEX_BIN ou `codex` do PATH.', [DEFAULT_PORT]);
 
 export interface BridgeMessage {
   id: string;
@@ -66,8 +58,8 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
     if (a === '--once') once = true;
     else if (a === '--port') {
       port = Number(argv[++i]);
-      if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new FatalError('--port precisa de um número entre 1 e 65535.');
-    } else throw new FatalError(`opção desconhecida: ${a}\n\n${USAGE}`);
+      if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new FatalError(tr('--port precisa de um número entre 1 e 65535.'));
+    } else throw new FatalError(tr('opção desconhecida: {0}\n\n{1}', [a, USAGE]));
   }
   return { port, once };
 }
@@ -87,11 +79,11 @@ function isDir(p: string): boolean {
 export function checkMessage(raw: unknown): BridgeMessage | { id?: string; error: string } {
   const r = rec(raw);
   const id = typeof r?.id === 'string' && r.id.trim() ? r.id : undefined;
-  if (!r || !id) return { error: 'mensagem sem id' };
-  if (typeof r.text !== 'string' || !r.text.trim()) return { id, error: 'mensagem vazia' };
-  if (typeof r.thread !== 'string' || !THREAD_ID.test(r.thread)) return { id, error: 'id de thread do Codex inválido' };
+  if (!r || !id) return { error: tr('mensagem sem id') };
+  if (typeof r.text !== 'string' || !r.text.trim()) return { id, error: tr('mensagem vazia') };
+  if (typeof r.thread !== 'string' || !THREAD_ID.test(r.thread)) return { id, error: tr('id de thread do Codex inválido') };
   const home = typeof r.codexHome === 'string' ? r.codexHome : '';
-  if (!home || !isAbsolute(home) || !isDir(home) || isClaudeDir(home)) return { id, error: `a pasta do Codex ${home || '(vazia)'} não existe neste computador` };
+  if (!home || !isAbsolute(home) || !isDir(home) || isClaudeDir(home)) return { id, error: tr('a pasta do Codex {0} não existe neste computador', [home || tr('(vazia)')]) };
   return { id, account: typeof r.account === 'string' ? r.account : '', codexHome: resolve(home), thread: r.thread, text: r.text };
 }
 
@@ -141,7 +133,7 @@ export async function round(post: Post, run: CodexQueueRunner, log: (line: strin
     const m = checkMessage(raw);
     if ('error' in m) {
       if (m.id) results.push({ id: m.id, ok: false, error: m.error });
-      log(`✗ mensagem recusada: ${m.error}`);
+      log(tr('✗ mensagem recusada: {0}', [m.error]));
       continue;
     }
     let r: CodexQueueResult;
@@ -151,7 +143,7 @@ export async function round(post: Post, run: CodexQueueRunner, log: (line: strin
       r = { ok: false, error: String(err) };
     }
     results.push(r.ok ? { id: m.id, ok: true } : { id: m.id, ok: false, error: r.error });
-    log(r.ok ? `✓ mensagem na fila do thread ${m.thread.slice(0, 8)}… (${m.account || 'Codex'})` : `✗ thread ${m.thread.slice(0, 8)}…: ${r.error}`);
+    log(r.ok ? tr('✓ mensagem na fila do thread {0}… ({1})', [m.thread.slice(0, 8), m.account || 'Codex']) : `✗ thread ${m.thread.slice(0, 8)}…: ${r.error}`);
   }
   if (results.length) await post('/api/codex/bridge/ack', { results });
   return { state: 'ok', results };
@@ -164,20 +156,20 @@ async function main(): Promise<void> {
     return;
   }
   const bin = findCodexBin(process.env);
-  if (!bin) throw new FatalError('não achei o Codex: deixe o `codex` no PATH ou defina HABBLAUD_CODEX_BIN com o caminho do binário.');
+  if (!bin) throw new FatalError(tr('não achei o Codex: deixe o `codex` no PATH ou defina HABBLAUD_CODEX_BIN com o caminho do binário.'));
   const run = createCodexQueueRunner(bin);
   const post = httpPost(parsed.port);
   const log = (line: string) => console.log(`[codex-bridge] ${line}`);
-  log(`Entregando as mensagens do Habblaud (http://127.0.0.1:${parsed.port}) às sessões do Codex com ${bin}. Ctrl+C para parar.`);
+  log(tr('Entregando as mensagens do Habblaud (http://127.0.0.1:{0}) às sessões do Codex com {1}. Ctrl+C para parar.', [parsed.port, bin]));
   let last = '';
   for (;;) {
     const r = await round(post, run, log);
     const state =
       r.state === 'down'
-        ? `Habblaud fora do ar em http://127.0.0.1:${parsed.port}; tentando de novo a cada ${POLL_MS / 1_000} s.`
+        ? tr('Habblaud fora do ar em http://127.0.0.1:{0}; tentando de novo a cada {1} s.', [parsed.port, POLL_MS / 1_000])
         : r.state === 'refused'
-          ? `o Habblaud recusou (${r.status}${r.error ? `: ${r.error}` : ''}).`
-          : 'conectado: os agentes do Codex já recebem mensagens pelo escritório.';
+          ? tr('o Habblaud recusou ({0}{1}).', [r.status, r.error ? `: ${r.error}` : ''])
+          : tr('conectado: os agentes do Codex já recebem mensagens pelo escritório.');
     if (state !== last) log(state);
     last = state;
     if (parsed.once) {
@@ -190,7 +182,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((err: unknown) => {
-    console.error(err instanceof FatalError ? `[codex-bridge] Erro: ${err.message}` : `[codex-bridge] Erro inesperado: ${String(err)}`);
+    console.error(err instanceof FatalError ? tr('[codex-bridge] Erro: {0}', [err.message]) : tr('[codex-bridge] Erro inesperado: {0}', [String(err)]));
     process.exitCode = 1;
   });
 }

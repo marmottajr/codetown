@@ -2,8 +2,9 @@
 // publica uma release ou vê o CI falhar (e depois passar), para a festa e o alarme das salas aparecerem
 // nos prints sem nenhum dado real.
 import type { GitHubEvent } from '../github';
+import { tr } from '../i18n';
 
-const WORKFLOWS = ['CI', 'build-test', 'Testes', 'Lint e tipos', 'Deploy'];
+const WORKFLOWS = ['CI', 'build-test', tr('Testes'), tr('Lint e tipos'), 'Deploy'];
 
 /**
  * Sorteia um evento. `alarm` = a sala já está com o CI vermelho: na maioria das vezes, o próximo
