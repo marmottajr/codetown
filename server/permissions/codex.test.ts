@@ -186,6 +186,11 @@ describe('codexToolView: nomes de ferramenta do Codex', () => {
     expect(net).toMatchObject({ title: 'Rede(api.exemplo.dev:443)', text: 'Acessar a rede: api.exemplo.dev:443', icon: '🌐', input: 'curl https://api.exemplo.dev' });
   });
 
+  it('mascara antes de cortar: o token que cruza o teto do comando não aparece partido', () => {
+    const v = codexToolView('Bash', { command: `${' '.repeat(7980)}grep ghp_${'A'.repeat(36)}` });
+    expect(JSON.stringify(v)).not.toContain('ghp_A');
+  });
+
   it('apply_patch: arquivos do patch no título e o patch como diff', () => {
     const patch = ['*** Begin Patch', '*** Update File: /p/src/app.ts', '@@', '-antes', '+depois', '*** Add File: /p/src/novo.ts', '+export {};', '*** End Patch'].join('\n');
     expect(patchFiles(patch)).toEqual([

@@ -131,6 +131,8 @@ describe('segredos mascarados', () => {
       describeCommand(`echo inicio${' '.repeat(1180)}${tok}`),
       describeShellJob('Bash', { command: `echo${' '.repeat(1190)} ${tok}`, description: `${' '.repeat(370)}${tok}` }),
       describeTool('AskUserQuestion', { questions: [{ question: `${' '.repeat(1190)}${tok}`, options: [{ label: 'Sim' }] }] }),
+      // A heurística do comando lê só os primeiros 8000 caracteres: o token que cruza esse ponto não pode aparecer partido.
+      describeCommand(`# ${'x'.repeat(7977)}\ngrep -r ${tok}`),
     ];
     for (const d of results) {
       expect(JSON.stringify(d)).not.toContain('ghp_A');

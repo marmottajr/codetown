@@ -8,8 +8,8 @@
 // - write_stdin: {session_id, chars, ...}. Aqui `session_id` é o id de um PROCESSO (o terminal em que o agente
 //   digita), não o da sessão; `chars` pode ser uma senha digitada num prompt: o título só diz o tamanho e o texto
 //   (mascarado) fica no detalhe, que só sai por GET /api/permissions/:id.
-// Tudo mascarado (maskSecrets) e cortado como no terminal.
-import { basename, describeTool, maskSecrets, truncate } from '../../shared/activity';
+// Tudo mascarado (maskedCut, antes de qualquer corte) e cortado como no terminal.
+import { basename, describeTool, maskedCut, truncate } from '../../shared/activity';
 import type { TerminalInputKind } from '../../shared/types';
 import { TITLE_ARG_MAX, toolView } from '../sources/terminal';
 
@@ -42,12 +42,12 @@ function str(v: unknown): string | undefined {
 
 /** Uma linha mascarada e cortada. */
 function line(s: string, max: number): string {
-  return truncate(maskSecrets(s.slice(0, max * 8)), max);
+  return maskedCut(s, max);
 }
 
-/** Texto livre mascarado (com teto), para o describeTool. */
+/** Texto livre mascarado (com teto), para o describeTool: mascara antes de cortar no teto. */
 function masked(s: string, max = FIELD_MASK_MAX): string {
-  return maskSecrets(s.slice(0, max));
+  return maskedCut(s).slice(0, max);
 }
 
 /** Os campos de texto (1º nível) mascarados, para o describeTool: o comando com o teto dele, os demais com o dos textos. */

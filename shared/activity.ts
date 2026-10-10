@@ -631,7 +631,7 @@ export function describeCommand(command: string, description?: string): Activity
   const detail = command.trim();
   let found: LineDescription = {};
   try {
-    found = describeLine(detail.slice(0, 8_000), 0);
+    found = describeLine(maskedCut(detail).slice(0, 8_000), 0);
   } catch {
     found = {}; // comando estranho demais para a heurística: cai no texto genérico
   }
