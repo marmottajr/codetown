@@ -155,6 +155,18 @@ export class CodexAppServerClient extends EventEmitter {
     return ids;
   }
 
+  /**
+   * Batimento: um pedido barato e sem efeito (thread/loaded/list de 1). Qualquer resposta vale, até um erro do daemon
+   * (ele respondeu). Rejeita sem conexão, com a conexão encerrada ou sem resposta no prazo do RpcPeer.
+   */
+  async ping(): Promise<void> {
+    try {
+      await this.request('thread/loaded/list', { limit: 1 });
+    } catch (err) {
+      if (!(err instanceof RpcError)) throw err;
+    }
+  }
+
   /** Inscreve a conexão numa thread carregada (rejoin), sem overrides. Nunca rejeita. */
   async resumeThread(threadId: string): Promise<ResumeResult> {
     // O replay dos pedidos abertos pode vir antes da resposta do resume: a thread já tem de valer de novo.

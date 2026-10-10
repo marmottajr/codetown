@@ -14,7 +14,7 @@ import { log, setQuiet } from '../../../log';
 import { NameStore } from '../../../model/names';
 import { Office } from '../../../model/office';
 import { PermissionRegistry, type ParallelRequestInput } from '../../../permissions/registry';
-import { FakeAppServer, rpcFail, until } from '../../../test/codex-fixtures-appserver';
+import { FakeAppServer, NO_REPLY, rpcFail, until } from '../../../test/codex-fixtures-appserver';
 import {
   BACKOFF_MAX_MS,
   BACKOFF_MIN_MS,
@@ -938,6 +938,44 @@ describe('CodexAppServerService: queda e corrida (Review Focus #3 e #4)', () => 
     s.clock.advance(BACKOFF_MIN_MS);
     s.svc.tick();
     await until(() => s.proxies.length === 4);
+  });
+
+  it('batimento numa conexão saudável: thread/loaded/list de 1 a cada intervalo, sem queda, o cartão continua aberto', async () => {
+    // Arrange
+    const s = setup({ service: { heartbeatMs: 20, heartbeatTimeoutMs: 40 } });
+    const fake = await connected(s);
+    fake.request(8, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-8', command: 'npm test' });
+    await until(() => pendingOf(s).length === 1);
+
+    // Act: vários intervalos.
+    await until(() => fake.calls('thread/loaded/list').filter((c) => (c.params as { limit?: number }).limit === 1).length >= 4);
+
+    // Assert
+    expect(s.proxies[0].killed).toBe(false);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(true);
+    expect(pendingOf(s)).toHaveLength(1);
+    expect(s.logs.join('\n')).not.toMatch(/caiu/);
+  });
+
+  it('daemon que para de responder (o proxy, filho do Habblaud, segue vivo e nada fecha): o batimento derruba a conexão no prazo, fecha o cartão, mata o proxy, avisa e reconecta', async () => {
+    // Arrange
+    const s = setup({ service: { heartbeatMs: 20, heartbeatTimeoutMs: 40 } });
+    const fake = await connected(s);
+    fake.request(10, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-10', command: 'npm test' });
+    await until(() => pendingOf(s).length === 1);
+
+    // Act
+    fake.handlers.set('thread/loaded/list', () => NO_REPLY);
+
+    // Assert
+    await until(() => s.proxies[0].killed);
+    expect(pendingOf(s)).toEqual([]);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    expect(s.registry.register(codexHook())).toHaveProperty('id');
+    expect(s.logs.join('\n')).toMatch(/caiu \(o daemon não responde\)/);
+    s.clock.advance(BACKOFF_MIN_MS);
+    s.svc.tick();
+    await until(() => s.proxies.length === 2 && s.svc.owns(ACCOUNT, THREAD));
   });
 
   it('fim do stdout do proxy sem exit: a conexão cai do mesmo jeito (proxy morto, cartão fechado)', async () => {

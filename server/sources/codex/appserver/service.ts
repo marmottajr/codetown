@@ -7,7 +7,8 @@
 //   o Node no Windows; a pasta sim) e confirmação por `codex app-server daemon version` (código 0). Só então abre o
 //   `codex app-server proxy` (repassa bytes entre o stdio e o socket). Sem shell, sem janela, com o CODEX_HOME da conta no
 //   ambiente; nada é escrito em CODEX_HOME.
-// - Sem daemon: confere de novo a cada DISCOVERY_MS. Queda da conexão (o proxy saiu, o daemon reiniciou): os pedidos
+// - Sem daemon: confere de novo a cada DISCOVERY_MS. Queda da conexão (o proxy saiu, o daemon reiniciou, ou o daemon não
+//   respondeu ao batimento: com ele morto, o proxy segue vivo e nada fecha): os pedidos
 //   abertos daquela conexão fecham (o resolved deles não vem mais), owns() fica falso (o próximo pedido da thread volta ao
 //   hook) e a reconexão espera de BACKOFF_MIN_MS a BACKOFF_MAX_MS. Proxy aberto sem a conexão ficar pronta em
 //   HANDSHAKE_TIMEOUT_MS também cai; a queda antes de ficar pronta deixa uma linha no log com o motivo.
@@ -38,6 +39,12 @@ export const RESUME_RETRY_MS = 5_000;
 export const UNSUBSCRIBE_AFTER_MS = 60_000;
 /** Proxy aberto sem a conexão ficar pronta (101 + initialize) até aqui: cai e tenta de novo com backoff. */
 export const HANDSHAKE_TIMEOUT_MS = 15_000;
+/**
+ * Batimento da conexão pronta: um ping (thread/loaded/list de 1) a cada HEARTBEAT_MS; sem resposta em
+ * HEARTBEAT_TIMEOUT_MS, a conexão cai. Com o daemon morto, o proxy (filho do Habblaud) segue vivo e nada fecha.
+ */
+export const HEARTBEAT_MS = 15_000;
+export const HEARTBEAT_TIMEOUT_MS = 10_000;
 const DAEMON_CHECK_TIMEOUT_MS = 5_000;
 const TICK_MS = 1_000;
 /** Pedido sem `availableDecisions`: o escritório oferece as quatro. */
@@ -70,6 +77,9 @@ export interface CodexAppServerServiceOptions {
   tickMs?: number;
   /** Prazo para a conexão ficar pronta (testes); padrão: HANDSHAKE_TIMEOUT_MS. Relógio de verdade, não o `now`. */
   handshakeTimeoutMs?: number;
+  /** Intervalo e prazo do batimento (testes); padrão: HEARTBEAT_MS e HEARTBEAT_TIMEOUT_MS. Relógio de verdade. */
+  heartbeatMs?: number;
+  heartbeatTimeoutMs?: number;
 }
 
 function isDir(p: string): boolean {
@@ -152,6 +162,8 @@ interface Conn {
   listWarned: boolean;
   /** Prazo do handshake (até o onReady). */
   handshakeTimer?: ReturnType<typeof setTimeout>;
+  /** Batimento: o próximo ping, ou o prazo do ping em andamento. */
+  heartbeatTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface AccountState {
@@ -356,6 +368,37 @@ export class CodexAppServerService implements ParallelSink {
     st.backoffMs = BACKOFF_MIN_MS;
     this.say(`Codex (${st.id}): ligado ao daemon do app-server; os pedidos de aprovação do codex no terminal também podem ser respondidos pelo escritório.`);
     this.listLoaded(st, conn);
+    this.heartbeat(st, conn);
+  }
+
+  /**
+   * Agenda o próximo ping (um por vez). Resposta: agenda o seguinte. Sem resposta no prazo: a conexão cai (fecha os
+   * cartões dela e mata o proxy pelo processo filho). O ping que falha com a conexão de pé (sem resposta no prazo do
+   * RpcPeer) também derruba.
+   */
+  private heartbeat(st: AccountState, conn: Conn): void {
+    if (conn.closed) return;
+    const intervalMs = this.opts.heartbeatMs ?? HEARTBEAT_MS;
+    const timeoutMs = this.opts.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
+    conn.heartbeatTimer = setTimeout(
+      () =>
+        this.guard(() => {
+          if (conn.closed) return;
+          conn.heartbeatTimer = setTimeout(() => this.guard(() => this.drop(st, conn, 'o daemon não responde')), timeoutMs);
+          conn.heartbeatTimer.unref?.();
+          conn.client.ping().then(
+            () =>
+              this.guard(() => {
+                if (conn.closed) return;
+                clearTimeout(conn.heartbeatTimer);
+                this.heartbeat(st, conn);
+              }),
+            (err) => this.guard(() => this.drop(st, conn, `o daemon não responde (${errMsg(err)})`)),
+          );
+        }),
+      intervalMs,
+    );
+    conn.heartbeatTimer.unref?.();
   }
 
   /**
@@ -421,6 +464,7 @@ export class CodexAppServerService implements ParallelSink {
     if (conn.closed) return;
     conn.closed = true;
     clearTimeout(conn.handshakeTimer);
+    clearTimeout(conn.heartbeatTimer);
     const wasReady = conn.ready;
     conn.ready = false;
     // O cliente esquece os pedidos sem emitir o resolved: os cartões desta conexão fecham aqui.

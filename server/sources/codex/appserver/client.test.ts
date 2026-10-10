@@ -212,6 +212,23 @@ describe('CodexAppServerClient: threads', () => {
     expect(fake.calls('thread/loaded/list').map((m) => m.params)).toEqual([{ limit: 100 }, { cursor: 'c1', limit: 100 }]);
   });
 
+  it('ping: thread/loaded/list de 1; qualquer resposta vale (até um erro do daemon); sem conexão rejeita', async () => {
+    // Arrange
+    const { fake, client } = await ready();
+
+    // Act + Assert
+    await expect(client.ping()).resolves.toBeUndefined();
+    fake.handlers.set('thread/loaded/list', () => rpcFail(-32601, 'method not found'));
+    await expect(client.ping()).resolves.toBeUndefined();
+    expect(fake.calls('thread/loaded/list').map((m) => m.params)).toEqual([{ limit: 1 }, { limit: 1 }]);
+    fake.handlers.set('thread/loaded/list', () => NO_REPLY);
+    const mute = client.ping().catch((e: Error) => e.message);
+    await until(() => fake.calls('thread/loaded/list').length === 3);
+    client.close();
+    await expect(mute).resolves.toBe('conexão encerrada: fechada pelo Habblaud');
+    await expect(client.ping()).rejects.toThrow(/sem conexão com o app-server/);
+  });
+
   it('resumeThread: só threadId e excludeTurns (sem overrides); as duas -32600 se distinguem pela mensagem', async () => {
     // Arrange
     const { fake, client } = await ready();
