@@ -19,7 +19,8 @@ import { AG_EVENTS, CONVERSATION_ID_RE, type AntigravityEvent, type AntigravityL
 /** Conversa sem nenhum evento há mais que isto sai do escritório. */
 export const PRESENCE_MS = 30 * 60_000;
 const SWEEP_MS = 60_000;
-const USAGE_POLL_MS = 5_000;
+/** De quanto em quanto tempo conferir o arquivo das cotas (AG-27: o número novo aparece em até 10 s). */
+export const USAGE_POLL_MS = 5_000;
 const ACCOUNT_ID = 'antigravity';
 const ACCOUNT_COLOR = '#6c8cff';
 const ROLE = 'Agente principal (Antigravity)';

@@ -2,13 +2,13 @@
 // aparece só com os números, arquivo trocado ou estragado, e os limites. Dados sintéticos no formato real.
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AccountsService } from '../../accounts/service';
 import { setQuiet } from '../../log';
 import { NameStore } from '../../model/names';
 import { Office } from '../../model/office';
 import { tempDir } from '../../test/fixtures';
-import { AntigravitySource } from './source';
+import { AntigravitySource, USAGE_POLL_MS } from './source';
 
 setQuiet(true);
 
@@ -72,6 +72,33 @@ describe('uso do Antigravity (arquivo de cotas)', () => {
     await new Promise((ok) => setTimeout(ok, 80));
     expect(c.usage()!.sevenDay!.utilization).toBe(50);
     expect(c.usage()!.extra).toBeUndefined();
+  });
+
+  it('AG-27: a conferência padrão do arquivo acontece em até 10 s', () => {
+    expect(USAGE_POLL_MS).toBeGreaterThan(0);
+    expect(USAGE_POLL_MS).toBeLessThanOrEqual(10_000);
+  });
+
+  it('AG-27: sem usagePollMs, o número novo do arquivo aparece em 10 s (relógio simulado)', () => {
+    vi.useFakeTimers();
+    try {
+      const t = tempDir('habblaud-agypoll-');
+      cleanups.push(t.cleanup);
+      const file = join(t.dir, 'q.json');
+      const now = () => Date.parse('2026-10-10T16:00:00Z');
+      const late: { office?: Office } = {};
+      const accounts = new AccountsService({ dirs: [], home: t.dir, env: {}, now, onChange: () => late.office?.markDirty() });
+      const office = new Office({ names: new NameStore(null), version: 't', startedAt: now(), accounts: (s) => accounts.list(s), sources: () => [], accountName: (id) => accounts.find(id)?.detected.name, now });
+      late.office = office;
+      const source = new AntigravitySource({ accounts, office, now, usageFile: file });
+      cleanups.unshift(() => source.stop());
+      source.start();
+      writeFileSync(file, JSON.stringify({ fetchedAt: now(), quota: QUOTA }));
+      vi.advanceTimersByTime(10_000);
+      expect(office.commit().snapshot.accounts.find((a) => a.id === 'antigravity')?.usage?.source).toBe('antigravity');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('arquivo estragado, grande demais ou sem cota válida não derruba; o último número é trocado por nada só se o arquivo ficou sem cota', () => {
