@@ -1,7 +1,7 @@
 // Histórico do terminal do Codex: listagem dos rollouts recentes e a sessão resolvida com segurança.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setQuiet } from '../../log';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { forkRollout } from '../../test/codex-fixtures-source-ii';
@@ -10,8 +10,20 @@ import { CodexHistory } from './history';
 
 setQuiet(true);
 
+/** Falha simulada no `open` assíncrono (o do histórico): `fail(caminho)` true = a abertura lança EIO. */
+const fsFault = vi.hoisted(() => ({ fail: undefined as ((path: string) => boolean) | undefined }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>();
+  const open: typeof real.open = (path, ...rest) => {
+    if (fsFault.fail?.(String(path))) return Promise.reject(Object.assign(new Error('EIO: leitura simulada'), { code: 'EIO' }));
+    return real.open(path, ...rest);
+  };
+  return { ...real, open };
+});
+
 let cleanups: Array<() => void> = [];
 afterEach(() => {
+  fsFault.fail = undefined;
   for (const c of cleanups) c();
   cleanups = [];
 });
@@ -261,5 +273,31 @@ describe('histórico do Codex', () => {
     expect((await history.list())[0].title).toBe('primeiro');
     home.append(path, [R.agent(A, 't', 'a', 'resposta', now - 100)]);
     expect((await history.list())[0].lastAt).toBe(now - 100);
+  });
+
+  it('erro de leitura transitório no resto do rollout: a reserva vale só nesta listagem (não fica no cache); a próxima, do mesmo tamanho, relê', async () => {
+    const { home, history, now } = setup();
+    const path = home.rollout(A, [R.meta(A, { at: now - HOUR, cwd: '/projetos/loja' }), R.user(A, 't', 'u', 'Arrume o checkout', now - HOUR + 1_000)]);
+    // 1ª abertura = a 1ª linha (fica no cache); 2ª = o resto, que falha.
+    let opens = 0;
+    fsFault.fail = (p) => p === path && ++opens === 2;
+    await history.list();
+    expect(opens).toBe(2);
+    fsFault.fail = undefined;
+    expect((await history.list())[0]).toMatchObject({ sessionId: A, title: 'Arrume o checkout', lastAt: now - HOUR + 1_000 });
+  });
+
+  it('openAgentOf que lança: a listagem falha (e o HistorySet registra), em vez de tirar a conversa da lista em silêncio', async () => {
+    const home = codexHome();
+    cleanups.push(home.cleanup);
+    home.rollout(A, [R.meta(A, { at: NOW - HOUR }), R.user(A, 't', 'u', 'Arrume o checkout', NOW - HOUR + 1_000)]);
+    const history = new CodexHistory({
+      accounts: () => [{ id: '.codex', dir: home.dir }],
+      openAgentOf: () => {
+        throw new Error('escritório indisponível');
+      },
+      now: () => NOW,
+    });
+    await expect(history.list()).rejects.toThrow('escritório indisponível');
   });
 });

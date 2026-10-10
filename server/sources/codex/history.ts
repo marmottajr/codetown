@@ -9,7 +9,7 @@
 // 3. do resto, a primeira instrução e a última atividade (`timestamp` das linhas do fim), com cache pelo TAMANHO;
 // 4. entra quem teve atividade dentro da janela; de cada thread fica o rollout de atividade mais recente.
 // Título: o nome da thread no session_index.jsonl (a última linha de cada id vence), senão a primeira instrução.
-import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { readdirSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { maskSecrets, truncate } from '../../../shared/activity';
@@ -210,23 +210,25 @@ export class CodexHistory implements HistoryProvider {
         const r = parseRolloutName(name);
         if (!r || r.compressed) continue;
         const path = join(dir, name);
+        let st: Stats;
         try {
-          const st = await stat(path);
-          if (!st.isFile()) continue;
-          seen.add(path);
-          const changed = this.remember(path, st.size);
-          const c: Candidate = { account: acc.id, threadId: r.threadId, path, dir: acc.dir, size: st.size };
-          const agentId = this.opts.openAgentOf(acc.id, r.threadId);
-          if (agentId) c.agentId = agentId;
-          const bornAt = uuidV7Time(r.threadId);
-          if (bornAt !== undefined) c.bornAt = bornAt;
-          const byName = Math.max(bornAt ?? -Infinity, dayEnd ?? -Infinity) + ZONE_SLACK_MS >= cutoff;
-          const known = this.files.get(path)?.summary !== undefined;
-          // O mtime é só pista para abrir: quem decide se entra é o horário das linhas (rowOf).
-          if (agentId || changed || known || byName || st.mtimeMs >= cutoff) out.push(c);
+          st = await stat(path);
         } catch {
-          // apagado no meio da listagem
+          continue; // apagado no meio da listagem
         }
+        if (!st.isFile()) continue;
+        seen.add(path);
+        const changed = this.remember(path, st.size);
+        const c: Candidate = { account: acc.id, threadId: r.threadId, path, dir: acc.dir, size: st.size };
+        // Fora do try: uma falha do escritório sobe (e vai para o log do HistorySet), não some com a conversa.
+        const agentId = this.opts.openAgentOf(acc.id, r.threadId);
+        if (agentId) c.agentId = agentId;
+        const bornAt = uuidV7Time(r.threadId);
+        if (bornAt !== undefined) c.bornAt = bornAt;
+        const byName = Math.max(bornAt ?? -Infinity, dayEnd ?? -Infinity) + ZONE_SLACK_MS >= cutoff;
+        const known = this.files.get(path)?.summary !== undefined;
+        // O mtime é só pista para abrir: quem decide se entra é o horário das linhas (rowOf).
+        if (agentId || changed || known || byName || st.mtimeMs >= cutoff) out.push(c);
       }
     }
     return out;
@@ -279,7 +281,8 @@ export class CodexHistory implements HistoryProvider {
       value = await readRolloutRest(c.path, c.size, head, f?.summary?.value);
     } catch (err) {
       log.warnOnce(`codex-history:${errMsg(err)}`, `Histórico do Codex: rollout ilegível (${errMsg(err)}).`);
-      value = head.meta ? { meta: head.meta } : {};
+      // A reserva vale só agora: no cache, um erro passageiro tiraria a conversa da lista até o arquivo crescer.
+      return head.meta ? { meta: head.meta } : {};
     }
     if (f) f.summary = { size: c.size, value };
     return value;
