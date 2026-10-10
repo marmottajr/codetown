@@ -151,6 +151,7 @@ const messages = config.messages
         run: codexBin ? createCodexQueueRunner(codexBin) : undefined,
         homeOf: (account) => accounts.entriesOf('codex').find((e) => e.id === account)?.detected.configDir,
       },
+      opencode: config.opencode,
     })
   : undefined;
 late.messages = messages;
