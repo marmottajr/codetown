@@ -246,6 +246,22 @@ describe('pedidos do Codex no canal paralelo (demo)', () => {
     expect(tools).toEqual(new Set(['exec_command', 'apply_patch']));
   });
 
+  it('parallel: recusar com motivo vale (se o canal oferece recusar), mas o motivo não vai à atividade (o app-server não o leva ao Codex)', () => {
+    let checked = 0;
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const sim = new DemoSimulator({ seed, idPrefix: 'demo:' }, start);
+      const id = sim.forcePermission(start, 'permission', 'codex', 'parallel')!;
+      const p = agentOf(sim, id).permission!;
+      if (!p.decisions!.includes('decline')) continue;
+      expect(sim.decidePermission(p.id, { behavior: 'deny', message: 'motivo que não chega' }, start + 1)).toBe(true);
+      const last = agentOf(sim, id, start + 1).recent.at(-1)!;
+      expect(last).toMatchObject({ icon: '🚫', text: 'Recusado no Habblaud', detail: p.title });
+      expect(JSON.stringify(last)).not.toContain('motivo que não chega');
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
   it('parallel sem prazo: o cartão fica enquanto o agente espera (além dos 25 s do hook) e fecha quando o terminal responde primeiro', () => {
     const sim = new DemoSimulator({ seed: 5 }, start);
     const id = sim.forcePermission(start, 'permission', 'codex', 'parallel')!;
