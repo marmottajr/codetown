@@ -275,6 +275,17 @@ export interface UsageWindow {
   resetsAt?: number;
 }
 
+/** Custo (US$) e tokens das respostas do assistente numa janela móvel de `days` dias (OpenCode, lido do banco local). */
+export interface LocalUsage {
+  days: number;
+  costUsd: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 export interface AccountUsage {
   /** Sessão de 5 horas. */
   fiveHour?: UsageWindow;
@@ -288,9 +299,12 @@ export interface AccountUsage {
    *   (mod/habblaud, recomendado) ou pelo scripts/statusline-tap.mjs (campo rate_limits do statusline);
    * - 'cache': `cachedUsageUtilization` gravado pelo próprio Claude Code (atualiza quando alguém roda /usage);
    * - 'codex': `rate_limits` dos arquivos de sessão do Codex (só se renovam enquanto alguma sessão roda);
-   * - 'antigravity': `quota` que o `agy` manda ao statusline, gravada por mod/habblaud-antigravity/statusline.mjs.
+   * - 'antigravity': `quota` que o `agy` manda ao statusline, gravada por mod/habblaud-antigravity/statusline.mjs;
+   * - 'opencode': custo e tokens somados do banco local do OpenCode (`local`), sem janelas de cota.
    */
-  source: 'cache' | 'statusline' | 'codex' | 'antigravity';
+  source: 'cache' | 'statusline' | 'codex' | 'antigravity' | 'opencode';
+  /** Uso local do OpenCode (sem cota): custo e tokens das respostas da janela de `days` dias, do opencode.db. */
+  local?: LocalUsage;
   /** Nomes de exibição quando a janela não é a padrão (Antigravity: a barra semanal leva o nome da cota, ex.: "Gemini"). */
   labels?: { sevenDay?: string };
   /** Outras janelas semanais além da principal (Antigravity: uma cota por grupo de modelos). */

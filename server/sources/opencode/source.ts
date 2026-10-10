@@ -15,10 +15,12 @@ import type { Office } from '../../model/office';
 import type { AgentSource } from '../source';
 import { SESSION_ID_RE, type OpencodeEvent, type OpencodeLive } from './live';
 import { describeOpencodePart, describeOpencodeTool } from './activity';
-import { DB_FILE, inSnapshot, lastMessage, lastPart, listSessions, openDb, pendingQuestion, todos, type OcDb, type OcSession, type OpenOptions } from './files';
+import { DB_FILE, inSnapshot, lastMessage, lastPart, listSessions, openDb, pendingQuestion, todos, USAGE_WINDOW_MS, usageTotals, type OcDb, type OcSession, type OpenOptions } from './files';
 
 /** Sessão sem escrita há mais que isto (ou arquivada) sai do escritório. */
 export const PRESENCE_MS = 30 * 60_000;
+/** O uso local (custo e tokens dos últimos 7 dias) é relido no máximo a cada tanto: a soma varre as respostas da janela. */
+export const USAGE_EVERY_MS = 60_000;
 const ACCOUNT_ID = 'opencode';
 const ACCOUNT_COLOR = '#35b7a5';
 const MAIN_ROLE = 'Agente principal (OpenCode)';
@@ -107,6 +109,7 @@ export class OpencodeSource implements AgentSource, OpencodeLive {
   private attaching = false;
   private lastPollAt = 0;
   private diskSeq = 0;
+  private usageAt: number | undefined;
   private stopped = false;
   private readonly now: () => number;
 
@@ -282,6 +285,20 @@ export class OpencodeSource implements AgentSource, OpencodeLive {
       this.leave(t);
       this.trackers.delete(key);
     }
+    this.pushUsage(db, now);
+  }
+
+  /** Leva à conta o custo e os tokens dos últimos 7 dias (OCU-01). Falha na leitura mantém o último valor bom (OCU-04). */
+  private pushUsage(db: OcDb, now: number): void {
+    if (this.usageAt !== undefined && now - this.usageAt < USAGE_EVERY_MS) return;
+    this.usageAt = now;
+    const u = usageTotals(db, now - USAGE_WINDOW_MS, now);
+    if (!u) return;
+    this.opts.accounts.setUsage(this.accountId, {
+      source: 'opencode',
+      fetchedAt: u.at,
+      local: { days: USAGE_WINDOW_MS / 86_400_000, costUsd: u.costUsd, input: u.input, output: u.output, reasoning: u.reasoning, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite },
+    });
   }
 
   /** Sincroniza uma sessão; false = sem sala (não entra). */

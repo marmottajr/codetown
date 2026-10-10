@@ -20,6 +20,7 @@ export const SOURCE_LABEL: Record<NonNullable<AccountInfo['usage']>['source'], s
   statusline: 'ao vivo (statusline do Claude Code)',
   codex: 'arquivos do Codex',
   antigravity: 'ao vivo (statusline do agy)',
+  opencode: 'banco local do OpenCode (opencode.db)',
 };
 
 /** Origem para mostrar: o arquivo ao vivo pode ter sido gravado pelo mod do Habblaud ou pelo tap. */

@@ -2,7 +2,8 @@
 // - 'statusline': rate_limits que o Claude Code envia ao statusline, gravados pelo
 //   scripts/statusline-tap.mjs (recomendado: ao vivo);
 // - 'cache': cachedUsageUtilization gravado pelo próprio Claude Code (quando alguém roda /usage);
-// - 'codex': rate_limits dos arquivos de sessão do Codex, empurrados pela fonte do Codex (AccountsService.setUsage).
+// - 'codex': rate_limits dos arquivos de sessão do Codex, empurrados pela fonte do Codex (AccountsService.setUsage);
+// - 'opencode': custo e tokens somados do banco local do OpenCode (sem janelas de cota), empurrados pela fonte dele.
 // Vale sempre a fonte com os números mais recentes (maior fetchedAt). Nenhuma delas lê credenciais
 // nem faz chamadas de rede: são só arquivos que o Claude Code já grava na máquina.
 import type { AccountInfo, AccountUsage, UsageWindow } from '../../shared/types';
