@@ -24,6 +24,7 @@ export class CharacterEditor {
   /** Painel do editor (escondido enquanto não está editando). */
   readonly el: HTMLElement;
   private agentId = '';
+  private editId = 0;
   private editing = false;
   private busy = false;
   private confirmingReset = false;
@@ -95,6 +96,7 @@ export class CharacterEditor {
   private start(): void {
     const a = this.ctx.agent(this.agentId);
     if (!a) return;
+    this.editId++;
     this.seed = a.seed;
     this.look = a.look;
     this.base = appearanceFromSeed(a.seed, { look: a.look });
@@ -144,9 +146,12 @@ export class CharacterEditor {
     if (this.busy || !this.base || !this.draft) return;
     const name = this.nameInput.value.trim();
     if (!name) return this.showError('Dê um nome ao personagem.');
+    const id = this.agentId;
+    const editId = this.editId;
     this.busy = true;
     this.saveBtn.disabled = true;
-    const err = await this.ctx.store.saveCharacter(this.agentId, { name, seed: this.seed, parts: changedParts(this.base, this.draft) });
+    const err = await this.ctx.store.saveCharacter(id, { name, seed: this.seed, parts: changedParts(this.base, this.draft) });
+    if (!this.editing || this.agentId !== id || this.editId !== editId) return;
     this.busy = false;
     this.saveBtn.disabled = false;
     if (err) return this.showError(err);
@@ -162,8 +167,11 @@ export class CharacterEditor {
       setText(this.resetBtn, 'Confirmar: voltar ao sorteio');
       return;
     }
+    const id = this.agentId;
+    const editId = this.editId;
     this.busy = true;
-    const err = await this.ctx.store.resetCharacter(this.agentId);
+    const err = await this.ctx.store.resetCharacter(id);
+    if (!this.editing || this.agentId !== id || this.editId !== editId) return;
     this.busy = false;
     if (err) return this.showError(err);
     this.close();
