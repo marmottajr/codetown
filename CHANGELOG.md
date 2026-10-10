@@ -10,6 +10,10 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Documentação
+
+- Adicionado `CONTRIBUTING.md` em português, com orientações para preparar o ambiente, verificar mudanças e abrir pull requests.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio
