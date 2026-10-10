@@ -9,7 +9,7 @@
 // 3. do resto, a primeira instrução e a última atividade (`timestamp` das linhas do fim), com cache pelo TAMANHO;
 // 4. entra quem teve atividade dentro da janela; de cada thread fica o rollout de atividade mais recente.
 // Título: o nome da thread no session_index.jsonl (a última linha de cada id vence), senão a primeira instrução.
-import { readdirSync, realpathSync, statSync, type Stats } from 'node:fs';
+import { closeSync, openSync, readdirSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { maskSecrets, truncate } from '../../../shared/activity';
@@ -428,8 +428,61 @@ export async function readRolloutSummary(path: string, size: number): Promise<Ro
 /** {id → nome} do session_index.jsonl: a última linha de cada id vence; nome vazio = sem nome. */
 async function readThreadNames(path: string, size: number): Promise<ReadonlyMap<string, string>> {
   const start = Math.max(0, size - INDEX_MAX);
-  const lines = await withFile(path, size, async (read) => (await read(start, size - start)).toString('utf8').split('\n'));
-  if (start > 0) lines.shift(); // cortada
+  return namesFrom(await withFile(path, size, async (read) => (await read(start, size - start)).toString('utf8')), start > 0);
+}
+
+/** Igual ao readThreadNames, síncrono (o poll da fonte ao vivo é síncrono). */
+function readThreadNamesSync(path: string, size: number): ReadonlyMap<string, string> {
+  const start = Math.max(0, size - INDEX_MAX);
+  const fd = openSync(path, 'r');
+  try {
+    const buf = Buffer.alloc(size - start);
+    const n = buf.length > 0 ? readSync(fd, buf, 0, buf.length, start) : 0;
+    return namesFrom(buf.subarray(0, n).toString('utf8'), start > 0);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Nomes das threads para os agentes ao vivo: o mesmo session_index.jsonl (e as mesmas regras) do título do histórico,
+ * relido só quando o tamanho muda. Um erro de leitura não fica no cache: a próxima chamada tenta de novo.
+ */
+export class ThreadNameIndex {
+  private readonly cache = new Map<string, { size: number; names: ReadonlyMap<string, string> }>();
+
+  /** Nome da thread na conta de pasta `home` (já mascarado e cortado); undefined = sem nome (vale a 1ª instrução). */
+  nameOf(home: string, threadId: string): string | undefined {
+    return this.names(home).get(threadId.toLowerCase());
+  }
+
+  private names(home: string): ReadonlyMap<string, string> {
+    const path = join(home, SESSION_INDEX);
+    let size: number;
+    try {
+      const st = statSync(path);
+      if (!st.isFile()) return NO_NAMES;
+      size = st.size;
+    } catch {
+      return NO_NAMES; // sem índice (TUI sem /rename, exec)
+    }
+    const hit = this.cache.get(home);
+    if (hit?.size === size) return hit.names;
+    try {
+      const names = readThreadNamesSync(path, size);
+      this.cache.set(home, { size, names });
+      return names;
+    } catch (err) {
+      log.warnOnce(`codex-index-live:${errMsg(err)}`, `Codex: session_index.jsonl ilegível (${errMsg(err)}); o título fica na primeira instrução.`);
+      return NO_NAMES;
+    }
+  }
+}
+
+/** {id → nome} do texto do session_index.jsonl; `cut` = começa no meio de uma linha (lido do fim). */
+function namesFrom(text: string, cut: boolean): ReadonlyMap<string, string> {
+  const lines = text.split('\n');
+  if (cut) lines.shift();
   const names = new Map<string, string>();
   for (const line of lines) {
     const e = indexEntry(line);

@@ -243,6 +243,27 @@ describe('fonte do Codex: presença pelos locks', () => {
     ctx.source.boot();
     expect(ctx.agents().map((a) => a.id)).toEqual([KEY]);
   });
+
+  it('título como no histórico: o nome da thread no session_index.jsonl (mascarado, a última linha vence) e, sem ele, a 1ª instrução', () => {
+    const ctx = setup();
+    const t0 = ctx.now() - 50_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at: t0, cwd: '/projetos/loja' }), R.taskStarted('turn1', t0), R.user(T, 'turn1', 'u1', 'Rode os testes da loja', t0 + 1_000)]);
+    ctx.home.rollout(C, [R.meta(C, { at: t0, cwd: '/projetos/api' }), R.taskStarted('turn1', t0), R.user(C, 'turn1', 'u1', 'Crie a rota de login', t0 + 1_000)]);
+    const index = join(ctx.home.dir, 'session_index.jsonl');
+    const entry = (id: string, name: string) => `${JSON.stringify({ id, thread_name: name, updated_at: '2026-10-09T12:00:00.000Z' })}\n`;
+    writeFileSync(index, entry(T, 'Nome antigo') + entry(T, 'Checkout com sk-abcdefghijklmnop'));
+    ctx.home.lock(T, t0);
+    ctx.home.lock(C, t0);
+    ctx.source.boot();
+    expect(ctx.agent()?.title).toBe('Checkout com sk-***');
+    expect(ctx.agent(`.codex:${C}`)?.title).toBe('Crie a rota de login');
+    // Renomeada no meio da sessão (/rename): vale na próxima leitura.
+    appendRaw(index, entry(T, 'Checkout novo'));
+    ctx.advance(1_000);
+    ctx.home.append(path, [R.agent(T, 'turn1', 'a1', 'Rodando.', ctx.now(), 'commentary')]);
+    ctx.poll();
+    expect(ctx.agent()?.title).toBe('Checkout novo');
+  });
 });
 
 describe('fonte do Codex: sondagem da trava, leitura até a fronteira e mtime fora das decisões', () => {

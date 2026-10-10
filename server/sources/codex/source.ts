@@ -59,6 +59,7 @@ import { FileTail } from '../tail';
 import type { TerminalParser } from '../terminal';
 import { codexPlanLabel, detectCodexAccounts } from './accounts';
 import { readLocks, readRolloutHead, rolloutDirs, RolloutIndex, parseRolloutName, LOCKS_DIR, type LockInfo } from './files';
+import { ThreadNameIndex } from './history';
 import type { CodexLive } from './live';
 import { createLockProber, type LockProber } from './locks';
 import { isTurnBoundary, lineTimestamp, scanBackward } from './reader';
@@ -257,6 +258,8 @@ export class CodexSource implements AgentSource, CodexLive {
   /** Processos em segundo plano de cada árvore (principal e subagentes), pela chave do principal. */
   private shellTrees = new Map<string, ShellTracker>();
   private dirWatchers = new Map<string, FSWatcher>();
+  /** Nome das threads (session_index.jsonl): o título do principal, como no histórico. */
+  private readonly threadNames = new ThreadNameIndex();
   private timer: ReturnType<typeof setInterval> | null = null;
   private kick: ReturnType<typeof setTimeout> | null = null;
   private lastPollAt = 0;
@@ -1074,7 +1077,9 @@ export class CodexSource implements AgentSource, CodexLive {
     if (!t.inOffice) return;
     const s = t.state;
     const summary: TranscriptSummary = { tasks: s.tasks, stats: { ...s.stats } };
-    if (s.title) summary.title = s.title;
+    // Como no histórico: o nome dado à thread (/rename) vale mais que a 1ª instrução. Só o principal tem título no Office.
+    const title = (t.kind === 'main' ? this.threadNames.nameOf(t.acc.dir, t.threadId) : undefined) ?? s.title;
+    if (title) summary.title = title;
     if (s.model) summary.model = s.model;
     const branch = s.gitBranch ?? t.meta?.gitBranch;
     if (branch) summary.gitBranch = branch;
