@@ -123,6 +123,21 @@ describe('segredos mascarados', () => {
     }
   });
 
+  it('mascara antes de cortar mesmo com brancos de sobra antes do segredo (o recorte prévio não parte o token)', () => {
+    const tok = `ghp_${'A'.repeat(36)}`;
+    const results = [
+      describePrompt(`Chave:${' '.repeat(220)}${tok}`),
+      describePrompt(`${' '.repeat(215)}DB_PASSWORD="hunter2hunter2hunter2"`),
+      describeCommand(`echo inicio${' '.repeat(1180)}${tok}`),
+      describeShellJob('Bash', { command: `echo${' '.repeat(1190)} ${tok}`, description: `${' '.repeat(370)}${tok}` }),
+      describeTool('AskUserQuestion', { questions: [{ question: `${' '.repeat(1190)}${tok}`, options: [{ label: 'Sim' }] }] }),
+    ];
+    for (const d of results) {
+      expect(JSON.stringify(d)).not.toContain('ghp_A');
+      expect(JSON.stringify(d)).not.toContain('hunter2');
+    }
+  });
+
   it('shell: palavras e segmentos', () => {
     expect(shellWords(`a 'b c' "d \\"e\\"" f\\ g ''`)).toEqual(['a', 'b c', 'd "e"', 'f g', '']);
     expect(splitShell('a && b | c; d & e 2>&1 || f "x|y" $(g; h)')).toEqual(['a', 'b', 'c', 'd', 'e 2>&1', 'f "x|y" $(g; h)']);
