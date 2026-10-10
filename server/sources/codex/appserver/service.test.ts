@@ -8,9 +8,9 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { codexAppServerOffReason, loadConfig } from '../../../config';
-import { setQuiet } from '../../../log';
+import { log, setQuiet } from '../../../log';
 import { NameStore } from '../../../model/names';
 import { Office } from '../../../model/office';
 import { PermissionRegistry, type ParallelRequestInput } from '../../../permissions/registry';
@@ -32,7 +32,15 @@ const BASE = { turnId: 'turn-1', startedAtMs: 1_700_000_000_000 };
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const fn of cleanups.splice(0)) fn();
+  vi.restoreAllMocks();
 });
+
+/** Avisos do log.warnOnce (global e deduplicado pela chave: o espião vê toda chamada). */
+function warnings(): Array<[string, string]> {
+  const calls: Array<[string, string]> = [];
+  vi.spyOn(log, 'warnOnce').mockImplementation((key, msg) => void calls.push([key, msg]));
+  return calls;
+}
 
 /** CODEX_HOME temporário (vazio), com ou sem a pasta do socket do daemon. */
 function tempHome(withControl = true): string {
@@ -301,6 +309,40 @@ describe('CodexAppServerService: threads', () => {
     expect(fake.calls('thread/resume').map((m) => (m.params as { threadId: string }).threadId)).toEqual([THREAD, OTHER, THREAD]);
     expect(s.svc.owns(ACCOUNT, OTHER)).toBe(false);
     expect(fake.calls('thread/loaded/list')).toHaveLength(3);
+  });
+
+  it('thread/resume com erro do daemon: avisa (uma vez por conta e thread, sem o conteúdo) e tenta de novo depois de DISCOVERY_MS', async () => {
+    // Arrange
+    const warned = warnings();
+    const s = setup();
+    const fake = server([THREAD]);
+    let attempts = 0;
+    fake.handlers.set('thread/resume', (p) => {
+      attempts++;
+      if (attempts <= 2) rpcFail(-32603, 'falha interna do daemon');
+      return { thread: { id: p.threadId, source: 'cli' } };
+    });
+    s.queue.push(fake);
+
+    // Act
+    s.svc.tick();
+    await until(() => fake.calls('thread/resume').length === 1);
+    await flush();
+    s.clock.advance(DISCOVERY_MS);
+    s.svc.tick();
+    await until(() => fake.calls('thread/resume').length === 2);
+    await flush();
+
+    // Assert
+    const resume = warned.filter(([key]) => key.startsWith('codex-appserver-resume:'));
+    expect(resume.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(resume.map(([key]) => key))).toEqual(new Set([`codex-appserver-resume:${ACCOUNT}:${THREAD}`]));
+    expect(resume[0][1]).toContain(ACCOUNT);
+    expect(resume[0][1]).toContain('thread/resume');
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    s.clock.advance(DISCOVERY_MS);
+    s.svc.tick();
+    await until(() => s.svc.owns(ACCOUNT, THREAD));
   });
 
   it('thread/loaded/list que falha com a conexão de pé: avisa uma vez e lista de novo depois de DISCOVERY_MS, sem derrubar a conexão', async () => {

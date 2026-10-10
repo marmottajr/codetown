@@ -435,7 +435,11 @@ export class CodexAppServerService implements ParallelSink {
         if (!conn.resuming.delete(threadId) || conn.closed) return;
         if (r === 'ok') conn.owned.add(threadId);
         else if (r === 'not-daemon') conn.notDaemon.add(threadId);
-        else conn.retry.set(threadId, this.now() + (r === 'no-rollout' ? RESUME_RETRY_MS : DISCOVERY_MS));
+        else {
+          // Erro do daemon (ou sem resposta): a thread não entra no canal até dar certo; uma linha por conta e thread.
+          if (r === 'error') log.warnOnce(`codex-appserver-resume:${st.id}:${threadId}`, `Codex (${st.id}): o thread/resume de uma thread falhou (${threadId}); os pedidos dela seguem com o hook e tento de novo a cada ${DISCOVERY_MS / 1000} s.`);
+          conn.retry.set(threadId, this.now() + (r === 'no-rollout' ? RESUME_RETRY_MS : DISCOVERY_MS));
+        }
       }),
     );
   }
