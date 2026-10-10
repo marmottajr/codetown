@@ -2,6 +2,7 @@
 // Diferente do Codex (que tem rollouts em texto e por isso NUNCA abre SQLite), o OpenCode só guarda as sessões aqui.
 // Por isso este é o único arquivo do Habblaud que abre um SQLite, e só estas tabelas são lidas:
 //   project, session, message, part, todo.
+// (`usageTotals` lê só `message`, e dela só json_extract de role, time.created, cost e tokens: o uso local do cartão.)
 // Nunca são lidas: account, event, auth.json, opencode.jsonc, log/ e tool-output/. As consultas pedem colunas nomeadas e
 // extraem do JSON `data` só o que a fonte usa (papel, tempos, tipo da parte, nome da ferramenta e `state.title`) com
 // json_extract no próprio SQLite, então o texto das mensagens, o `output` das ferramentas e o raciocínio NUNCA chegam
@@ -248,5 +249,54 @@ export function todos(db: OcDb, sessionId: string): OcTodo[] {
       .prepare('SELECT content, status, position FROM todo WHERE session_id = ? ORDER BY position, rowid')
       .all(sessionId) as Record<string, unknown>[];
     return rows.map((r) => ({ content: String(r.content ?? ''), status: String(r.status ?? ''), position: Number(r.position ?? 0) }));
+  });
+}
+
+/** Janela do uso local mostrado no cartão: os últimos 7 dias. */
+export const USAGE_WINDOW_MS = 7 * 86_400_000;
+
+/** Custo e tokens das respostas do assistente numa janela (o que o `opencode stats` soma). `at` = quando a leitura foi feita. */
+export interface OcUsage {
+  costUsd: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Respostas do assistente dentro da janela. */
+  responses: number;
+  at: number;
+}
+
+/**
+ * Soma, das respostas do assistente com `time.created` (epoch ms) de `sinceMs` em diante, o custo e os tokens. Só
+ * json_extract de role, time.created, cost e tokens: nada de texto, raciocínio nem saída de ferramenta. Se a leitura
+ * falha, devolve o último valor bom (com o `at` dele); undefined = nunca leu com sucesso.
+ */
+export function usageTotals(db: OcDb, sinceMs: number, at: number): OcUsage | undefined {
+  return read<OcUsage | undefined>(db, 'usage', undefined, () => {
+    const row = db.raw
+      .prepare(
+        `SELECT COALESCE(SUM(json_extract(data, '$.cost')), 0) AS cost,
+                COALESCE(SUM(json_extract(data, '$.tokens.input')), 0) AS input,
+                COALESCE(SUM(json_extract(data, '$.tokens.output')), 0) AS output,
+                COALESCE(SUM(json_extract(data, '$.tokens.reasoning')), 0) AS reasoning,
+                COALESCE(SUM(json_extract(data, '$.tokens.cache.read')), 0) AS cache_read,
+                COALESCE(SUM(json_extract(data, '$.tokens.cache.write')), 0) AS cache_write,
+                COUNT(*) AS responses
+           FROM message
+          WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.time.created') >= ?`,
+      )
+      .get(sinceMs) as Record<string, unknown>;
+    return {
+      costUsd: Number(row.cost),
+      input: Number(row.input),
+      output: Number(row.output),
+      reasoning: Number(row.reasoning),
+      cacheRead: Number(row.cache_read),
+      cacheWrite: Number(row.cache_write),
+      responses: Number(row.responses),
+      at,
+    };
   });
 }
