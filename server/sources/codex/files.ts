@@ -1,9 +1,11 @@
 // Arquivos de uma pasta do Codex (CODEX_HOME) que a fonte lê: os rollouts (sessions/AAAA/MM/DD/ e
 // archived_sessions/) e os locks dos threads carregados (thread-writer-locks/<thread>.lock). Só leitura: nada é
-// criado e os locks são só conferidos pela EXISTÊNCIA (abrir com flock seguraria o lock e quebraria o Codex).
+// criado e os locks são só SONDADOS (locks.ts: nunca adquiridos; segurar a trava quebraria o Codex).
 // auth.json, config.toml, history.jsonl, shell_snapshots/, logs e os SQLite nunca são abertos.
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import type { LockProber, LockState } from './locks';
+import { lineTimestamp, scanBackward } from './reader';
 import { createCodexState, metaFromLine, parseRolloutLine, type RolloutMeta } from './rollout';
 
 /** rollout-<AAAA-MM-DDThh-mm-ss>-<thread>[_<rollout>].jsonl[.zst] (o `_<rollout>` é de thread revertido). */
@@ -49,13 +51,15 @@ export interface LockInfo {
   threadId: string;
   /** Criação do lock (o Codex nunca escreve nele: o mtime é o momento em que foi criado). */
   createdAt: number;
+  /** O que a sondagem disse: held = sessão viva; free = órfã (vale como lock sumido); unknown = só a existência. */
+  state: LockState;
 }
 
 /**
- * Locks dos threads carregados agora; null = a pasta não existe (versão do Codex sem locks, ou não montada no
- * Docker). O `.coordination.lock` e qualquer outro arquivo ficam de fora.
+ * Locks dos threads carregados agora, cada um com o estado da sondagem; null = a pasta não existe (versão do Codex
+ * sem locks, ou não montada no Docker). O `.coordination.lock` e qualquer outro arquivo ficam de fora.
  */
-export function readLocks(home: string): Map<string, LockInfo> | null {
+export function readLocks(home: string, prober: LockProber): Map<string, LockInfo> | null {
   const dir = join(home, LOCKS_DIR);
   let names: string[];
   try {
@@ -67,10 +71,11 @@ export function readLocks(home: string): Map<string, LockInfo> | null {
   for (const name of names) {
     const m = LOCK_FILE.exec(name);
     if (!m) continue;
+    const path = join(dir, name);
     try {
-      const st = statSync(join(dir, name));
+      const st = statSync(path);
       const born = st.birthtimeMs > 0 ? Math.min(st.birthtimeMs, st.mtimeMs) : st.mtimeMs;
-      out.set(m[1].toLowerCase(), { threadId: m[1].toLowerCase(), createdAt: born });
+      out.set(m[1].toLowerCase(), { threadId: m[1].toLowerCase(), createdAt: born, state: prober.probe(path) });
     } catch {
       // sumiu entre a listagem e o stat
     }
@@ -83,11 +88,35 @@ interface Found {
   mtimeMs: number;
 }
 
+/** Trecho do fim lido atrás da última linha com `timestamp`. */
+const LAST_LINE_MAX_BYTES = 64 * 1024;
+
+/** `timestamp` da última linha do rollout que tiver um (só os últimos 64 KB); undefined = nenhuma, ou ilegível. */
+export function rolloutLastAt(path: string): number | undefined {
+  try {
+    const r = scanBackward(path, { size: statSync(path).size, isBoundary: (l) => lineTimestamp(l) !== undefined, maxBytes: LAST_LINE_MAX_BYTES });
+    return r.lines.length ? lineTimestamp(r.lines[0]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Dois rollouts do mesmo thread (thread revertido): > 0 = `a` é o atual. Vale o de última linha mais recente; o mtime
+ * (que no Windows fica parado durante as escritas) só desempata: horário igual, ou sem horário em algum dos dois.
+ */
+export function compareRollouts(a: Found, b: Found): number {
+  const la = rolloutLastAt(a.path);
+  const lb = rolloutLastAt(b.path);
+  if (la !== undefined && lb !== undefined && la !== lb) return la - lb;
+  return a.mtimeMs - b.mtimeMs;
+}
+
 /**
  * Onde está o rollout de cada thread (pelo id no nome do arquivo), com cache. Um thread retomado continua no arquivo
  * antigo (a pasta é a da criação), então a procura varre as pastas por data; um thread revertido tem mais de um
- * arquivo e vale o modificado por último. Sem achar: as pastas dos dias mais recentes são revistas a cada 2 s e a
- * varredura completa, no máximo a cada 30 s.
+ * arquivo e vale o de última linha mais recente (compareRollouts; o mtime só desempata). Sem achar: as pastas dos dias
+ * mais recentes são revistas a cada 2 s e a varredura completa, no máximo a cada 30 s.
  */
 export class RolloutIndex {
   private paths = new Map<string, Found>();
@@ -131,7 +160,7 @@ export class RolloutIndex {
     }
   }
 
-  /** Varredura completa (sem stat, a não ser para desempatar um thread com mais de um arquivo). */
+  /** Varredura completa (o fim dos arquivos só é lido para escolher entre os rollouts de um thread revertido). */
   scanAll(): void {
     this.lastFullScan = this.lastRecentScan = this.now();
     this.scan(rolloutDirs(this.home));
@@ -155,9 +184,16 @@ export class RolloutIndex {
         } catch {
           continue;
         }
-        if (!prev || mtimeMs >= prev.mtimeMs || !existsSync(prev.path)) this.paths.set(r.threadId, { path, mtimeMs });
+        this.consider(r.threadId, { path, mtimeMs });
       }
     }
+  }
+
+  /** Guarda o rollout do thread, a não ser que o já guardado (outro arquivo, que ainda existe) seja o atual. */
+  private consider(threadId: string, found: Found): void {
+    const prev = this.paths.get(threadId);
+    if (prev && prev.path !== found.path && existsSync(prev.path) && compareRollouts(found, prev) < 0) return;
+    this.paths.set(threadId, found);
   }
 
   /**
@@ -178,8 +214,7 @@ export class RolloutIndex {
         } catch {
           continue;
         }
-        const prev = this.paths.get(r.threadId);
-        if (!prev || mtimeMs >= prev.mtimeMs) this.paths.set(r.threadId, { path, mtimeMs });
+        this.consider(r.threadId, { path, mtimeMs });
         if (now - mtimeMs > maxAgeMs) continue;
         const cur = out.get(r.threadId);
         if (!cur || mtimeMs > cur.mtimeMs) out.set(r.threadId, { threadId: r.threadId, path, mtimeMs });

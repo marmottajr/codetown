@@ -57,5 +57,7 @@ describe('answerSummary', () => {
     const secret = answerSummary(QS, [{ question: 0, other: 'token ghp_abcdefghijklmnopqrstuvwxyz0123456789' }]);
     expect(secret).toMatch(/^Banco: “token .+”$/);
     expect(secret).not.toContain('abcdefghijklmnop');
+    const padded = answerSummary(QS, [{ question: 0, other: `${' '.repeat(1990)}ghp_${'A'.repeat(36)}` }]);
+    expect(padded).toBe('Banco: “gh*_***”');
   });
 });

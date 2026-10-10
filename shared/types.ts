@@ -273,6 +273,15 @@ export interface UsageWindow {
   resetsAt?: number;
 }
 
+/** Uma janela de uso como o Codex informa no `rate_limits` (identificada pela duração, não pela posição). */
+export interface UsageWindowInfo {
+  /** Duração da janela em minutos (300 = 5 h, 10080 = semana). */
+  windowMinutes: number;
+  usedPercent: number;
+  /** Epoch ms do reset, se o Codex informou. */
+  resetsAt?: number;
+}
+
 export interface AccountUsage {
   /** Sessão de 5 horas. */
   fiveHour?: UsageWindow;
@@ -295,6 +304,8 @@ export interface AccountUsage {
    * esgotados). Não é "0% usado": as janelas ficam ausentes.
    */
   noQuota?: boolean;
+  /** Codex: os medidores que o plano tem, na ordem dos rate_limits (primary, secondary). Ausente = use fiveHour/sevenDay. */
+  windows?: UsageWindowInfo[];
   /** Quando os números foram obtidos na origem (epoch ms). */
   fetchedAt: number;
 }
@@ -564,7 +575,14 @@ export interface PermissionRequestInfo {
   createdAt: number;
   /** Quando o hook desiste de esperar e o pedido passa a valer só no terminal. */
   expiresAt: number;
+  /** 'parallel' = pedido do canal do app-server (vale a 1ª resposta, escritório ou terminal); ausente = como hoje. */
+  mode?: 'blocking' | 'parallel';
+  /** Decisões que o canal oferece (só 'parallel'). */
+  decisions?: CodexDecision[];
 }
+
+/** Decisão de um pedido de aprovação do app-server do Codex (pedidos 'parallel'). */
+export type CodexDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel';
 
 /**
  * Resposta a uma pergunta do AskUserQuestion, por POSIÇÃO (AskQuestion.index e o `index` das opções): o hook troca
@@ -594,6 +612,8 @@ export interface PermissionDecision {
   suggestion?: number;
   /** Resposta (`answer`): uma por pergunta do pedido. */
   answers?: PermissionAnswer[];
+  /** Aprovação: vale para a sessão inteira (acceptForSession). */
+  forSession?: boolean;
 }
 
 // ------------------------------------------------------------------ mensagens pelo escritório

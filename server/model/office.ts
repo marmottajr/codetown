@@ -619,6 +619,7 @@ export class Office {
     if (!this.booting && info.activity?.kind !== 'done') {
       const act: Activity = { id: `${id}#done:${++this.seq}`, at: now, ...SPECIAL.turnDone(now - info.startedAt), durationMs: now - info.startedAt };
       this.addActivity(id, act, true);
+      rec.synthDone = { id: act.id, at: now };
     }
     if (opts.notify !== false) {
       const parent = info.parentId ? this.agents.get(info.parentId)?.info : undefined;
@@ -637,6 +638,7 @@ export class Office {
     rec.info.status = 'working';
     rec.info.statusSince = this.now();
     delete rec.removeAt;
+    delete rec.synthDone;
     this.markDirty();
   }
 
@@ -677,9 +679,10 @@ export class Office {
 
   /**
    * Registra uma atividade. `feed: false` = só histórico (ex.: releitura do fim de um transcript
-   * antigo ao abrir uma sessão retomada — não é novidade para o feed ao vivo).
+   * antigo ao abrir uma sessão retomada — não é novidade para o feed ao vivo). `replace`: troca no lugar a de mesmo id
+   * que já esteja lá (sem isso, fica a primeira).
    */
-  addActivity(id: string, activity: Activity, current: boolean, opts: { feed?: boolean; filler?: boolean } = {}): void {
+  addActivity(id: string, activity: Activity, current: boolean, opts: { feed?: boolean; filler?: boolean; replace?: boolean } = {}): void {
     const rec = this.agents.get(id);
     if (!rec) return;
     const info = rec.info;
@@ -690,14 +693,30 @@ export class Office {
       const swap = (list: Activity[]) => list.map((a) => (a.id === synthId ? replaced : a));
       info.recent = swap(info.recent);
       rec.history = swap(rec.history);
-      if (info.activity?.id === synthId) info.activity = replaced;
+      // Subagente entregue: a resposta final (lida depois do "Concluiu" sintetizado) é a atividade atual; o balão volta ao "Concluiu".
+      if (info.activity?.id === synthId || (current && info.status === 'done')) info.activity = replaced;
+      // Codex: o item do feed do sintetizado também passa a mostrar o do rollout (o Claude fica como sempre foi).
+      if (info.provider === 'codex') this.updateFeed(synthId, replaced);
       delete rec.synthDone;
       this.markDirty();
       return;
     }
     // Releitura de um transcript regravado: não duplica o que já está no histórico.
-    if (info.recent.some((a) => a.id === activity.id)) return;
-    if (activity.kind !== 'done') delete rec.synthDone;
+    const old = info.recent.find((a) => a.id === activity.id);
+    if (old) {
+      if (!opts.replace) return;
+      // A mesma chamada mais bem descrita (Codex: o parsed_cmd do comando concluído): no lugar, com o horário de
+      // antes e sem item novo no feed.
+      const replaced: Activity = { ...activity, at: old.at };
+      const swap = (list: Activity[]) => list.map((a) => (a.id === replaced.id ? replaced : a));
+      info.recent = swap(info.recent);
+      rec.history = swap(rec.history);
+      if (info.activity?.id === replaced.id) info.activity = replaced;
+      this.markDirty();
+      return;
+    }
+    // Subagente entregue ('done' só existe nele): o que chega até ele voltar é do mesmo turno, e o sintetizado vale.
+    if (activity.kind !== 'done' && info.status !== 'done') delete rec.synthDone;
     info.recent = [...info.recent, activity].slice(-RECENT_LIMIT);
     rec.history.push(activity);
     if (rec.history.length > HISTORY_LIMIT) rec.history.splice(0, rec.history.length - HISTORY_LIMIT);
@@ -1045,6 +1064,20 @@ export class Office {
     this.pendingFeed.push(...items);
     this.feed.push(...items);
     if (this.feed.length > FEED_LIMIT) this.feed.splice(0, this.feed.length - FEED_LIMIT);
+  }
+
+  /**
+   * Troca no lugar a atividade do item do feed de id `id`. Ainda não transmitido, sai já trocado; já transmitido, sai de
+   * novo com o mesmo id, que o cliente trata como atualização.
+   */
+  private updateFeed(id: string, activity: Activity): void {
+    const i = this.feed.findIndex((f) => f.id === id);
+    if (i < 0) return;
+    const item: FeedItem = { ...this.feed[i], activity };
+    this.feed[i] = item;
+    const p = this.pendingFeed.findIndex((f) => f.id === id);
+    if (p >= 0) this.pendingFeed[p] = item;
+    else this.pendingFeed.push(item);
   }
 
   private notice(

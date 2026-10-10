@@ -11,468 +11,72 @@
 // Os ids das atividades usam o call_id (= id do item concluído = tool_use_id dos hooks): a chamada vista em
 // andamento, o hook PreToolUse e o item concluído caem na mesma atividade.
 // Tokens: o `total_token_usage` do token_count é cumulativo e o cache JÁ está dentro de input (não soma de novo).
+// Herança: só o 1º session_meta vale; num subagente com fork, as linhas com ordinal < subagent_history_start_ordinal
+// (e o session_meta do pai, copiado logo depois do cabeçalho) são do pai e ficam de fora.
+// Tratamento próprio: request_user_input sem output (sinal 'asking'; o output ou o fim do turno dão 'answered'),
+// tools.update_plan no JS do code mode, filhos do multiagente v2 (SubAgentActivity started conta e dá o sinal 'spawn';
+// a tarefa que chega por agent_message é o título do filho) e extensões (web.search, clock.sleep, image_gen, web::run).
 // Tipos de linha desconhecidos são ignorados; uma linha inválida nunca derruba a leitura.
-import { describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../../shared/activity';
-import type { GitHubEvent } from '../../../shared/github';
-import type { AccountUsage, Activity, AgentStats, TaskItem, TaskStatus, UsageWindow } from '../../../shared/types';
+import { describeTool, SPECIAL, type ActivityDescription } from '../../../shared/activity';
+import type { Activity } from '../../../shared/types';
 import { detectGitHubResult, githubCallOf } from '../github';
 import type { ParsedActivity } from '../transcript';
+import { maskedCut, maskedText, plainText } from './rollout-mask';
+import { codexAgentPath, isThreadId, parseSessionMeta, usageFromRateLimits, type RolloutMeta } from './rollout-meta';
+import {
+  agentTask,
+  applyMeta,
+  askSummary,
+  contentText,
+  firstLine,
+  firstText,
+  MAX_PENDING,
+  messageTask,
+  outputOf,
+  promptText,
+  spawnTitle,
+  titleText,
+  type CodexLineResult,
+  type CodexParseContext,
+  type CodexState,
+} from './rollout-state';
+import {
+  commandText,
+  deliveredMessage,
+  describeCodexPrompt,
+  describeCodexTool,
+  fileChanges,
+  mcpName,
+  parsedCmdActivity,
+  parseArguments,
+  pathFromUri,
+  planFromScript,
+  planTasks,
+  sleepDesc,
+  userMessagingText,
+  webDesc,
+} from './rollout-tools';
+import { num, rec, str, toMs, type Rec } from './rollout-util';
 
-type Rec = Record<string, unknown>;
-
-function rec(v: unknown): Rec | undefined {
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Rec) : undefined;
-}
-
-function str(v: unknown): string | undefined {
-  return typeof v === 'string' && v.trim() ? v : undefined;
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-}
-
-function toMs(v: unknown): number | undefined {
-  if (typeof v !== 'string') return undefined;
-  const t = Date.parse(v);
-  return Number.isNaN(t) ? undefined : t;
-}
-
-/** Id de thread do Codex (UUID). */
-const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isThreadId(v: unknown): v is string {
-  return typeof v === 'string' && THREAD_ID.test(v);
-}
-
-// ------------------------------------------------------------------ session_meta
-
-export type HistoryMode = 'paginated' | 'legacy';
-
-/** O que o session_meta (1ª linha do rollout) diz sobre o thread. */
-export interface RolloutMeta {
-  threadId?: string;
-  /** Thread raiz da sessão (num subagente, o do agente principal). */
-  sessionId?: string;
-  cwd?: string;
-  cliVersion?: string;
-  historyMode: HistoryMode;
-  gitBranch?: string;
-  startedAt?: number;
-  /** Thread interno do Codex (guardian, review, compactação, memória...): fica fora do escritório. */
-  internal: boolean;
-  /** Subagente (spawn_agent): o thread pai e o que se sabe dele. */
-  parentThreadId?: string;
-  agentNickname?: string;
-  agentRole?: string;
-}
-
-/** Chaves de um objeto em minúsculas e sem `_` (o Codex já gravou `subagent`, `subAgent`, `thread_spawn`...). */
-function looseGet(o: Rec, name: string): unknown {
-  const want = name.toLowerCase().replace(/_/g, '');
-  for (const [k, v] of Object.entries(o)) if (k.toLowerCase().replace(/_/g, '') === want) return v;
-  return undefined;
-}
-
-/**
- * `source` do session_meta: "cli", "vscode", "exec", "mcp", {"custom": ...}, {"internal": "guardian"},
- * {"subagent": "review" | "compact" | "memory_consolidation" | {"other": ...} | {"thread_spawn": {...}}}.
- */
-function sourceInfo(src: unknown): { internal: boolean; spawn?: Rec } {
-  const o = rec(src);
-  if (!o) return { internal: false };
-  if (looseGet(o, 'internal') !== undefined) return { internal: true };
-  const sub = looseGet(o, 'subagent');
-  if (sub === undefined) return { internal: false };
-  const so = rec(sub);
-  const spawn = so ? rec(looseGet(so, 'thread_spawn')) : undefined;
-  // review, compact, memory_consolidation e {"other": "guardian"}: internos, sem pai conhecido.
-  return spawn ? { internal: false, spawn } : { internal: true };
-}
-
-const INTERNAL_THREAD_SOURCES = new Set(['guardian_review', 'memory_consolidation']);
-
-export function parseSessionMeta(payload: Rec, at?: number): RolloutMeta {
-  const src = sourceInfo(payload.source);
-  const meta: RolloutMeta = {
-    historyMode: payload.history_mode === 'paginated' ? 'paginated' : 'legacy',
-    internal: src.internal || INTERNAL_THREAD_SOURCES.has(String(payload.thread_source ?? '')),
-  };
-  const id = str(payload.id);
-  const sessionId = str(payload.session_id);
-  if (id) meta.threadId = id;
-  if (sessionId) meta.sessionId = sessionId;
-  const cwd = str(payload.cwd);
-  if (cwd) meta.cwd = cwd;
-  const version = str(payload.cli_version);
-  if (version) meta.cliVersion = version;
-  const branch = str(rec(payload.git)?.branch);
-  if (branch && branch !== 'HEAD') meta.gitBranch = branch;
-  const started = toMs(payload.timestamp) ?? at;
-  if (started !== undefined) meta.startedAt = started;
-  const parent =
-    str(src.spawn ? looseGet(src.spawn, 'parent_thread_id') : undefined) ??
-    str(payload.parent_thread_id) ??
-    (sessionId && id && sessionId !== id && !meta.internal ? sessionId : undefined);
-  if (parent && isThreadId(parent) && parent !== id) meta.parentThreadId = parent;
-  const nickname = str(src.spawn ? looseGet(src.spawn, 'agent_nickname') : undefined) ?? str(payload.agent_nickname);
-  const role = str(src.spawn ? (looseGet(src.spawn, 'agent_role') ?? looseGet(src.spawn, 'agent_type')) : undefined) ?? str(payload.agent_role);
-  if (nickname) meta.agentNickname = truncate(nickname, 40);
-  if (role) meta.agentRole = truncate(role, 40);
-  return meta;
-}
-
-// ------------------------------------------------------------------ uso do plano
-
-/** Janelas do Codex pela duração (não pela posição): 300 min = sessão de 5 h, 10080 min = semana. */
-const WINDOW_BY_MINUTES: Record<number, 'fiveHour' | 'sevenDay'> = { 300: 'fiveHour', 10080: 'sevenDay' };
-
-function usageWindow(raw: unknown): { key: 'fiveHour' | 'sevenDay'; window: UsageWindow } | undefined {
-  const w = rec(raw);
-  const minutes = num(w?.window_minutes);
-  const used = num(w?.used_percent);
-  const key = minutes !== undefined ? WINDOW_BY_MINUTES[minutes] : undefined;
-  if (!w || !key || used === undefined) return undefined;
-  const window: UsageWindow = { utilization: Math.min(100, Math.max(0, used)) };
-  const resets = num(w.resets_at);
-  if (resets !== undefined) window.resetsAt = resets < 1e12 ? Math.round(resets * 1000) : Math.round(resets);
-  return { key, window };
-}
-
-/**
- * `token_count.rate_limits` → uso da conta (source 'codex', `fetchedAt` = horário da linha). `primary` nulo com
- * `rate_limit_reached_type` = sem cota nem créditos (`noQuota`), não 0%. Sem nenhuma janela e com cota = undefined.
- */
-export function usageFromRateLimits(raw: unknown, at: number): AccountUsage | undefined {
-  const rl = rec(raw);
-  if (!rl) return undefined;
-  // Só a cota padrão ("codex"); modelos com cota própria (outro limit_id) fariam o número pular entre as duas.
-  const limit = str(rl.limit_id);
-  if (limit && limit !== 'codex') return undefined;
-  const usage: AccountUsage = { source: 'codex', fetchedAt: at };
-  for (const w of [rl.primary, rl.secondary]) {
-    const parsed = usageWindow(w);
-    if (parsed && !usage[parsed.key]) usage[parsed.key] = parsed.window;
-  }
-  if ((rl.primary === null || rl.primary === undefined) && str(rl.rate_limit_reached_type)) usage.noQuota = true;
-  return usage.fiveHour || usage.sevenDay || usage.noQuota ? usage : undefined;
-}
-
-// ------------------------------------------------------------------ comandos
-
-const SHELLS = /^(?:.*\/)?(?:ba|z|da|k|fi)?sh$/;
-
-/**
- * O comando legível de um CommandExecution/exec: `command` é uma lista (`["/bin/zsh", "-lc", "npm test"]`) ou um
- * texto. O invólucro do shell (`-lc`, `-c`) sai; o resto é juntado com espaços (palavras com espaço entre aspas).
- */
-export function commandText(cmd: unknown): string {
-  if (typeof cmd === 'string') return cmd.trim();
-  if (!Array.isArray(cmd)) return '';
-  const words = cmd.filter((w): w is string => typeof w === 'string');
-  if (words.length >= 3 && SHELLS.test(words[0]) && /^-[a-z]*c$/.test(words[1])) return words.slice(2).join(' ').trim();
-  return words
-    .map((w) => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`))
-    .join(' ')
-    .trim();
-}
-
-/** Arquivos tocados por um patch do apply_patch ("*** Add File: x", "*** Update File: y", "*** Delete File: z"). */
-export function patchFiles(patch: string): Array<{ path: string; kind: 'add' | 'update' | 'delete' }> {
-  const out: Array<{ path: string; kind: 'add' | 'update' | 'delete' }> = [];
-  for (const m of patch.slice(0, 200_000).matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)) {
-    out.push({ path: m[2].trim(), kind: m[1].toLowerCase() as 'add' | 'update' | 'delete' });
-  }
-  return out;
-}
-
-/** Uma mudança de arquivo de um FileChange: o mapa {caminho: {type, content | unified_diff}} ou a lista {path, kind, diff}. */
-export interface FileChangeEntry {
-  path: string;
-  kind: 'add' | 'update' | 'delete';
-  /** Diff unificado (update) ou o conteúdo (add/delete). */
-  text: string;
-  movePath?: string;
-}
-
-function changeKind(v: unknown): FileChangeEntry['kind'] {
-  const k = typeof v === 'string' ? v : str(rec(v)?.type);
-  return k === 'add' || k === 'delete' ? k : 'update';
-}
-
-export function fileChanges(raw: unknown): FileChangeEntry[] {
-  const out: FileChangeEntry[] = [];
-  const push = (path: unknown, c: Rec) => {
-    const p = str(path);
-    if (!p) return;
-    const kind = changeKind(c.type ?? c.kind);
-    const text = str(c.unified_diff) ?? str(c.diff) ?? str(c.content) ?? '';
-    const e: FileChangeEntry = { path: p, kind, text };
-    const move = str(c.move_path) ?? str(rec(c.kind)?.move_path);
-    if (move) e.movePath = move;
-    out.push(e);
-  };
-  if (Array.isArray(raw)) for (const c of raw) push(rec(c)?.path, rec(c) ?? {});
-  else if (rec(raw)) for (const [path, c] of Object.entries(rec(raw)!)) push(path, rec(c) ?? {});
-  return out;
-}
-
-/** Caminho de um `file://` (cwd e caminhos do Codex vêm como URL). */
-export function pathFromUri(v: unknown): string | undefined {
-  const s = str(v);
-  if (!s) return undefined;
-  if (!s.startsWith('file://')) return s;
-  try {
-    return decodeURIComponent(new URL(s).pathname);
-  } catch {
-    return s.slice('file://'.length);
-  }
-}
-
-/** Argumentos de uma chamada de função: string JSON (o normal) ou objeto. */
-export function parseArguments(raw: unknown): Rec {
-  if (rec(raw)) return rec(raw)!;
-  if (typeof raw !== 'string' || !raw.trim()) return {};
-  try {
-    return rec(JSON.parse(raw)) ?? {};
-  } catch {
-    return {};
-  }
-}
-
-/** Nome MCP no formato do Claude Code: `mcp__<servidor>__<ferramenta>`. */
-export function mcpName(server: unknown, tool: unknown): string {
-  return `mcp__${String(server ?? '?')}__${String(tool ?? '?')}`;
-}
-
-/**
- * Mensagem do agente para você no code mode do app: a ferramenta `user_messaging.send_message` (MCP do próprio app,
- * `{text}`) faz o papel da resposta. Devolve o texto, ou undefined se não for essa ferramenta.
- */
-export function userMessagingText(server: unknown, tool: unknown, args: unknown): string | undefined {
-  if (!/user_messag(?:e|ing)[_.]*send_message$/i.test(`${String(server ?? '')}__${String(tool ?? '')}`)) return undefined;
-  const text = rec(args)?.text ?? parseArguments(args).text;
-  return typeof text === 'string' && text.trim() ? text : undefined;
-}
-
-const DELIVERY_COMPLETE = 'codex:code-mode-delivery:v1:complete';
-const DELIVERY_INCOMPLETE = 'codex:code-mode-delivery:v1:incomplete:';
-
-/**
- * Resposta entregue no code mode, gravada como `response_item` message/assistant com
- * `metadata.delivered_assistant_message` (o marcador; no "incomplete", o texto cortado vem nele). Undefined = não é.
- */
-export function deliveredMessage(line: Rec): { id?: string; text: string } | undefined {
-  const marker = str(rec(line.metadata)?.delivered_assistant_message);
-  const p = rec(line.payload);
-  if (!marker || !p || p.type !== 'message' || p.role !== 'assistant') return undefined;
-  let text = '';
-  if (marker === DELIVERY_COMPLETE) text = contentText(p.content).text;
-  else if (marker.startsWith(DELIVERY_INCOMPLETE)) text = marker.slice(DELIVERY_INCOMPLETE.length);
-  if (!text.trim()) return undefined;
-  const id = str(p.id);
-  return id ? { id, text } : { text };
-}
-
-/** Atividade de uma instrução recebida pelo Codex: "Recebeu “…”" (kind 'prompt', a base do "Concluiu em X"). */
-export function describeCodexPrompt(text: string): ActivityDescription {
-  const shown = truncate(maskSecrets(text.slice(0, 1_000)), 34);
-  return { ...describePrompt(text), text: truncate(`Recebeu “${shown}”`, 46) };
-}
-
-const PLAN_STATUS = new Set<string>(['pending', 'in_progress', 'completed']);
-
-/** Passos do `update_plan` ({plan: [{step, status}]}) como tarefas. */
-export function planTasks(args: Rec): TaskItem[] | undefined {
-  if (!Array.isArray(args.plan)) return undefined;
-  const out: TaskItem[] = [];
-  args.plan.forEach((raw, i) => {
-    const p = rec(raw);
-    const title = str(p?.step);
-    if (!p || !title) return;
-    const status = typeof p.status === 'string' && PLAN_STATUS.has(p.status) ? (p.status as TaskStatus) : 'pending';
-    out.push({ id: String(i + 1), title: truncate(maskSecrets(title.slice(0, 480)), 120), status });
-  });
-  return out;
-}
-
-/**
- * Atividade de uma ferramenta do Codex pelo nome que ela tem no rollout, no hook ou no app (exec_command, shell,
- * Bash, apply_patch, mcp__…, spawn_agent, exec do code mode...). `name` volta normalizado (Bash, Edit, Write,
- * mcp__…) para o Activity.tool.
- */
-export function describeCodexTool(rawName: string, input: Rec, namespace?: string): { desc: ActivityDescription; tool: string } {
-  const name = namespace && /^mcp__/.test(namespace) ? `${namespace.replace(/_+$/, '')}__${rawName}` : rawName;
-  switch (name) {
-    case 'Bash':
-    case 'shell':
-    case 'shell_command':
-    case 'local_shell':
-    case 'exec_command':
-    case 'container.exec': {
-      const command = commandText(input.cmd ?? input.command);
-      return { desc: describeTool('Bash', { command, description: input.description }), tool: 'Bash' };
-    }
-    case 'write_stdin':
-      return { desc: { kind: 'run', icon: '⌨️', text: 'Interagindo com um comando' }, tool: name };
-    case 'apply_patch': {
-      const patch = typeof input.command === 'string' ? input.command : typeof input.input === 'string' ? input.input : typeof input.patch === 'string' ? input.patch : '';
-      const files = patchFiles(patch);
-      const first = files[0];
-      if (!first) return { desc: describeTool('Edit', {}), tool: 'Edit' };
-      const tool = first.kind === 'add' ? 'Write' : 'Edit';
-      const desc = describeTool(tool, { file_path: first.path });
-      if (files.length > 1) desc.detail = truncate(files.map((f) => f.path).join(', '), 300);
-      return { desc, tool };
-    }
-    case 'exec':
-      // Code mode do app: o argumento é JavaScript; o comando legível só aparece no CommandExecution ao concluir.
-      return { desc: { kind: 'run', icon: '⚙️', text: 'Executando código' }, tool: name };
-    case 'update_plan':
-      return { desc: { kind: 'plan', icon: '🗒️', text: 'Atualizando o plano' }, tool: name };
-    case 'view_image': {
-      const path = str(input.path);
-      return { desc: describeTool('Read', { file_path: path ?? 'imagem.png' }), tool: 'Read' };
-    }
-    case 'web_search':
-    case 'web_search_preview':
-      return { desc: describeTool('WebSearch', { query: input.query }), tool: 'WebSearch' };
-    case 'spawn_agent':
-    case 'Agent': {
-      const prompt = str(input.message) ?? str(input.prompt) ?? str(input.task);
-      return { desc: describeTool('Agent', { description: prompt ? truncate(prompt, 60) : undefined, subagent_type: input.agent_type }), tool: 'Agent' };
-    }
-    case 'wait':
-    case 'wait_agent':
-      return { desc: { kind: 'delegate', icon: '⏳', text: 'Esperando os subagentes' }, tool: name };
-    case 'send_input':
-    case 'send_message':
-    case 'followup_task':
-      return { desc: { kind: 'communicate', icon: '💬', text: 'Mensagem para um subagente' }, tool: name };
-    case 'close_agent':
-      return { desc: { kind: 'delegate', icon: '👥', text: 'Encerrando um subagente' }, tool: name };
-    case 'request_permissions':
-      return { desc: { kind: 'wait', icon: '🔐', text: 'Pedindo permissões' }, tool: name };
-    default:
-      return { desc: describeTool(name, input), tool: name };
-  }
-}
-
-// ------------------------------------------------------------------ estado
-
-export interface CodexState {
-  /** session_meta (lido do começo do arquivo, à parte da janela do fim). */
-  meta?: RolloutMeta;
-  /** Formato: o do session_meta; sem ele, deduzido (o primeiro item paginated ou evento legacy decide). */
-  mode?: HistoryMode;
-  model?: string;
-  gitBranch?: string;
-  /** Primeira instrução (título da sessão), já mascarada e cortada. */
-  title?: string;
-  tasks: TaskItem[];
-  stats: AgentStats;
-  /** Turno aberto (task_started sem task_complete/turn_aborted); undefined = nenhum evento de turno visto. */
-  turnOpen?: boolean;
-  firstAt?: number;
-  lastAt?: number;
-  /** Chamadas de ferramenta ainda sem resultado (call_id → nome). */
-  pending: Map<string, string>;
-  /** Uso do plano mais recente (rate_limits) e o plano. */
-  usage?: AccountUsage;
-  planType?: string;
-  current?: { id: string; kind: Activity['kind']; at: number; callId?: string };
-}
-
-export function createCodexState(meta?: RolloutMeta): CodexState {
-  const s: CodexState = { tasks: [], stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, pending: new Map() };
-  if (meta) applyMeta(s, meta);
-  return s;
-}
-
-/** Aplica o session_meta ao estado (formato, branch). */
-export function applyMeta(s: CodexState, meta: RolloutMeta): void {
-  s.meta = meta;
-  s.mode = meta.historyMode;
-  if (meta.gitBranch) s.gitBranch ??= meta.gitBranch;
-}
-
-/** Sinais de uma linha para quem acompanha o thread. */
-export type CodexSignal =
-  | { type: 'turnStart' }
-  | { type: 'turnEnd'; aborted: boolean }
-  /** Algo concluiu dentro do turno (tira a espera por aprovação). */
-  | { type: 'progress' }
-  | { type: 'usage'; usage: AccountUsage; plan?: string }
-  | { type: 'github'; event: GitHubEvent; key: string }
-  | { type: 'meta'; meta: RolloutMeta };
-
-export interface CodexLineResult {
-  activities: ParsedActivity[];
-  signals: CodexSignal[];
-  /** Título, números, modelo ou tarefas mudaram. */
-  changed: boolean;
-  /** Epoch ms da linha (o `timestamp` dela ou o `now` do contexto). */
-  at: number;
-}
-
-export interface CodexParseContext {
-  /** Prefixo dos ids de atividade (o id do agente). */
-  idPrefix: string;
-  now: number;
-  /** false = só atualiza o estado (sem montar atividades). */
-  activities?: boolean;
-}
-
-const TITLE_MAX = 90;
-const MAX_PENDING = 128;
-/** Texto injetado pelo Codex que não é instrução sua. */
-const INJECTED = /^<(environment_context|user_instructions|turn_aborted|subagent_notification|user_shell_command_output|collaboration_mode)\b/;
-
-/** Texto de UserMessage.content ([{type: 'text', text}, {type: 'image'...}]) ou de uma lista de blocos {text}. */
-export function contentText(content: unknown): { text: string; images: number } {
-  if (typeof content === 'string') return { text: content, images: 0 };
-  if (!Array.isArray(content)) return { text: '', images: 0 };
-  const texts: string[] = [];
-  let images = 0;
-  for (const raw of content) {
-    const b = rec(raw);
-    if (!b) continue;
-    const type = String(b.type ?? '').toLowerCase();
-    if (typeof b.text === 'string') texts.push(b.text);
-    else if (type === 'image' || type === 'local_image' || type === 'input_image') images++;
-  }
-  return { text: texts.join(''), images };
-}
-
-/** Instrução de verdade (não contexto injetado), limpa; '' = nada a mostrar. */
-export function promptText(raw: string): string {
-  const text = raw.trim();
-  if (!text || INJECTED.test(text)) return '';
-  return text;
-}
-
-/** Saída de uma ferramenta (function_call_output): texto, JSON {output, metadata: {exit_code}} ou blocos. */
-function outputOf(raw: unknown): { text: string; exitCode?: number } {
-  if (typeof raw === 'string') {
-    try {
-      const j = rec(JSON.parse(raw));
-      if (j && typeof j.output === 'string') return { text: j.output, exitCode: num(rec(j.metadata)?.exit_code) };
-    } catch {
-      // texto puro
-    }
-    const exit = /^Exit code:\s*(-?\d+)/m.exec(raw.slice(0, 500))?.[1];
-    return { text: raw, exitCode: exit !== undefined ? Number(exit) : undefined };
-  }
-  const o = rec(raw);
-  if (o) return outputOf(o.content ?? o.output ?? o.body ?? '');
-  if (Array.isArray(raw)) return { text: contentText(raw).text };
-  return { text: '' };
-}
-
-function firstLine(s: string, max = 140): string | undefined {
-  const line = s.split('\n').find((l) => l.trim());
-  return line ? truncate(line, max) : undefined;
-}
+export { isEncryptedText, maskedCut } from './rollout-mask';
+export { codexAgentPath, isThreadId, parseSessionMeta, usageFromRateLimits } from './rollout-meta';
+export type { HistoryMode, RolloutMeta } from './rollout-meta';
+export { applyMeta, contentText, createCodexState, promptText } from './rollout-state';
+export type { CodexLineResult, CodexParseContext, CodexSignal, CodexState } from './rollout-state';
+export {
+  commandText,
+  deliveredMessage,
+  describeCodexPrompt,
+  describeCodexTool,
+  fileChanges,
+  mcpName,
+  parseArguments,
+  patchFiles,
+  pathFromUri,
+  planTasks,
+  userMessagingText,
+} from './rollout-tools';
+export type { FileChangeEntry } from './rollout-tools';
 
 class RolloutLineParser {
   readonly out: CodexLineResult;
@@ -501,7 +105,7 @@ class RolloutLineParser {
 
   private autoKeys = 0;
 
-  private push(desc: ActivityDescription, opts: { key?: string; tool?: string; current?: boolean; durationMs?: number; callId?: string } = {}): void {
+  private push(desc: ActivityDescription, opts: { key?: string; tool?: string; current?: boolean; durationMs?: number; callId?: string; replace?: boolean } = {}): void {
     if (!this.withActivities) return;
     const key = opts.key ?? this.autoKey();
     const activity: Activity = { id: `${this.ctx.idPrefix}#${key}`, at: this.at, ...desc };
@@ -509,12 +113,19 @@ class RolloutLineParser {
     if (opts.durationMs !== undefined) activity.durationMs = opts.durationMs;
     if (desc.kind === 'error') activity.error = true;
     const current = opts.current ?? true;
-    this.out.activities.push(opts.callId ? { activity, current, toolUseId: opts.callId } : { activity, current });
+    const parsed: ParsedActivity = opts.callId ? { activity, current, toolUseId: opts.callId } : { activity, current };
+    if (opts.replace) parsed.replace = true;
+    this.out.activities.push(parsed);
     if (current) this.s.current = { id: activity.id, kind: desc.kind, at: this.at, callId: opts.callId };
   }
 
   private changed(): void {
     this.out.changed = true;
+  }
+
+  /** Quem chama, para o describeCodexTool (o destino do send_message). */
+  private from(): { agentPath?: string } {
+    return { agentPath: codexAgentPath(this.s.meta) };
   }
 
   private paginated(): boolean {
@@ -566,6 +177,7 @@ class RolloutLineParser {
         return this.item(rec(p.item));
       case 'task_started':
       case 'turn_started':
+        this.closeAsks();
         this.s.turnOpen = true;
         this.out.signals.push({ type: 'turnStart' });
         return;
@@ -575,13 +187,16 @@ class RolloutLineParser {
         const ms = num(p.duration_ms);
         const err = rec(p.error);
         const turn = str(p.turn_id) ?? this.autoKey();
-        if (err) this.push(SPECIAL.error(undefined, firstLine(str(err.message) ?? '')), { key: `${turn}:err`, current: false });
-        this.push(SPECIAL.turnDone(ms), { key: `${turn}:done`, durationMs: ms });
+        // Com erro (ex.: limite de uso), a conclusão leva o erro: um item à parte antes dela apagaria a troca do "Concluiu"
+        // sintetizado no Office (dois "Concluiu"), e depois dela, como atual, faria o completeSub sintetizar outro.
+        const desc = err ? SPECIAL.turnFailed(ms, firstLine(str(err.message) ?? '')) : SPECIAL.turnDone(ms);
+        this.push(desc, { key: `${turn}:done`, durationMs: ms });
         return;
       }
       case 'turn_aborted':
         this.endTurn(true);
-        if (p.reason === 'interrupted' || p.reason === undefined) this.push(SPECIAL.interrupted(), { key: `${str(p.turn_id) ?? this.autoKey()}:int` });
+        // No subagente (e no neto), o "interrupted" é o Codex abortando o filho quando o pai encerra, não você.
+        if (p.reason === 'interrupted' || p.reason === undefined) this.push(SPECIAL.interrupted(!this.s.meta?.parentThreadId), { key: `${str(p.turn_id) ?? this.autoKey()}:int` });
         return;
       case 'token_count':
         return this.tokens(p);
@@ -596,7 +211,7 @@ class RolloutLineParser {
         if (this.paginated()) return;
         this.s.mode ??= 'legacy';
         const text = str(p.message);
-        if (text) this.push(SPECIAL.respond(text));
+        if (text) this.push(SPECIAL.respond(maskedCut(text)));
         this.progress();
         return;
       }
@@ -605,7 +220,7 @@ class RolloutLineParser {
         return this.think();
       case 'exec_command_end':
         if (this.paginated()) return;
-        return this.command({ id: str(p.call_id), command: p.command, exitCode: num(p.exit_code), output: str(p.aggregated_output) ?? str(p.formatted_output) ?? str(p.stdout) ?? '', status: str(p.status) });
+        return this.command({ id: str(p.call_id), command: p.command, parsed: p.parsed_cmd, exitCode: num(p.exit_code), output: str(p.aggregated_output) ?? str(p.formatted_output) ?? str(p.stdout) ?? '', status: str(p.status) });
       case 'patch_apply_end':
         if (this.paginated()) return;
         return this.fileChange(str(p.call_id), p.changes, p.success === false ? 'failed' : str(p.status));
@@ -626,7 +241,36 @@ class RolloutLineParser {
   private endTurn(aborted: boolean): void {
     this.s.turnOpen = false;
     this.s.pending.clear();
+    this.closeAsks();
     this.out.signals.push({ type: 'turnEnd', aborted });
+  }
+
+  /** request_user_input chamado e ainda sem output: a pergunta fica aberta e o agente espera você. */
+  private ask(callId: string, questions: unknown): void {
+    const summary = askSummary(questions);
+    this.s.asking.set(callId, summary);
+    if (this.s.asking.size > MAX_PENDING) this.s.asking.delete(this.s.asking.keys().next().value as string);
+    this.out.signals.push({ type: 'asking', questions: summary });
+  }
+
+  /** O output de um request_user_input aberto: respondida. false = não era uma pergunta aberta. */
+  private answer(callId: string): boolean {
+    const summary = this.s.asking.get(callId);
+    if (summary === undefined) return false;
+    this.s.asking.delete(callId);
+    this.out.signals.push({ type: 'answered' });
+    this.push(SPECIAL.answered(summary || undefined), { key: `${callId}:ans` });
+    return true;
+  }
+
+  /**
+   * Fim do turno (ou um turno novo) com pergunta aberta: ninguém mais espera a resposta. O 'answered' sai ANTES do
+   * turnEnd/turnStart, para quem aplica os sinais em ordem terminar no status do turno.
+   */
+  private closeAsks(): void {
+    if (!this.s.asking.size) return;
+    this.s.asking.clear();
+    this.out.signals.push({ type: 'answered' });
   }
 
   private progress(): void {
@@ -666,7 +310,7 @@ class RolloutLineParser {
     const text = promptText(raw) || (images ? '[imagem]' : '');
     if (!text) return;
     if (this.s.title === undefined) {
-      this.s.title = truncate(maskSecrets(text.slice(0, 1_000)), TITLE_MAX);
+      this.s.title = titleText(text);
       this.changed();
     }
     this.push(describeCodexPrompt(text), { key });
@@ -686,7 +330,7 @@ class RolloutLineParser {
       case 'AgentMessage': {
         this.sawPaginated();
         const text = contentText(item.content).text.trim();
-        if (text) this.push(SPECIAL.respond(text), { key: id });
+        if (text) this.push(SPECIAL.respond(maskedCut(text)), { key: id });
         this.progress();
         return;
       }
@@ -698,7 +342,7 @@ class RolloutLineParser {
         this.sawPaginated();
         this.s.stats.toolCalls++;
         this.changed();
-        return this.command({ id, command: item.command, exitCode: num(item.exit_code), output: str(item.aggregated_output) ?? '', status: str(item.status) });
+        return this.command({ id, command: item.command, parsed: item.parsed_cmd, exitCode: num(item.exit_code), output: str(item.aggregated_output) ?? '', status: str(item.status) });
       case 'FileChange':
         this.sawPaginated();
         this.s.stats.toolCalls++;
@@ -714,7 +358,7 @@ class RolloutLineParser {
         this.s.stats.toolCalls++;
         this.changed();
         this.done(id);
-        this.push(describeTool('WebSearch', { query: item.query }), { key: id, tool: 'WebSearch', callId: id });
+        this.push(describeTool('WebSearch', { query: maskedText(item.query) }), { key: id, tool: 'WebSearch', callId: id });
         return;
       case 'ImageView': {
         this.sawPaginated();
@@ -731,15 +375,19 @@ class RolloutLineParser {
         this.sawPaginated();
         const tool = str(item.tool) ?? 'spawn_agent';
         if (tool === 'spawn_agent') {
-          this.s.stats.subagents++;
-          this.changed();
+          const prompt = plainText(item.prompt);
+          this.spawned(id, Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids[0] : undefined, prompt ? titleText(prompt) : '');
         }
         this.done(id);
-        const { desc, tool: name } = describeCodexTool(tool, { prompt: item.prompt });
+        const { desc, tool: name } = describeCodexTool(tool, { prompt: item.prompt }, undefined, this.from());
         this.push(desc, { key: id, tool: name, callId: id });
         this.progress();
         return;
       }
+      case 'SubAgentActivity':
+        return this.subAgentActivity(id, item);
+      case 'Extension':
+        return this.extension(id, item);
       case 'Plan':
         this.sawPaginated();
         this.push(describeTool('ExitPlanMode', {}), { key: id, tool: 'Plan' });
@@ -747,7 +395,7 @@ class RolloutLineParser {
       case 'DynamicToolCall': {
         this.sawPaginated();
         this.done(id);
-        const { desc, tool } = describeCodexTool(str(item.tool) ?? 'ferramenta', rec(item.arguments) ?? {}, str(item.namespace));
+        const { desc, tool } = describeCodexTool(str(item.tool) ?? 'ferramenta', rec(item.arguments) ?? {}, str(item.namespace), this.from());
         this.push(desc, { key: id, tool, callId: id });
         return;
       }
@@ -756,17 +404,93 @@ class RolloutLineParser {
     }
   }
 
+  /** spawn_agent chamado: guarda o título do filho até o SubAgentActivity started (o mesmo call_id). */
+  private rememberSpawn(callId: string, title: string): void {
+    if (this.s.spawns.has(callId)) return;
+    this.s.spawns.set(callId, { title, counted: false });
+    if (this.s.spawns.size > MAX_PENDING) this.s.spawns.delete(this.s.spawns.keys().next().value as string);
+  }
+
+  /**
+   * Um filho nasceu (SubAgentActivity started ou CollabAgentToolCall spawn_agent): conta uma vez por id e emite o
+   * spawn com o título guardado do spawn_agent (senão `fallback`). Devolve o título ('' = sem título), ou undefined se
+   * esse id já tinha contado.
+   */
+  private spawned(id: string | undefined, child: unknown, fallback: string): string | undefined {
+    const known = id !== undefined ? this.s.spawns.get(id) : undefined;
+    if (known?.counted) return undefined;
+    const title = known?.title || fallback;
+    if (id !== undefined) {
+      this.s.spawns.set(id, { title, counted: true });
+      if (this.s.spawns.size > MAX_PENDING) this.s.spawns.delete(this.s.spawns.keys().next().value as string);
+    }
+    this.s.stats.subagents++;
+    this.changed();
+    if (title) this.out.signals.push(isThreadId(child) ? { type: 'spawn', childThreadId: child, title } : { type: 'spawn', title });
+    return title;
+  }
+
+  /**
+   * Multiagente v2: só o `started` interessa (conta o filho e emite o spawn; sem o spawn_agent visto, vira a atividade
+   * de delegar). interacted/completed/interrupted ficam de fora: sem atividade, contagem nem progress (o completed do
+   * filho chega no rollout do pai e não pode tirar a espera por aprovação dele).
+   */
+  private subAgentActivity(id: string | undefined, item: Rec): void {
+    if (item.kind !== 'started') return;
+    const seen = id !== undefined && this.s.spawns.has(id);
+    const task = agentTask(str(item.agent_path));
+    const title = this.spawned(id, item.agent_thread_id, task ? titleText(task) : '');
+    if (title === undefined) return;
+    this.done(id);
+    if (seen) return; // a atividade de delegar já saiu com o spawn_agent (mesmo id)
+    const { desc, tool } = describeCodexTool('spawn_agent', { message: title || undefined });
+    this.push(desc, { key: id, tool, callId: id });
+  }
+
+  /**
+   * Item de extensão (camelCase): web.search (busca no code mode), clock.sleep (id = call_id do function_call: cai na
+   * mesma atividade) e image_gen.*. Outro tipo não gera nada. No legacy o function_call já contou a ferramenta (o
+   * Extension do clock.sleep também é gravado lá); não chama sawPaginated pelo mesmo motivo.
+   */
+  private extension(id: string | undefined, item: Rec): void {
+    const kind = str(item.kind) ?? '';
+    let d: { desc: ActivityDescription; tool: string };
+    if (kind === 'web.search') d = webDesc(item.action, str(item.query));
+    else if (kind === 'clock.sleep') d = { desc: sleepDesc(), tool: 'clock.sleep' };
+    else if (kind.startsWith('image_gen')) {
+      const prompt = str(item.revisedPrompt);
+      const desc: ActivityDescription = { kind: 'other', icon: '🎨', text: 'Gerando imagem' };
+      if (prompt) desc.detail = maskedCut(prompt, 300);
+      d = { desc, tool: 'image_gen' };
+    } else return;
+    if (this.s.mode !== 'legacy') {
+      this.s.stats.toolCalls++;
+      this.changed();
+    }
+    this.done(id);
+    this.push(d.desc, { key: id, tool: d.tool, callId: id, durationMs: kind === 'clock.sleep' ? num(item.durationMs) : undefined });
+  }
+
   /** Chamada concluída: sai da lista das em andamento e tira a espera por aprovação. */
   private done(callId: string | undefined): void {
     if (callId) this.s.pending.delete(callId);
     this.progress();
   }
 
-  private command(c: { id?: string; command: unknown; exitCode?: number; output: string; status?: string }): void {
+  private command(c: { id?: string; command: unknown; parsed?: unknown; exitCode?: number; output: string; status?: string }): void {
+    // Encerrado pelo próprio Codex no fim do turno (0.160.1: o processo do code mode grava o CommandExecution com
+    // código -1 depois do task_complete, com ou sem saída): não é erro nem o que o agente faz agora; fica de fora.
+    if (this.s.turnOpen === false && c.exitCode === -1) {
+      if (c.id) this.s.pending.delete(c.id);
+      return;
+    }
     const command = commandText(c.command);
     this.done(c.id);
     const key = c.id ?? this.autoKey();
-    this.push(describeTool('Bash', { command }), { key, tool: 'Bash', callId: c.id });
+    // O function_call (ou o hook PreToolUse) de mesmo id já pôs no escritório a heurística do Bash: o tipo vindo do
+    // parsed_cmd pede para substituí-la (sem isso o escritório fica com a primeira).
+    const parsed = parsedCmdActivity(c.parsed);
+    this.push(parsed ?? describeTool('Bash', { command: maskedCut(command) }), { key, tool: 'Bash', callId: c.id, replace: parsed !== undefined });
     if (c.status === 'declined') {
       this.push(SPECIAL.rejected('Bash'), { key: `${key}:r` });
       return;
@@ -803,7 +527,7 @@ class RolloutLineParser {
     // Code mode: a mensagem para você é a resposta (a mesma chave da entrega gravada como response_item).
     const said = userMessagingText(server, tool, input);
     if (said) {
-      this.push(SPECIAL.respond(said), { key });
+      this.push(SPECIAL.respond(maskedCut(said)), { key });
       return;
     }
     this.push(describeTool(name, input), { key, tool: name, callId: id });
@@ -824,7 +548,7 @@ class RolloutLineParser {
         // Só a resposta entregue no code mode (as outras mensagens são o contexto mandado ao modelo).
         const delivered = deliveredMessage(this.j);
         if (delivered) {
-          this.push(SPECIAL.respond(delivered.text), { key: delivered.id });
+          this.push(SPECIAL.respond(maskedCut(delivered.text)), { key: delivered.id });
           this.progress();
         }
         return;
@@ -842,16 +566,18 @@ class RolloutLineParser {
           this.s.stats.toolCalls++;
           this.changed();
         }
-        if (name === 'update_plan') {
-          const tasks = planTasks(input);
-          if (tasks) {
-            this.s.tasks = tasks;
-            this.changed();
-          }
+        // update_plan direto ou tools.update_plan({...}) no JS do code mode (só o literal é lido; nada é executado).
+        const planArgs = name === 'update_plan' ? input : name === 'exec' && typeof p.input === 'string' ? planFromScript(p.input) : undefined;
+        const tasks = planArgs && planTasks(planArgs);
+        if (tasks) {
+          this.s.tasks = tasks;
+          this.changed();
         }
         // Atividade em andamento: o item concluído (paginated) chega depois com o mesmo id e não duplica.
-        const { desc, tool } = describeCodexTool(name, input, str(p.namespace));
+        const { desc, tool } = describeCodexTool(name, input, str(p.namespace), this.from());
         this.push(desc, { key: callId, tool, callId });
+        if (name === 'request_user_input') this.ask(callId ?? this.autoKey(), input.questions);
+        if (name === 'spawn_agent' && callId) this.rememberSpawn(callId, spawnTitle(input));
         return;
       }
       case 'local_shell_call': {
@@ -861,7 +587,7 @@ class RolloutLineParser {
           this.s.stats.toolCalls++;
           this.changed();
         }
-        this.push(describeTool('Bash', { command: commandText(rec(p.action)?.command) }), { key: callId, tool: 'Bash', callId });
+        this.push(describeTool('Bash', { command: maskedCut(commandText(rec(p.action)?.command)) }), { key: callId, tool: 'Bash', callId });
         return;
       }
       case 'function_call_output':
@@ -869,6 +595,8 @@ class RolloutLineParser {
         const callId = str(p.call_id);
         const name = callId ? this.s.pending.get(callId) : undefined;
         if (callId) this.s.pending.delete(callId);
+        // A resposta do request_user_input (nos dois formatos; o item concluído não existe para ele).
+        if (callId && this.answer(callId)) return;
         if (this.paginated()) return;
         // Legacy: o resultado de um comando (o item concluído não existe nesse formato).
         if (!name || !/^(shell|shell_command|local_shell|exec_command|container\.exec)$/.test(name)) return;
@@ -881,15 +609,40 @@ class RolloutLineParser {
       }
       case 'web_search_call':
         if (this.paginated()) return;
-        this.push(describeTool('WebSearch', { query: rec(p.action)?.query }), { tool: 'WebSearch' });
+        this.push(describeTool('WebSearch', { query: maskedText(rec(p.action)?.query) }), { tool: 'WebSearch' });
         return;
+      case 'agent_message': {
+        // Multiagente v2: a 1ª mensagem endereçada a um subagente (recipient /root/<tarefa>; fica no rollout dele) é a
+        // tarefa que o pai mandou e vira o título (não é prompt). Na raiz (recipient /root) são os resultados dos filhos.
+        const recipient = str(p.recipient);
+        const text = firstText(p.content);
+        if (this.s.title !== undefined || !text || !recipient || !/^\/root\/./.test(recipient)) return;
+        const task = messageTask(text);
+        if (!task) return;
+        this.s.title = titleText(task);
+        this.changed();
+        return;
+      }
       default:
         return;
     }
   }
 }
 
-/** Interpreta uma linha do rollout. Linhas inválidas ou desconhecidas não geram nada. */
+/**
+ * Linha que não é deste thread: um session_meta depois do primeiro (o fork de um subagente copia o do pai logo depois
+ * do cabeçalho; um resume repete o do próprio thread) ou a história herdada do pai (ordinal abaixo do
+ * subagent_history_start_ordinal). Não gera atividade, sinal, título, número nem horário.
+ */
+function notOwnLine(state: CodexState, r: Rec): boolean {
+  if (!state.meta) return false;
+  if (r.type === 'session_meta') return true;
+  const start = state.meta.historyStart;
+  const ordinal = num(r.ordinal);
+  return start !== undefined && ordinal !== undefined && ordinal < start;
+}
+
+/** Interpreta uma linha do rollout. Linhas inválidas, desconhecidas ou herdadas (notOwnLine) não geram nada. */
 export function parseRolloutLine(state: CodexState, raw: string, ctx: CodexParseContext): CodexLineResult {
   let j: unknown;
   try {
@@ -900,6 +653,7 @@ export function parseRolloutLine(state: CodexState, raw: string, ctx: CodexParse
   const r = rec(j);
   if (!r) return { activities: [], signals: [], changed: false, at: ctx.now };
   const at = toMs(r.timestamp);
+  if (notOwnLine(state, r)) return { activities: [], signals: [], changed: false, at: at ?? ctx.now };
   if (at !== undefined) {
     if (state.firstAt === undefined || at < state.firstAt) state.firstAt = at;
     if (state.lastAt === undefined || at > state.lastAt) state.lastAt = at;

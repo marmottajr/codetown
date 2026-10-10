@@ -145,6 +145,24 @@ describe('pedidos do Codex (demo)', () => {
     expect(tools).toEqual(new Set(['Bash', 'apply_patch', 'rede']));
   });
 
+  it('forcePermission no Codex: a espera diz o tipo do pedido (comando, edição ou acesso à rede)', () => {
+    const reasons = new Map<string, Set<string>>();
+    for (let seed = 1; seed <= 40; seed++) {
+      const sim = new DemoSimulator({ seed, idPrefix: 'demo:' }, start);
+      const id = sim.forcePermission(start, 'permission', 'codex')!;
+      const a = sim.snapshot(start).agents.find((x) => x.id === id)!;
+      const p = a.permission!;
+      const kind = p.tool === 'apply_patch' ? 'edição' : p.text.startsWith('Acesso à rede') ? 'rede' : 'comando';
+      if (!reasons.has(kind)) reasons.set(kind, new Set());
+      reasons.get(kind)!.add(a.waitingFor!);
+    }
+    expect(Object.fromEntries([...reasons].map(([k, v]) => [k, [...v]]))).toEqual({
+      comando: ['aprovar um comando'],
+      edição: ['aprovar uma edição'],
+      rede: ['aprovar uma permissão'],
+    });
+  });
+
   it('forcePermission no Codex: espera "aprovar um comando"; recusa só com motivo; sem sempre permitir nem interromper', () => {
     const sim = new DemoSimulator({ seed: 4, idPrefix: 'demo:' }, start);
     const id = sim.forcePermission(start, 'question', 'codex')!;
@@ -179,5 +197,150 @@ describe('pedidos do Codex (demo)', () => {
       const id = sim.forcePermission(start)!;
       expect(sim.snapshot(start).agents.find((x) => x.id === id)!.provider).toBeUndefined();
     }
+  });
+});
+
+describe('pedidos do Codex no canal paralelo (demo)', () => {
+  const start = 10_000;
+  const src = { files: ['src/app.ts'], commands: ['npm test'] };
+  const agentOf = (sim: DemoSimulator, id: string, t = start) => sim.snapshot(t).agents.find((x) => x.id === id)!;
+
+  it('demoCodexPermission parallel: os mesmos sorteios e o mesmo pedido, com as decisões do canal e sem prazo', () => {
+    const tools = new Set<string>();
+    for (let seed = 1; seed < 80; seed++) {
+      const hookRng = mulberry32(seed);
+      const parRng = mulberry32(seed);
+      const hook = demoCodexPermission(`c${seed}`, src, hookRng, 1_000);
+      const par = demoCodexPermission(`c${seed}`, src, parRng, 1_000, 'parallel');
+      // Mesmo número de sorteios: o resto do agente segue igual nos dois modos.
+      expect(parRng()).toBe(hookRng());
+      expect(hook.mode).toBeUndefined();
+      expect(hook.decisions).toBeUndefined();
+      expect(par).toMatchObject({ id: `c${seed}`, provider: 'codex', mode: 'parallel', createdAt: 1_000, expiresAt: Number.MAX_SAFE_INTEGER, title: hook.title, input: hook.input });
+      expect(par.suggestions).toBeUndefined();
+      expect(par.questions).toBeUndefined();
+      tools.add(par.tool);
+      if (par.tool === 'apply_patch') {
+        expect(par.decisions).toEqual(['accept', 'acceptForSession', 'decline', 'cancel']);
+      } else {
+        // Comando (o acesso à rede também chega como o comando pelo app-server): a emenda de execpolicy, que o
+        // Habblaud não oferece, fica no lugar do "nesta sessão".
+        expect(par.tool).toBe('exec_command');
+        expect(par.title).toMatch(/^Bash\(/);
+        expect(par.inputKind).toBe('command');
+        expect(par.decisions).toEqual(['accept', 'decline', 'cancel']);
+      }
+    }
+    expect(tools).toEqual(new Set(['exec_command', 'apply_patch']));
+  });
+
+  it('forcePermission parallel: Aprovar nesta sessão só quando o canal oferece, Recusar sem motivo; nada de responder, sempre permitir nem interromper', () => {
+    const tools = new Set<string>();
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const sim = new DemoSimulator({ seed, idPrefix: 'demo:' }, start);
+      const id = sim.forcePermission(start, 'permission', 'codex', 'parallel')!;
+      const a = agentOf(sim, id);
+      const p = a.permission!;
+      expect(a).toMatchObject({ provider: 'codex', status: 'waiting', waitingFor: p.tool === 'apply_patch' ? 'aprovar uma edição' : 'aprovar um comando' });
+      expect(p).toMatchObject({ provider: 'codex', mode: 'parallel', expiresAt: Number.MAX_SAFE_INTEGER });
+      tools.add(p.tool);
+      expect(sim.decidePermission(p.id, { behavior: 'answer', answers: [] }, start + 1)).toBe(false);
+      expect(sim.decidePermission(p.id, { behavior: 'allow', suggestion: 0 }, start + 1)).toBe(false);
+      expect(sim.decidePermission(p.id, { behavior: 'deny', interrupt: true }, start + 1)).toBe(false);
+      if (p.decisions!.includes('acceptForSession')) {
+        expect(sim.decidePermission(p.id, { behavior: 'allow', forSession: true }, start + 1)).toBe(true);
+        expect(agentOf(sim, id, start + 1).recent.at(-1)).toMatchObject({ icon: '✅', text: 'Aprovado no Habblaud (nesta sessão)', detail: p.title });
+      } else {
+        expect(sim.decidePermission(p.id, { behavior: 'allow', forSession: true }, start + 1)).toBe(false);
+        // O cartão recusa direto: o app-server não leva motivo.
+        expect(sim.decidePermission(p.id, { behavior: 'deny' }, start + 1)).toBe(true);
+        expect(agentOf(sim, id, start + 1).recent.at(-1)).toMatchObject({ icon: '🚫', text: 'Recusado no Habblaud', detail: p.title });
+      }
+      const after = agentOf(sim, id, start + 1);
+      expect(after.status).toBe('working');
+      expect(after.permission).toBeUndefined();
+      expect(sim.decidePermission(p.id, { behavior: 'allow' }, start + 2)).toBe(false);
+    }
+    expect(tools).toEqual(new Set(['exec_command', 'apply_patch']));
+  });
+
+  it('parallel: recusar com motivo vale (se o canal oferece recusar), mas o motivo não vai à atividade (o app-server não o leva ao Codex)', () => {
+    let checked = 0;
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const sim = new DemoSimulator({ seed, idPrefix: 'demo:' }, start);
+      const id = sim.forcePermission(start, 'permission', 'codex', 'parallel')!;
+      const p = agentOf(sim, id).permission!;
+      if (!p.decisions!.includes('decline')) continue;
+      expect(sim.decidePermission(p.id, { behavior: 'deny', message: 'motivo que não chega' }, start + 1)).toBe(true);
+      const last = agentOf(sim, id, start + 1).recent.at(-1)!;
+      expect(last).toMatchObject({ icon: '🚫', text: 'Recusado no Habblaud', detail: p.title });
+      expect(JSON.stringify(last)).not.toContain('motivo que não chega');
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('parallel sem prazo: o cartão fica enquanto o agente espera (além dos 25 s do hook) e fecha quando o terminal responde primeiro', () => {
+    const sim = new DemoSimulator({ seed: 5 }, start);
+    const id = sim.forcePermission(start, 'permission', 'codex', 'parallel')!;
+    let t = start;
+    for (; t < start + 120_000; t += 250) {
+      sim.tick(t);
+      const a = agentOf(sim, id, t);
+      if (a.status !== 'waiting') break;
+      expect(a.permission?.mode).toBe('parallel');
+    }
+    expect(t - start).toBeGreaterThanOrEqual(DEMO_CODEX_PERMISSION_MS);
+    const after = agentOf(sim, id, t);
+    expect(after.status).toBe('working');
+    expect(after.permission).toBeUndefined();
+  });
+
+  it('parallel: Aprovar simples e "Responder no terminal" (só fecha o cartão; o agente segue esperando o terminal)', () => {
+    const sim = new DemoSimulator({ seed: 6 }, start);
+    const id = sim.forcePermission(start, 'permission', 'codex', 'parallel')!;
+    const p = agentOf(sim, id).permission!;
+    expect(p.mode).toBe('parallel');
+    expect(sim.decidePermission(p.id, { behavior: 'allow' }, start + 1)).toBe(true);
+    expect(agentOf(sim, id, start + 1).recent.at(-1)).toMatchObject({ icon: '✅', text: 'Aprovado no Habblaud', detail: p.title });
+
+    const sim2 = new DemoSimulator({ seed: 7 }, start);
+    const id2 = sim2.forcePermission(start, 'permission', 'codex', 'parallel')!;
+    const p2 = agentOf(sim2, id2).permission!;
+    expect(sim2.decidePermission(p2.id, { behavior: 'terminal' }, start + 1)).toBe(true);
+    const still = agentOf(sim2, id2, start + 1);
+    expect(still.status).toBe('waiting');
+    expect(still.permission).toBeUndefined();
+  });
+
+  it('"nesta sessão" só vale no canal paralelo (nem no hook do Codex, nem no Claude Code)', () => {
+    const sim = new DemoSimulator({ seed: 4 }, start);
+    const codex = sim.forcePermission(start, 'permission', 'codex')!;
+    const pc = agentOf(sim, codex).permission!;
+    expect(pc.mode).toBeUndefined();
+    expect(sim.decidePermission(pc.id, { behavior: 'allow', forSession: true }, start + 1)).toBe(false);
+    const claude = sim.forcePermission(start, 'permission')!;
+    const pl = agentOf(sim, claude).permission!;
+    expect(sim.decidePermission(pl.id, { behavior: 'allow', forSession: true }, start + 1)).toBe(false);
+    expect(sim.decidePermission(pl.id, { behavior: 'allow' }, start + 1)).toBe(true);
+  });
+
+  it('com o tempo: a sessão do Codex da abertura usa o canal paralelo (TUI com daemon); cada sessão fica num canal só', () => {
+    const sim = new DemoSimulator({ seed: 2, speed: 10, sessions: 5 }, 0);
+    const host = sim.snapshot(0).agents.find((a) => a.provider === 'codex' && a.kind === 'main')!.id;
+    const modes = new Map<string, Set<string>>();
+    for (let t = 0; t < 1_800_000; t += 250) {
+      sim.tick(t);
+      for (const a of sim.snapshot(t).agents) {
+        if (a.provider !== 'codex' || !a.permission) continue;
+        const mode = a.permission.mode ?? 'hook';
+        if (mode === 'parallel') expect(a.permission.decisions?.length).toBeGreaterThan(0);
+        else expect(a.permission.decisions).toBeUndefined();
+        modes.set(a.id, (modes.get(a.id) ?? new Set()).add(mode));
+      }
+    }
+    expect(modes.get(host)).toEqual(new Set(['parallel']));
+    for (const m of modes.values()) expect(m.size).toBe(1);
+    expect(new Set([...modes.values()].flatMap((m) => [...m]))).toEqual(new Set(['parallel', 'hook']));
   });
 });

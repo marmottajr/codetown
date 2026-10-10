@@ -15,19 +15,25 @@
 // conta no corpo). Diferenças: o agente casa pelo thread (agent_id ?? session_id) entre os agentes do Codex; sem
 // sugestões nem perguntas; recusar só com motivo (sem interromper); sem a busca da resposta no transcript (no Codex o
 // terminal só pede a aprovação depois que o hook termina, então ela nunca é respondida lá enquanto ele espera).
+//
+// Canal paralelo do Codex (TUI ligado ao daemon, server/sources/codex/appserver/service.ts): o pedido entra por
+// registerParallel em modo 'parallel', sem prazo e sem hook esperando; vale a 1ª resposta (escritório ou terminal). A
+// decisão do escritório vai ao app-server (ParallelSink.decide) e o cartão só fecha com o resolveParallel
+// (serverRequest/resolved: a resposta pode ter perdido a corrida), com o agente que saiu ou, decidido aqui, depois de
+// RESOLVED_KEEP_MS sem a confirmação. Numa thread atendida pelo canal o hook do Codex recebe {skip: 'parallel'} e sai
+// sem decidir; se ele chegou antes (corrida), o registerParallel da mesma thread o libera.
 import { randomBytes } from 'node:crypto';
 import { describeTool, maskSecrets, truncate } from '../../shared/activity';
-import { ANSWER_OTHER_MAX, answerSummary, ASK_TOOL, checkAnswers } from '../../shared/answers';
-import type { Activity, AgentInfo, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo } from '../../shared/types';
+import { answerSummary, checkAnswers } from '../../shared/answers';
+import type { Activity, AgentInfo, CodexDecision, PermissionAnswer, PermissionDecision, PermissionRequestInfo } from '../../shared/types';
 import { errMsg, log } from '../log';
 import { toolView } from '../sources/terminal';
 import { codexToolView } from './codex';
+import { askCount, askFormat, fitsFormat, isQuestion, parallelChoice, parseHookInput, pickSuggestions, present, rec, unsupportedByCodex, wrongKind, type AskFormat } from './registry-parse';
 import { callSignature, scanToolCall } from './transcript';
 
-/** Tempo que o hook espera por padrão (ele manda o próprio em `timeout_ms`). */
-export const DEFAULT_TIMEOUT_MS = 300_000;
-export const MIN_TIMEOUT_MS = 5_000;
-export const MAX_TIMEOUT_MS = 30 * 60_000;
+export { applyPermission, DEFAULT_TIMEOUT_MS, InvalidRequest, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS, parseDecision, pickSuggestions } from './registry-parse';
+
 /** Folga depois do tempo limite do hook antes de o pedido sumir sozinho. */
 export const EXPIRY_GRACE_MS = 5_000;
 /** Resposta mais longa de um long-poll (o hook pergunta de novo em seguida). */
@@ -42,12 +48,18 @@ export const SCAN_EVERY_MS = 1_000;
 export const LEFT_WAITING_MS = 3_000;
 export const MAX_PENDING = 32;
 
-const DESTINATIONS = new Set(['session', 'localSettings', 'projectSettings', 'userSettings']);
-const MAX_SUGGESTIONS = 4;
-const MAX_MESSAGE = 1_000;
-const RULE_MAX = 160;
-/** Respostas numa decisão `answer` (o AskUserQuestion faz até 4 perguntas). */
-const MAX_ANSWERS = 4;
+/** Decisões do app-server que o registro conhece (a lista padrão de um pedido 'parallel'). */
+const CODEX_DECISIONS: readonly CodexDecision[] = ['accept', 'acceptForSession', 'decline', 'cancel'];
+/** 'parallel': sem prazo (nem o relógio nem a página leem o expiresAt desses pedidos). */
+const NO_EXPIRY = Number.MAX_SAFE_INTEGER;
+/** Justificativa do pedido (app-server) no detalhe da atividade. */
+const REASON_MAX = 300;
+const PARALLEL_DONE: Readonly<Record<CodexDecision, string>> = {
+  accept: 'Aprovado no Habblaud',
+  acceptForSession: 'Aprovado no Habblaud (nesta sessão)',
+  decline: 'Recusado no Habblaud',
+  cancel: 'Recusado no Habblaud (e interrompido)',
+};
 
 /** O que o registro usa do Office (interface mínima: facilita os testes). */
 export interface OfficeLike {
@@ -82,9 +94,32 @@ export interface RegistryOptions {
   maxPending?: number;
 }
 
-export type SkipReason = 'no-viewers' | 'unknown-session' | 'unsupported-tool' | 'too-many';
+/** parallel = a thread é atendida pelo canal paralelo do Codex (o pedido chega pelo app-server). */
+export type SkipReason = 'no-viewers' | 'unknown-session' | 'unsupported-tool' | 'too-many' | 'parallel';
 export type RegisterResult = { id: string; expiresAt: number } | { skip: SkipReason };
-export type ReleaseReason = 'terminal' | 'answered' | 'expired' | 'orphan' | 'gone' | 'shutdown';
+/** replaced = pedido do hook do Codex trocado pelo pedido 'parallel' da mesma thread (o hook sai sem decidir). */
+export type ReleaseReason = 'terminal' | 'answered' | 'expired' | 'orphan' | 'gone' | 'shutdown' | 'replaced';
+
+/** Pedido de aprovação do canal paralelo do Codex (app-server), para registerParallel. */
+export interface ParallelRequestInput {
+  /** Chave única do pedido no canal (ex.: `<conta>:<requestId>`). */
+  key: string;
+  /** Conta do Codex (id do Habblaud, já desambiguado) e thread. */
+  account: string;
+  threadId: string;
+  tool: string; // 'exec_command' | 'apply_patch' (nomes do codexToolView)
+  input: Record<string, unknown>;
+  cwd?: string;
+  reason?: string;
+  decisions: CodexDecision[];
+}
+
+export interface ParallelSink {
+  /** Repassa a decisão ao app-server. 'gone' = o pedido já foi respondido/cancelado lá. */
+  decide(key: string, decision: CodexDecision): Promise<'ok' | 'gone' | 'unavailable'>;
+  /** A thread é atendida pelo canal paralelo agora (o hook deve sair sem decidir). */
+  owns(account: string, threadId: string): boolean;
+}
 
 /**
  * Resposta de uma espera do hook. `answer`: as respostas por posição (o hook as troca pelos textos originais
@@ -97,25 +132,17 @@ export type WaitResult =
   | { status: 'released'; reason: ReleaseReason };
 
 /**
- * invalid = sugestão de regra desconhecida; invalid-answer = decisão que não serve para o tipo de pedido (pergunta
- * se responde com `answer`, e só ela) ou respostas que não batem com as perguntas; unsupported = o Codex não aceita
- * (interromper ou "sempre permitir").
+ * invalid = sugestão de regra desconhecida (ou `forSession` num pedido do Claude Code); invalid-answer = decisão que
+ * não serve para o tipo de pedido (pergunta se responde com `answer`, e só ela) ou respostas que não batem com as
+ * perguntas; unsupported = o Codex não aceita (interromper, "sempre permitir" ou, num pedido 'parallel', uma decisão
+ * que ele não oferece); unavailable = pedido 'parallel' cujo canal com o app-server não está disponível (a decisão
+ * não saiu).
  */
-export type DecideResult = 'ok' | 'not-found' | 'conflict' | 'invalid' | 'invalid-answer' | 'unsupported';
-
-/** Erro de validação do corpo vindo do hook (vira 400). */
-export class InvalidRequest extends Error {}
+export type DecideResult = 'ok' | 'not-found' | 'conflict' | 'invalid' | 'invalid-answer' | 'unsupported' | 'unavailable';
 
 interface Waiter {
   done: (r: WaitResult) => void;
   timer: ReturnType<typeof setTimeout>;
-}
-
-/** Formato ORIGINAL de uma pergunta do AskUserQuestion: para conferir as respostas, que voltam por posição. */
-interface AskFormat {
-  multiSelect: boolean;
-  /** Quantas opções o original tem (inclusive as que o Habblaud não mostra). */
-  options: number;
 }
 
 interface Pending {
@@ -141,196 +168,16 @@ interface Pending {
   idleSince: number;
   outcome?: Exclude<WaitResult, { status: 'pending' }>;
   resolvedAt?: number;
+  /** Pedido 'parallel' (canal do app-server). Nele, `sessionId` é a thread. */
+  parallel?: ParallelState;
 }
 
-type Rec = Record<string, unknown>;
-
-function rec(v: unknown): Rec | undefined {
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Rec) : undefined;
-}
-
-function shortStr(v: unknown, max: number): string | undefined {
-  return typeof v === 'string' && v.trim() && v.length <= max ? v.trim() : undefined;
-}
-
-function isIndex(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
-}
-
-/** Pedido que se responde com `answer` (as perguntas do AskUserQuestion; o Codex não as manda pelo hook). */
-function isQuestion(info: { tool: string; provider?: string }): boolean {
-  return info.tool === ASK_TOOL && info.provider !== 'codex';
-}
-
-/** O Codex não aceita interromper nem "sempre permitir" (o hook dele só aprova ou recusa com motivo). */
-function unsupportedByCodex(info: PermissionRequestInfo, d: PermissionDecision): boolean {
-  return info.provider === 'codex' && (d.interrupt === true || d.suggestion !== undefined);
-}
-
-/**
- * A decisão não serve para o tipo de pedido: `answer` só vale para perguntas, e pergunta não se aprova sem as
- * respostas (recusar e "responder no terminal" valem para os dois).
- */
-function wrongKind(info: PermissionRequestInfo, d: PermissionDecision): boolean {
-  return d.behavior === 'answer' ? !isQuestion(info) || !info.questions?.length : d.behavior === 'allow' && isQuestion(info);
-}
-
-/** Formato original das perguntas do AskUserQuestion, por posição. */
-function askFormat(raw: unknown): Array<AskFormat | undefined> {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((q) => {
-    const r = rec(q);
-    return r ? { multiSelect: r.multiSelect === true, options: Array.isArray(r.options) ? r.options.length : 0 } : undefined;
-  });
-}
-
-/** Perguntas de verdade (com texto) no original: todas precisam aparecer no escritório para dar para responder por lá. */
-function askCount(raw: unknown): number {
-  if (!Array.isArray(raw)) return 0;
-  return raw.filter((q) => {
-    const text = rec(q)?.question;
-    return typeof text === 'string' && !!text.trim();
-  }).length;
-}
-
-/** A resposta cabe no formato original da pergunta (posições das opções e quantas escolhas). */
-function fitsFormat(f: AskFormat | undefined, a: PermissionAnswer): boolean {
-  if (!f) return false;
-  const options = a.options ?? [];
-  if (options.some((i) => i >= f.options)) return false;
-  return f.multiSelect || options.length + (a.other ? 1 : 0) === 1;
-}
-
-/** Agente que ainda pode receber um pedido (não saiu nem concluiu). */
-function present(a: AgentInfo | undefined): a is AgentInfo {
-  return !!a && a.status !== 'offline' && a.status !== 'done';
-}
-
-/** "Bash(npm test:*)" a partir de {toolName, ruleContent}. */
-function ruleText(raw: unknown): string | undefined {
-  const r = rec(raw);
-  const tool = shortStr(r?.toolName, 200);
-  if (!tool) return undefined;
-  const content = typeof r?.ruleContent === 'string' && r.ruleContent.trim() ? r.ruleContent : undefined;
-  return truncate(maskSecrets(content ? `${tool}(${content})` : tool), RULE_MAX);
-}
-
-/**
- * Sugestões "sempre permitir" que o Habblaud oferece: só `addRules` com `behavior: "allow"` num destino
- * conhecido. A página escolhe pela posição e o hook aplica a sugestão ORIGINAL que recebeu do Claude Code
- * (o servidor nunca inventa regras).
- */
-export function pickSuggestions(raw: unknown): PermissionSuggestionInfo[] {
-  if (!Array.isArray(raw)) return [];
-  const out: PermissionSuggestionInfo[] = [];
-  raw.forEach((s, index) => {
-    const r = rec(s);
-    if (!r || r.type !== 'addRules' || r.behavior !== 'allow' || typeof r.destination !== 'string' || !DESTINATIONS.has(r.destination)) return;
-    const rules = Array.isArray(r.rules) ? r.rules.map(ruleText).filter((x): x is string => !!x) : [];
-    if (!rules.length || out.length >= MAX_SUGGESTIONS) return;
-    out.push({ index, rules: rules.slice(0, 4), destination: r.destination });
-  });
-  return out;
-}
-
-/**
- * Põe o pedido pendente no agente do snapshot (cópia já clonada pelo Office). Enquanto há pedido, o agente
- * aparece como 'waiting' — inclusive o subagente em segundo plano, cujo diálogo só aparece no terminal
- * depois que o hook responde (o registro de sessões do Claude Code não diz que ele espera).
- */
-export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefined): AgentInfo {
-  if (!p || !present(a)) return a;
-  a.permission = p;
-  if (a.status !== 'waiting') {
-    a.status = 'waiting';
-    a.statusSince = p.createdAt;
-  }
-  a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : p.provider === 'codex' ? 'aprovar um comando' : 'aprovar uma permissão';
-  return a;
-}
-
-/**
- * Valida o JSON do hook (o mesmo que o Claude Code entrega no stdin, com `timeout_ms` do hook). O hook do Codex manda
- * também `provider: "codex"`, a conta (`account`, o basename do CODEX_HOME) e o caminho dela (`codexHome`); nele,
- * `agent_id` é o thread do subagente (e `session_id`, o thread raiz).
- */
-export function parseHookInput(raw: unknown): {
-  provider?: 'codex';
-  account?: string;
-  codexHome?: string;
-  sessionId: string;
-  agentId?: string;
-  agentType?: string;
-  cwd?: string;
-  tool: string;
-  input: Rec;
-  suggestions: unknown;
-  timeoutMs: number;
-} {
-  const r = rec(raw);
-  const sessionId = shortStr(r?.session_id, 200);
-  const tool = shortStr(r?.tool_name, 200);
-  if (!r || !sessionId || !tool) throw new InvalidRequest('esperado o JSON do hook PermissionRequest (session_id e tool_name)');
-  const t = typeof r.timeout_ms === 'number' && Number.isFinite(r.timeout_ms) ? r.timeout_ms : DEFAULT_TIMEOUT_MS;
-  const codex = r.provider === 'codex';
-  return {
-    ...(codex ? { provider: 'codex' as const, account: shortStr(r.account, 200), codexHome: shortStr(r.codexHome, 4_096) } : {}),
-    sessionId,
-    agentId: shortStr(r.agent_id, 200),
-    agentType: shortStr(r.agent_type, 120),
-    cwd: shortStr(r.cwd, 4_096),
-    tool,
-    input: rec(r.tool_input) ?? {},
-    suggestions: codex ? undefined : r.permission_suggestions,
-    timeoutMs: Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, t)),
-  };
-}
-
-/**
- * Respostas de uma decisão `answer`: até MAX_ANSWERS, cada uma com a posição da pergunta, as posições das opções
- * (distintas; ficam em ordem crescente) e/ou o texto livre (aparado, até ANSWER_OTHER_MAX). Se batem com as
- * perguntas do pedido, quem confere é o registro (decide).
- */
-function parseAnswers(raw: unknown): PermissionAnswer[] | undefined {
-  if (!Array.isArray(raw) || !raw.length || raw.length > MAX_ANSWERS) return undefined;
-  const out: PermissionAnswer[] = [];
-  for (const item of raw) {
-    const r = rec(item);
-    if (!r || !isIndex(r.question)) return undefined;
-    const a: PermissionAnswer = { question: r.question };
-    if (r.options !== undefined) {
-      if (!Array.isArray(r.options) || !r.options.every(isIndex) || new Set(r.options).size !== r.options.length) return undefined;
-      if (r.options.length) a.options = (r.options as number[]).slice().sort((x, y) => x - y);
-    }
-    if (r.other !== undefined) {
-      if (typeof r.other !== 'string') return undefined;
-      const other = r.other.trim();
-      if (other.length > ANSWER_OTHER_MAX) return undefined;
-      if (other) a.other = other;
-    }
-    out.push(a);
-  }
-  return out;
-}
-
-/** Corpo de uma decisão vinda da página. */
-export function parseDecision(raw: unknown): PermissionDecision | undefined {
-  const r = rec(raw);
-  if (r?.behavior === 'answer') {
-    const answers = parseAnswers(r.answers);
-    return answers ? { behavior: 'answer', answers } : undefined;
-  }
-  if (!r || (r.behavior !== 'allow' && r.behavior !== 'deny' && r.behavior !== 'terminal')) return undefined;
-  const d: PermissionDecision = { behavior: r.behavior };
-  if (r.behavior === 'deny') {
-    if (typeof r.message === 'string' && r.message.trim()) d.message = r.message.trim().slice(0, MAX_MESSAGE);
-    if (r.interrupt === true) d.interrupt = true;
-  }
-  if (r.behavior === 'allow' && r.suggestion !== undefined) {
-    if (typeof r.suggestion !== 'number' || !Number.isInteger(r.suggestion) || r.suggestion < 0) return undefined;
-    d.suggestion = r.suggestion;
-  }
-  return d;
+interface ParallelState {
+  key: string;
+  /** Decisão do escritório a caminho do app-server ou já entregue (uma só por pedido). */
+  sent?: CodexDecision;
+  /** Quando o app-server aceitou a decisão daqui (o cartão espera o resolveParallel). */
+  sentAt?: number;
 }
 
 export class PermissionRegistry {
@@ -341,6 +188,9 @@ export class PermissionRegistry {
   private readonly orphanMs: number;
   private readonly resolvedKeepMs: number;
   private readonly maxPending: number;
+  private sink: ParallelSink | undefined;
+  /** ParallelRequestInput.key → id do pedido 'parallel' em aberto. */
+  private byKey = new Map<string, string>();
 
   constructor(private readonly opts: RegistryOptions) {
     this.now = opts.now ?? Date.now;
@@ -359,6 +209,11 @@ export class PermissionRegistry {
       }
     }, this.opts.tickMs ?? 500);
     this.timer.unref?.();
+  }
+
+  /** Canal paralelo do Codex (CodexAppServerService); undefined = desligado. */
+  setParallelSink(sink: ParallelSink | undefined): void {
+    this.sink = sink;
   }
 
   /** Para o relógio e libera quem estiver esperando (o hook sai sem decidir). */
@@ -388,11 +243,15 @@ export class PermissionRegistry {
     const ask = isQuestion(req);
     // Pergunta: todas precisam aparecer no escritório (o hook só responde se cada uma tiver resposta).
     if (ask && (!questions?.length || questions.length !== askCount(req.input.questions))) return { skip: 'unsupported-tool' };
+    const account = codex ? (this.opts.codexAccount?.(req.account, req.codexHome) ?? req.account) : undefined;
+    // Thread do Codex atendida pelo canal paralelo (a da chamada: o subagente tem a dele): o pedido chega pelo
+    // app-server, o hook sai sem decidir.
+    if (codex && this.sink?.owns(account ?? '', req.agentId ?? req.sessionId)) return { skip: 'parallel' };
     if (this.opts.viewers() <= 0) return { skip: 'no-viewers' };
-    const target = codex
-      ? this.resolveCodexAgent(req.sessionId, req.agentId, req.agentType, this.opts.codexAccount?.(req.account, req.codexHome) ?? req.account)
-      : this.resolveAgent(req.sessionId, req.agentId, req.agentType);
+    const target = codex ? this.resolveCodexAgent(req.sessionId, req.agentId, req.agentType, account) : this.resolveAgent(req.sessionId, req.agentId, req.agentType);
     if (!target) return { skip: 'unknown-session' };
+    // Um cartão só: o agente já tem um pedido do canal paralelo (o canal atende esta sessão).
+    if (codex && this.openParallelOf(target.id)) return { skip: 'parallel' };
     if (this.size >= this.maxPending) return { skip: 'too-many' };
 
     const now = this.now();
@@ -434,6 +293,61 @@ export class PermissionRegistry {
     }
     this.opts.office.markDirty();
     return { id, expiresAt: info.expiresAt + EXPIRY_GRACE_MS };
+  }
+
+  /**
+   * Pedido de aprovação do canal paralelo do Codex ('parallel'): entra mesmo sem página aberta (nada fica esperando)
+   * e sem prazo. A mesma `key` em aberto devolve o mesmo id (o thread/resume e cada reconexão reenviam os pendentes).
+   * O agente é o da thread (a conta desempata). Pedidos do hook do Codex esperando nessa thread e nesse agente
+   * (corrida) são liberados: o hook sai sem decidir e fica um cartão só.
+   */
+  registerParallel(req: ParallelRequestInput): { id: string } | { skip: SkipReason } {
+    const known = this.byKey.get(req.key);
+    if (known !== undefined) return { id: known };
+    const target = this.resolveCodexAgent(req.threadId, undefined, undefined, req.account);
+    if (!target) return { skip: 'unknown-session' };
+    for (const p of [...this.pending.values()]) {
+      if (p.codex && !p.parallel && !p.outcome && p.agentId === target.id && (p.hookAgentId ?? p.sessionId) === req.threadId) this.release(p, 'replaced');
+    }
+    if (this.size >= this.maxPending) return { skip: 'too-many' };
+
+    const now = this.now();
+    const id = `p-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
+    const input = rec(req.input) ?? {};
+    const view = codexToolView(req.tool, input, req.cwd);
+    // Só as decisões que o registro conhece, na ordem do canal; nenhuma = as quatro.
+    const decisions = [...new Set(req.decisions.filter((d) => CODEX_DECISIONS.includes(d)))];
+    const info: PermissionRequestInfo = {
+      id,
+      provider: 'codex',
+      mode: 'parallel',
+      decisions: decisions.length ? decisions : [...CODEX_DECISIONS],
+      tool: req.tool,
+      title: view.title,
+      text: view.text,
+      icon: view.icon,
+      createdAt: now,
+      expiresAt: NO_EXPIRY,
+    };
+    if (view.input) info.input = view.input;
+    if (view.inputKind) info.inputKind = view.inputKind;
+    this.pending.set(id, { info, codex: true, agentId: target.id, sessionId: req.threadId, signature: '', lastScanAt: 0, waiters: new Set(), idleSince: now, parallel: { key: req.key } });
+    this.byKey.set(req.key, id);
+
+    // Justificativa do app-server: mascarada ANTES de cortar.
+    const reason = req.reason?.trim() ? truncate(maskSecrets(req.reason.trim()), REASON_MAX) : '';
+    this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(`Pede permissão: ${view.text}`, 46), detail: reason ? `${view.title} — ${reason}` : view.title, tool: 'PermissionRequest' }, false);
+    this.opts.office.noticePermission(target.id, view.text);
+    this.opts.office.markDirty();
+    return { id };
+  }
+
+  /** O pedido foi respondido em outro lugar (terminal) ou cancelado: o cartão fecha. */
+  resolveParallel(key: string): void {
+    const id = this.byKey.get(key);
+    const p = id === undefined ? undefined : this.pending.get(id);
+    if (p && !p.outcome) this.release(p, 'answered');
+    else this.byKey.delete(key);
   }
 
   /** Detalhe completo de um pedido em aberto (com os argumentos), ou undefined. */
@@ -487,17 +401,28 @@ export class PermissionRegistry {
     return { result, cancel: () => waiter && this.dropWaiter(p, waiter) };
   }
 
-  /** Decisão da página. Pedido do demo vai para `demoDecide` (com as mesmas regras para as perguntas). */
-  decide(id: string, d: PermissionDecision): DecideResult {
+  /**
+   * Decisão da página. Pedido do demo vai para `demoDecide` (com as mesmas regras para as perguntas e para o modo
+   * 'parallel'). Promise só num pedido 'parallel' de verdade: a decisão vai ao app-server (ParallelSink.decide).
+   */
+  decide(id: string, d: PermissionDecision): DecideResult | Promise<DecideResult> {
     const p = this.pending.get(id);
     if (!p) {
       const demo = this.opts.demoDetail?.(id);
+      const choice = demo?.mode === 'parallel' ? parallelChoice(demo, d) : undefined;
+      if (choice === 'unsupported' || choice === 'invalid-answer') return choice;
       if (demo && unsupportedByCodex(demo, d)) return 'unsupported';
       if (demo && (wrongKind(demo, d) || (d.behavior === 'answer' && !checkAnswers(demo.questions ?? [], d.answers)))) return 'invalid-answer';
       return this.opts.demoDecide?.(id, d) ? 'ok' : 'not-found';
     }
     if (p.outcome) return 'conflict';
+    if (p.parallel) return this.decideParallel(p, p.parallel, d);
+    // Hook do Codex com o prazo vencido: ele já desistiu (não volta a esperar) e o terminal pede a aprovação; a decisão
+    // não chegaria a ninguém. Vale como pedido vencido (o cartão fecha na folga). O hook do Claude Code pode voltar a
+    // esperar: lá nada muda.
+    if (p.codex && this.now() > p.info.expiresAt) return 'not-found';
     if (unsupportedByCodex(p.info, d)) return 'unsupported';
+    if (d.forSession) return 'invalid';
     if (d.suggestion !== undefined && !p.info.suggestions?.some((s) => s.index === d.suggestion)) return 'invalid';
     if (d.behavior === 'terminal') {
       this.release(p, 'terminal');
@@ -541,6 +466,13 @@ export class PermissionRegistry {
         if (now - (p.resolvedAt ?? now) >= this.resolvedKeepMs) this.pending.delete(id);
         continue;
       }
+      if (p.parallel) {
+        // Canal paralelo: sem prazo nem hook esperando (nada de expiração nem de órfão). Decidido aqui e sem o
+        // serverRequest/resolved por RESOLVED_KEEP_MS: o app-server já tem a resposta, o cartão fecha.
+        if (!present(this.opts.office.get(p.agentId))) this.release(p, 'gone');
+        else if (p.parallel.sentAt !== undefined && now - p.parallel.sentAt >= this.resolvedKeepMs) this.release(p, 'answered');
+        continue;
+      }
       if (now >= p.info.expiresAt + EXPIRY_GRACE_MS) this.release(p, 'expired');
       else if (!p.waiters.size && now - p.idleSince >= this.orphanMs) this.release(p, 'orphan');
       else if (!present(this.opts.office.get(p.agentId))) this.release(p, 'gone');
@@ -552,6 +484,55 @@ export class PermissionRegistry {
   }
 
   // ---------------------------------------------------------------- internos
+
+  /** O agente tem um pedido do canal paralelo em aberto. */
+  private openParallelOf(agentId: string): boolean {
+    for (const p of this.pending.values()) if (p.parallel && !p.outcome && p.agentId === agentId) return true;
+    return false;
+  }
+
+  /**
+   * Decisão num pedido 'parallel'. 'terminal' só fecha o cartão (o pedido segue no terminal); as demais vão ao
+   * app-server, uma vez só. 'ok' = o app-server recebeu (o cartão espera o resolveParallel, porque a resposta pode ter
+   * perdido a corrida); 'gone' = já respondido ou cancelado lá (o cartão fecha); 'unavailable' ou erro = não saiu.
+   */
+  private decideParallel(p: Pending, par: ParallelState, d: PermissionDecision): DecideResult | Promise<DecideResult> {
+    const choice = parallelChoice(p.info, d);
+    if (choice === 'terminal') {
+      this.release(p, 'terminal');
+      return 'ok';
+    }
+    if (choice === 'unsupported' || choice === 'invalid-answer') return choice;
+    if (par.sent) return 'conflict';
+    const sink = this.sink;
+    if (!sink) return 'unavailable';
+    par.sent = choice;
+    return new Promise<'ok' | 'gone' | 'unavailable'>((done) => done(sink.decide(par.key, choice)))
+      .catch((err: unknown): 'unavailable' => {
+        log.warnOnce(`permissions-sink:${errMsg(err)}`, `Pedidos de permissão: o canal paralelo falhou ao repassar a decisão (${errMsg(err)}).`);
+        return 'unavailable';
+      })
+      .then((r): DecideResult => {
+        if (r === 'unavailable') {
+          delete par.sent;
+          return 'unavailable';
+        }
+        if (r === 'gone') {
+          if (!p.outcome) this.release(p, 'answered');
+          return 'not-found';
+        }
+        const now = this.now();
+        par.sentAt = now;
+        const ok = choice === 'accept' || choice === 'acceptForSession';
+        this.opts.office.addActivity(
+          p.agentId,
+          { id: `${p.agentId}#perm-${ok ? 'ok' : 'no'}:${p.info.id}`, at: now, kind: ok ? 'other' : 'wait', icon: ok ? '✅' : '🚫', text: PARALLEL_DONE[choice], detail: p.info.title, tool: 'PermissionRequest' },
+          false,
+        );
+        this.opts.office.markDirty();
+        return 'ok';
+      });
+  }
 
   private resolveAgent(sessionId: string, agentId?: string, agentType?: string): { id: string; subagent?: string } | undefined {
     const office = this.opts.office;
@@ -638,8 +619,10 @@ export class PermissionRegistry {
     p.resolvedAt = this.now();
     const delivered = p.waiters.size > 0;
     for (const w of [...p.waiters]) this.dropWaiter(p, w, outcome);
-    // Entregue a quem esperava: some já; senão fica guardado até o hook voltar (ou RESOLVED_KEEP_MS).
-    if (delivered) this.pending.delete(p.info.id);
+    // Entregue a quem esperava: some já; senão fica guardado até o hook voltar (ou RESOLVED_KEEP_MS). Pedido
+    // 'parallel': nenhum hook vem buscar, some já, e a key fica livre (o app-server reaproveita os requestId).
+    if (delivered || p.parallel) this.pending.delete(p.info.id);
+    if (p.parallel && this.byKey.get(p.parallel.key) === p.info.id) this.byKey.delete(p.parallel.key);
     this.opts.office.markDirty();
   }
 

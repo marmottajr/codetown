@@ -389,7 +389,7 @@ export function groupRooms(snap: Pick<OfficeSnapshot, 'rooms' | 'agents' | 'acco
     const nodes: AgentNode[] = [];
     let matches = 0;
     for (const a of top) {
-      const subs = subsOf.get(a.id) ?? [];
+      const subs = subtreeOf(a, subsOf);
       const selfVisible = visible(a);
       const visibleSubs = selfVisible ? subs.filter((s) => !hidden.has(s.account)) : subs.filter(visible);
       if (!selfVisible && visibleSubs.length === 0) continue;
@@ -402,6 +402,32 @@ export function groupRooms(snap: Pick<OfficeSnapshot, 'rooms' | 'agents' | 'acco
     groups.push({ room, accounts: present, nodes, agents, tasks: aggregateTasks(agents), matches });
   }
   return groups;
+}
+
+/**
+ * Subagentes sob um nó do topo, na ordem da árvore (cada neto logo depois do pai). O Codex liga o sub de um sub ao
+ * pai certo; no Claude a lista fica só com os filhos diretos, como sempre foi.
+ */
+function subtreeOf(a: AgentInfo, subsOf: ReadonlyMap<string, AgentInfo[]>): AgentInfo[] {
+  const direct = subsOf.get(a.id) ?? [];
+  if (a.provider !== 'codex') return direct;
+  return direct.flatMap((s) => [s, ...subtreeOf(s, subsOf)]);
+}
+
+/**
+ * Nível de recuo de cada sub da lista da barra (1 = filho direto do principal). Um sub de sub, que vem logo depois do pai,
+ * ganha um nível a mais; sem o pai na lista (busca), fica no 1. No Claude a lista só tem filhos diretos: tudo no 1.
+ */
+export function subLevels(subs: readonly Pick<AgentInfo, 'id' | 'parentId'>[]): Map<string, number> {
+  const levels = new Map<string, number>();
+  for (const s of subs) levels.set(s.id, (s.parentId ? levels.get(s.parentId) ?? 0 : 0) + 1);
+  return levels;
+}
+
+/** Subagentes diretos de `agent` para a gaveta, por urgência. Um sub do Codex também lista os dele; um do Claude, não. */
+export function subagentsOf(agent: Pick<AgentInfo, 'id' | 'kind' | 'provider'>, agents: readonly AgentInfo[]): AgentInfo[] {
+  if (agent.kind === 'sub' && agent.provider !== 'codex') return [];
+  return sortByUrgency(agents.filter((s) => s.parentId === agent.id));
 }
 
 /** Contas distintas presentes em uma lista de agentes, na ordem das contas do snapshot. */

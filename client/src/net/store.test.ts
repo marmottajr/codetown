@@ -163,6 +163,28 @@ describe('OfficeStore: reconexão', () => {
     expect(() => (last() as unknown as { handlers: Map<string, ((e: Event) => void)[]> }).handlers.get('snapshot')![0](bad)).not.toThrow();
     expect(store.snapshot?.rev).toBe(1);
   });
+
+  it('feed: item de id conhecido com outro conteúdo é atualização (no lugar, "feedUpdate", não conta como novo); igual é ignorado', () => {
+    const fresh: unknown[][] = [];
+    const updates: unknown[][] = [];
+    store.on('feed', (f) => fresh.push(f));
+    store.on('feedUpdate', (f) => updates.push(f));
+    store.connect();
+    last().open();
+    const item = (id: string, text: string) => ({ id, agentId: 'a', roomId: 'r', agentName: 'Ana', roomName: 'x', activity: { id, at: 0, kind: 'done', icon: '✅', text } });
+    last().fire('feed', [item('d1', 'Concluiu em 1min 36s'), item('d2', 'Lendo x')]);
+    last().fire('feed', [item('d1', 'Concluiu em 1min 41s')]);
+    expect(store.feed.map((f) => [f.id, f.activity.text])).toEqual([
+      ['d1', 'Concluiu em 1min 41s'],
+      ['d2', 'Lendo x'],
+    ]);
+    expect(fresh).toHaveLength(1);
+    expect(updates).toEqual([[item('d1', 'Concluiu em 1min 41s')]]);
+    // Reconexão: o servidor manda de novo os mesmos itens; nada muda.
+    last().fire('feed', [item('d1', 'Concluiu em 1min 41s'), item('d2', 'Lendo x')]);
+    expect(fresh).toHaveLength(1);
+    expect(updates).toHaveLength(1);
+  });
 });
 
 const snap = (rev: number, build?: string): OfficeSnapshot => ({

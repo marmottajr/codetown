@@ -3,7 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { NAME_MAX, parseAppearanceParts, parseCharacterName, parseSeed } from '../../shared/appearance';
 import type { AgentInfo, ModSummary, OfficeSnapshot, SourceInfo, UpdateStatus } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
-import { handleCodexEvent } from '../codex/http';
+import { type CodexHookAuth, handleCodexEvent, verifyHookCall } from '../codex/http';
+import { createProofChecker } from '../codex/key';
 import type { DayStatsService } from '../history/daystats';
 import type { Office } from '../model/office';
 import type { CodexLive } from '../sources/codex/live';
@@ -34,9 +35,12 @@ export interface ApiDeps {
   timeline?: (req: IncomingMessage, res: ServerResponse, url: URL) => boolean;
   /**
    * Rotas de /api/permissions (responder pelo escritório, server/permissions/http.ts). Só existem com bind
-   * local (ServerConfig.terminal); a trava do Host local é conferida aqui antes de chamá-las.
+   * local (ServerConfig.terminal); a trava do Host local é conferida aqui antes de chamá-las. `codexHook` é a guarda
+   * das chamadas do hook do Codex, a mesma de POST /api/codex/events (um conjunto só de nonces): só as chamadas do hook
+   * do Codex (provider 'codex') conferem com verifyHookCall (codex/http.ts) e recusam 'denied' com 403. As do hook do
+   * Claude nunca: no Docker elas também chegam pelo gateway e sem prova, e seguem só a trava de sempre.
    */
-  permissions?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
+  permissions?: (req: IncomingMessage, res: ServerResponse, path: string, codexHook: CodexHookAuth) => void;
   /**
    * Rotas das mensagens pelo escritório (/api/messages, a caixa de entrada do plugin em /api/mod/inbox e a do auxiliar
    * do Codex em /api/codex/bridge/*, server/messages/http.ts). Só existem com ServerConfig.messages (a trava do
@@ -45,10 +49,15 @@ export interface ApiDeps {
   messages?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
   /**
    * Fonte do Codex ao vivo: recebe os eventos dos hooks do Codex (POST /api/codex/events, server/codex/http.ts). Sem
-   * ela a rota responde {ok: false}. Só com Host local e, fora do Docker, conexão pelo loopback (os eventos só observam:
-   * não dependem da trava do terminal).
+   * ela a rota responde {ok: false}. Só com Host local e a guarda do hook (verifyHookCall: pelo loopback ou, no Docker,
+   * com nonce e prova da chave local do hook); os eventos só observam: não dependem da trava do terminal.
    */
   codexLive?: CodexLive;
+  /**
+   * Chave local do hook do Codex (server/codex/key.ts): fora do Docker, ~/.habblaud/codex-hook.key; no Docker, o arquivo
+   * que o docker:up monta. Sem ela, nenhuma chamada do hook vinda de fora do loopback é aceita.
+   */
+  codexHookKey?: Buffer;
   /** Renomeia a sala (POST /api/rooms/rename {id, name}; vazio volta ao padrão). Devolve o nome em uso, ou undefined se a sala não existe. */
   renameRoom?: (id: string, name: string) => string | undefined;
   /** Estatísticas do "Meu dia" (GET /api/stats, http/stats.ts). */
@@ -66,13 +75,6 @@ const TERMINAL_ROUTE = /^\/api\/agents\/([^/]+)\/terminal$/;
 /** PUT|DELETE /api/agents/:id/character: personagem do projeto (ver Office.setCharacter). */
 const CHARACTER_ROUTE = /^\/api\/agents\/([^/]+)\/character$/;
 const NOT_EDITABLE = 'agente não encontrado: só o agente principal de uma sessão aberta tem personagem editável';
-
-/** Conexão vinda do próprio computador (127.x, ::1 ou ::ffff:127.x). */
-function isLoopbackAddress(addr: string | undefined): boolean {
-  if (!addr) return false;
-  const a = addr.replace(/^::ffff:/i, '');
-  return a === '::1' || /^127\./.test(a);
-}
 
 /** Rotas das mensagens pelo escritório (server/messages/http.ts); /api/mod/summary fica de fora (sem trava). */
 function isMessagesPath(path: string): boolean {
@@ -191,6 +193,7 @@ export function modSummary(
 export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: ServerResponse, url: URL) => boolean {
   const { office, hub, accounts } = deps;
   const terminals = deps.terminal ? deps.terminals : undefined;
+  const codexHook: CodexHookAuth = { key: deps.codexHookKey, check: createProofChecker(deps.codexHookKey), inDocker: deps.inDocker };
 
   const methodNotAllowed = (res: ServerResponse, allow: string) => {
     res.setHeader('Allow', allow);
@@ -307,7 +310,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       } else if (!isLoopbackHost(req.headers.host)) {
         sendJson(res, 403, { error: 'pedidos de permissão só são respondidos pelo próprio computador (http://localhost ou http://127.0.0.1)' });
       } else {
-        deps.permissions(req, res, path);
+        deps.permissions(req, res, path, codexHook);
       }
       return true;
     }
@@ -332,12 +335,12 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       return true;
     }
     if (path === '/api/codex/events') {
-      // Eventos dos hooks do Codex: só observam, mas só valem vindos do próprio computador. Fora do Docker o hook
-      // sempre conecta pelo loopback (o Host sozinho um cliente da rede consegue imitar); no Docker ele chega pela porta
-      // publicada, com o endereço do gateway.
+      // Eventos dos hooks do Codex: só observam, mas só valem vindos do próprio computador. O Host sozinho um cliente da
+      // rede consegue imitar: fora do Docker o hook sempre conecta pelo loopback; no Docker ele chega pela porta
+      // publicada, com o endereço do gateway, e só vale com nonce e prova da chave local do hook (verifyHookCall).
       if (method !== 'POST') methodNotAllowed(res, 'POST');
-      else if (!isLoopbackHost(req.headers.host) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
-        sendJson(res, 403, { error: 'eventos do Codex só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)' });
+      else if (!isLoopbackHost(req.headers.host) || verifyHookCall(req, res, codexHook) === 'denied') {
+        sendJson(res, 403, { error: 'eventos do Codex só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1; no Docker, com a prova da chave do hook)' });
       } else handleCodexEvent(req, res, { live: deps.codexLive, entries: () => accounts.entriesOf('codex') }).catch((err) => fail(res, err));
       return true;
     }

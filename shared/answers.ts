@@ -1,7 +1,7 @@
 // Respostas às perguntas do AskUserQuestion pelo escritório (decisão `answer` de POST /api/permissions/:id/decision):
 // conferência contra as perguntas do pedido e o resumo para a linha do tempo. Código puro, usado pelo servidor
 // (server/permissions/registry.ts), pelo simulador do demo e pela página (cartão de resposta).
-import { maskSecrets, truncate } from './activity';
+import { maskedCut, truncate } from './activity';
 import type { AskQuestion, PermissionAnswer } from './types';
 
 /** Texto livre ("Outro") mais longo aceito numa resposta. */
@@ -49,7 +49,7 @@ export function answerSummary(questions: readonly AskQuestion[], answers: readon
     const q = questions.find((x) => x.index === a.question);
     if (!q) return [];
     const labels = (a.options ?? []).map((i) => q.options.find((o) => o.index === i)?.label ?? `opção ${i + 1}`);
-    if (a.other) labels.push(`“${truncate(maskSecrets(a.other.slice(0, ANSWER_OTHER_MAX)), 80)}”`);
+    if (a.other) labels.push(`“${maskedCut(a.other, 80)}”`);
     return [`${q.header ?? truncate(q.question, 40)}: ${labels.join(', ')}`];
   });
   return truncate(parts.join(' · '), SUMMARY_MAX);

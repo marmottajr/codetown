@@ -12,9 +12,11 @@
 // Claude Code e Codex juntos. Quem é do Codex e o uso dele saem de um sorteio à parte (hash do id da sessão e
 // `codexRng`), sem chamadas a mais no sorteio principal; ainda assim o escritório de cada semente mudou em relação
 // às versões sem o Codex (a 2ª sessão muda de sala, e os agentes do Codex não sorteiam custo). Vale sempre: a mesma
-// semente gera o mesmo escritório.
-import type { AccountInfo, AccountUsage, Activity, AgentInfo, FeedItem, Notice, OfficeSnapshot, PermissionDecision, RoomInfo, ShellJob, TaskItem } from '../types';
-import { describePrompt, describeShellJob, describeTool, SHELL_DONE_TOOL, SHELL_WAIT_TOOL, SPECIAL, type ActivityDescription, type ShellOutcome } from '../activity';
+// semente gera o mesmo escritório. A sessão do Codex da abertura e parte das outras (pelo hash do id) são do TUI
+// ligado ao daemon: os pedidos dela vêm pelo canal paralelo ('parallel', sem prazo; vale quem responder primeiro);
+// as demais usam o hook (25 s). Isso também não gasta sorteio.
+import type { AccountInfo, AccountUsage, Activity, AgentInfo, FeedItem, Notice, OfficeSnapshot, PermissionDecision, PermissionRequestInfo, RoomInfo, ShellJob, TaskItem } from '../types';
+import { codexApprovalReason, describePrompt, describeShellJob, describeTool, SHELL_DONE_TOOL, SHELL_WAIT_TOOL, SPECIAL, type ActivityDescription, type ShellOutcome } from '../activity';
 import { answerSummary, ASK_TOOL, checkAnswers } from '../answers';
 import { describeGitHubEvent, GITHUB_TOOL, RoomEffects } from '../github';
 import { hash32, mulberry32 } from '../hash';
@@ -113,6 +115,8 @@ const CODEX_MODELS = ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-mini'];
 const CODEX_SUB_ROLES = ['explorer', 'worker', 'reviewer'];
 /** Parte das sessões novas que abre no Codex (decidida pelo hash do id da sessão). */
 const CODEX_SHARE = 30;
+/** Parte das sessões novas do Codex no TUI ligado ao daemon (canal paralelo), pelo hash do id da sessão. */
+const CODEX_PARALLEL_SHARE = 50;
 
 /** Comandos que os agentes deixam rodando em segundo plano (e encerram o turno esperando). */
 const BACKGROUND_JOBS: Array<{ description: string; command: string }> = [
@@ -186,6 +190,8 @@ interface SimAgent {
   /** Codex: mensagens na fila da sessão (entram quando ela fica ociosa) e a partir de quando entram. */
   inbox?: string[];
   inboxAt?: number;
+  /** Codex no TUI ligado ao daemon do app-server: os pedidos de aprovação vêm pelo canal paralelo ('parallel'). */
+  parallel?: boolean;
 }
 
 export interface DemoTickResult {
@@ -420,8 +426,10 @@ export class DemoSimulator {
     const a = [...this.agents.values()].find((x) => x.info.permission?.id === requestId);
     if (!a || a.phase !== 'waiting') return false;
     const p = a.info.permission!;
-    // Codex (como no servidor): sem respostas, sem "sempre permitir" nem interromper, e recusa só com motivo.
-    if (p.provider === 'codex' && (d.behavior === 'answer' || d.suggestion !== undefined || d.interrupt || (d.behavior === 'deny' && !d.message?.trim()))) return false;
+    const parallel = p.mode === 'parallel';
+    if (parallel ? !parallelAccepts(p, d) : d.forSession) return false;
+    // Hook do Codex (como no servidor): sem respostas, sem "sempre permitir" nem interromper, e recusa só com motivo.
+    if (!parallel && p.provider === 'codex' && (d.behavior === 'answer' || d.suggestion !== undefined || d.interrupt || (d.behavior === 'deny' && !d.message?.trim()))) return false;
     const ask = p.tool === ASK_TOOL;
     const answers = d.behavior === 'answer' && ask ? checkAnswers(p.questions ?? [], d.answers) : undefined;
     if ((d.behavior === 'answer' && !answers) || (d.behavior === 'allow' && ask)) return false;
@@ -435,9 +443,11 @@ export class DemoSimulator {
     if (answers) {
       this.activity(a, now, { kind: 'other', icon: '💬', text: 'Respondido no Habblaud', detail: answerSummary(p.questions ?? [], answers), tool: 'PermissionRequest' });
     } else if (d.behavior === 'allow') {
-      this.activity(a, now, { kind: 'other', icon: '✅', text: d.suggestion !== undefined ? 'Aprovado no Habblaud (sempre permitir)' : 'Aprovado no Habblaud', detail: title, tool: 'PermissionRequest' });
+      const text = d.forSession ? 'Aprovado no Habblaud (nesta sessão)' : d.suggestion !== undefined ? 'Aprovado no Habblaud (sempre permitir)' : 'Aprovado no Habblaud';
+      this.activity(a, now, { kind: 'other', icon: '✅', text, detail: title, tool: 'PermissionRequest' });
     } else {
-      this.activity(a, now, { kind: 'wait', icon: '🚫', text: 'Recusado no Habblaud', detail: d.message ? `${title} — ${d.message}` : title, tool: 'PermissionRequest' });
+      // O canal paralelo não leva motivo ao Codex.
+      this.activity(a, now, { kind: 'wait', icon: '🚫', text: 'Recusado no Habblaud', detail: d.message && !parallel ? `${title} — ${d.message}` : title, tool: 'PermissionRequest' });
     }
     this.resumeFromWaiting(a, now);
     return true;
@@ -447,9 +457,10 @@ export class DemoSimulator {
    * Faz um agente principal que está trabalhando (ou, sem nenhum, um ocioso ou esperando um shell) pedir permissão
    * agora (`kind` força uma permissão ou uma pergunta do AskUserQuestion; sem ele, é sorteado). Para testes
    * e capturas de tela; devolve o id do agente. `provider` escolhe a ferramenta do agente (padrão: Claude Code);
-   * no Codex o pedido é sempre de aprovação (ele não pergunta pelo escritório).
+   * no Codex o pedido é sempre de aprovação (ele não pergunta pelo escritório) e `mode` escolhe por onde ele chega:
+   * 'blocking' (padrão) = hook, com prazo; 'parallel' = canal paralelo do app-server.
    */
-  forcePermission(now = Date.now(), kind?: DemoPermissionKind, provider: 'claude' | 'codex' = 'claude'): string | undefined {
+  forcePermission(now = Date.now(), kind?: DemoPermissionKind, provider: 'claude' | 'codex' = 'claude', mode: 'blocking' | 'parallel' = 'blocking'): string | undefined {
     const mains = [...this.agents.values()].filter((a) => a.info.kind === 'main' && a.removeAt === undefined && (a.info.provider ?? 'claude') === provider);
     const a = mains.find((x) => x.phase === 'working') ?? mains.find((x) => x.phase === 'idle') ?? mains.find((x) => x.phase === 'shell');
     if (!a) return undefined;
@@ -458,19 +469,24 @@ export class DemoSimulator {
       a.actionsLeft = 3;
       this.setStatus(a, 'working', now);
     }
-    this.askPermission(a, now, kind);
+    this.askPermission(a, now, kind, mode);
     return a.info.id;
   }
 
-  /** Para no meio do turno pedindo permissão ou perguntando (com o pedido fictício para responder pelo escritório). */
-  private askPermission(a: SimAgent, now: number, kind?: DemoPermissionKind): void {
+  /**
+   * Para no meio do turno pedindo permissão ou perguntando (com o pedido fictício para responder pelo escritório).
+   * No Codex, `mode` ausente = o canal da sessão (paralelo no TUI ligado ao daemon, senão o hook).
+   */
+  private askPermission(a: SimAgent, now: number, kind?: DemoPermissionKind, mode?: 'blocking' | 'parallel'): void {
     a.phase = 'waiting';
     // Com o cartão para responder, a espera é mais longa (dá tempo de clicar).
     a.phaseUntil = now + this.ms(25_000, 50_000);
     const id = `${this.prefix}perm-${this.tag}-${++this.seq}`;
     const codex = a.info.provider === 'codex';
-    a.info.permission = codex ? demoCodexPermission(id, a.project, a.rng, now) : demoPermission(id, a.project, a.rng, now, kind);
-    const reason = codex ? 'aprovar um comando' : a.info.permission.tool === ASK_TOOL ? 'responder uma pergunta' : 'aprovar uma permissão';
+    const channel = mode ?? (a.parallel ? 'parallel' : 'blocking');
+    a.info.permission = codex ? demoCodexPermission(id, a.project, a.rng, now, channel) : demoPermission(id, a.project, a.rng, now, kind);
+    const p = a.info.permission;
+    const reason = codex ? codexApprovalReason(p.tool, p.text.startsWith('Acesso à rede')) : p.tool === ASK_TOOL ? 'responder uma pergunta' : 'aprovar uma permissão';
     a.info.waitingFor = reason;
     this.setStatus(a, 'waiting', now);
     this.activity(a, now, SPECIAL.waiting(reason));
@@ -582,6 +598,9 @@ export class DemoSimulator {
       shelledThisTurn: false,
       foregroundThisTurn: false,
     };
+    // Codex no TUI ligado ao daemon (canal paralelo): a sessão da abertura sempre (o pedido 'parallel' aparece logo);
+    // as outras pelo hash do id, sem gastar o sorteio.
+    if (codex && (host || hash32(`tui:${sessionId}`) % 100 < CODEX_PARALLEL_SHARE)) a.parallel = true;
     this.agents.set(id, a);
     const acc = this.accounts.find((x) => x.id === info.account);
     if (!warm) this.notice(now, 'info', `👋 ${info.name} chegou em ${project.name}${acc ? ` (${acc.name})` : ''}`, id, room.id);
@@ -990,6 +1009,18 @@ function structuredCloneAgent(a: AgentInfo): AgentInfo {
   if (a.permission) {
     c.permission = { ...a.permission, suggestions: a.permission.suggestions?.map((s) => ({ ...s, rules: s.rules.slice() })) };
     if (a.permission.questions) c.permission.questions = a.permission.questions.map((q) => ({ ...q, options: q.options.map((o) => ({ ...o })) }));
+    if (a.permission.decisions) c.permission.decisions = a.permission.decisions.slice();
   }
   return c;
+}
+
+/**
+ * Canal paralelo do Codex (como o registro do servidor): "responder no terminal" ou uma decisão que o canal oferece
+ * (aprovar = accept, nesta sessão = acceptForSession, recusar = decline, sem motivo); nada de responder perguntas,
+ * "sempre permitir" nem interromper.
+ */
+function parallelAccepts(p: PermissionRequestInfo, d: PermissionDecision): boolean {
+  if (d.behavior === 'terminal') return true;
+  if (d.behavior === 'answer' || d.suggestion !== undefined || d.interrupt) return false;
+  return !!p.decisions?.includes(d.behavior === 'deny' ? 'decline' : d.forSession ? 'acceptForSession' : 'accept');
 }

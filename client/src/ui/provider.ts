@@ -70,13 +70,17 @@ export function emptyOfficeHint(accounts: readonly Pick<AccountInfo, 'short' | '
   return `Abra o Claude Code${keys ? ` (${keys})` : ''} ou o Codex em qualquer projeto e veja seu agente chegar.`;
 }
 
-/** Algum pedido de permissão do Codex esperando: o prazo é curto e o cartão conta os segundos (relógio de 1 s). */
+/**
+ * Algum pedido do hook do Codex esperando: o prazo é curto e o cartão conta os segundos (relógio de 1 s). O pedido do
+ * canal paralelo (`mode: 'parallel'`) não conta: não tem prazo nem contador.
+ */
 export function hasCodexPermission(snap: Pick<OfficeSnapshot, 'agents'> | null): boolean {
-  return !!snap?.agents.some((a) => a.permission && isCodex(a.permission) && a.status !== 'offline' && a.status !== 'done');
+  return !!snap?.agents.some((a) => a.permission && isCodex(a.permission) && a.permission.mode !== 'parallel' && a.status !== 'offline' && a.status !== 'done');
 }
 
 /** Como ver o Codex ao vivo e aprovar pelo escritório (gaveta de um agente do Codex e ajuda). */
-export const CODEX_LIVE_HINT = 'Para ver o Codex ao vivo e aprovar pelo escritório: `npm run codex:install` e aprove os hooks em `/hooks` no Codex.';
+export const CODEX_LIVE_HINT =
+  'Para ver o Codex ao vivo: `npm run codex:install` e aprove os hooks em `/hooks` no Codex. Eles também trazem para cá as aprovações do app, do VS Code e da CLI fora do daemon; o `codex` do terminal ligado ao daemon aprova por aqui sem eles, com o Habblaud no modo Node e o terminal do Habblaud ligado (no Docker, vale o hook).';
 
 /** Políticas de aprovação do Codex (`approval_policy`), quando o servidor as manda no lugar do modo de permissão. */
 const CODEX_APPROVALS: Record<string, string> = {

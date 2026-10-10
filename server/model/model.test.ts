@@ -39,6 +39,56 @@ describe('salas', () => {
     expect(normalizeCwd('/')).toBe('/');
   });
 
+  it('caminhos já normalizados (como o Claude grava) não mudam: as salas atuais mantêm o id', () => {
+    const iguais = [
+      String.raw`D:\Projetos\x`,
+      String.raw`D:\Projetos\Empresa\app`,
+      'C:\\',
+      String.raw`\\srv\share\x`,
+      String.raw`D:\Projetos\app%20x`,
+      '/home/x',
+      '/home/x/meu app',
+      '/srv/app%20x',
+    ];
+    for (const p of iguais) expect(normalizeCwd(p), p).toBe(p);
+  });
+
+  it('tira o prefixo de caminho estendido do Windows (\\\\?\\ e \\\\?\\UNC\\)', () => {
+    expect(normalizeCwd(String.raw`\\?\D:\Projetos\x`)).toBe(String.raw`D:\Projetos\x`);
+    expect(normalizeCwd(String.raw`\\?\d:\Projetos\x`)).toBe(String.raw`D:\Projetos\x`);
+    expect(normalizeCwd(String.raw`\\?\UNC\srv\share\x`)).toBe(String.raw`\\srv\share\x`);
+    expect(normalizeCwd(String.raw`\\?\unc\srv\share\x`)).toBe(String.raw`\\srv\share\x`);
+  });
+
+  it('converte URI file:// em caminho nativo, decodificando %xx', () => {
+    expect(normalizeCwd('file:///d:/Projetos/x')).toBe(String.raw`D:\Projetos\x`);
+    expect(normalizeCwd('file:///C:/Meus%20Projetos/app')).toBe(String.raw`C:\Meus Projetos\app`);
+    // O VS Code codifica os dois-pontos do drive.
+    expect(normalizeCwd('file:///c%3A/Projetos/x')).toBe(String.raw`C:\Projetos\x`);
+    expect(normalizeCwd('file:///d:/Projetos/x/')).toBe(String.raw`D:\Projetos\x`);
+    expect(normalizeCwd('file:///C:/')).toBe('C:\\');
+    expect(normalizeCwd('file:///home/x')).toBe('/home/x');
+    expect(normalizeCwd('file:///home/x/meu%20app/')).toBe('/home/x/meu app');
+    expect(normalizeCwd('FILE:///home/x')).toBe('/home/x');
+    expect(normalizeCwd('file://localhost/home/x')).toBe('/home/x');
+  });
+
+  it('URI com %xx inválido não quebra', () => {
+    expect(() => normalizeCwd('file:///home/x/%zz')).not.toThrow();
+  });
+
+  it('letra do drive em maiúscula; barras e o resto do caminho não mudam', () => {
+    expect(normalizeCwd(String.raw`c:\x`)).toBe(String.raw`C:\x`);
+    expect(normalizeCwd(String.raw`d:\Projetos\MeuApp`)).toBe(String.raw`D:\Projetos\MeuApp`);
+    expect(normalizeCwd('c:/x')).toBe('C:/x');
+    expect(normalizeCwd('c:')).toBe('C:');
+  });
+
+  it('é idempotente', () => {
+    const casos = [String.raw`\\?\d:\x`, String.raw`\\?\UNC\srv\x`, 'file:///c%3A/x/', 'file:///home/x/%2541', String.raw`c:\x`, '/a//b/', '/'];
+    for (const p of casos) expect(normalizeCwd(normalizeCwd(p)), p).toBe(normalizeCwd(p));
+  });
+
   it('desambigua basenames repetidos com o diretório pai', () => {
     const names = roomDisplayNames(
       new Map([
@@ -138,6 +188,48 @@ describe('NameStore: personagem de cada sala', () => {
         expect(t.assign('s1', new Set()).name).toBe('Marina');
         expect(t.reservedNames().size).toBe(0);
       }
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('sala gravada em outra grafia (drive minúsculo, \\\\?\\, file://): a chave vira o id normalizado; na colisão fica o uso mais recente', () => {
+    const tmp = tempDir();
+    try {
+      const file = join(tmp.dir, 'names.json');
+      writeFileSync(
+        file,
+        JSON.stringify({
+          version: 1,
+          names: {},
+          rooms: {
+            // Colisão com a mais recente primeiro e com a mais recente depois: a ordem no arquivo não decide.
+            [String.raw`d:\p\api`]: { name: 'Ana', look: 'f', seed: 1, parts: { hairStyle: 'bob' }, owner: 's1', at: NOW - DAY },
+            [String.raw`D:\p\api`]: { name: 'Bia', look: 'f', seed: 2, at: NOW - 2 * DAY },
+            [String.raw`C:\p\cli`]: { name: 'Caio', look: 'm', seed: 3, at: NOW - 2 * DAY },
+            [String.raw`c:\p\cli`]: { name: 'Davi', look: 'm', seed: 4, owner: 's4', at: NOW - DAY },
+            [String.raw`\\?\D:\p\web`]: { name: 'Eva', look: 'f', seed: 5, at: NOW },
+            'file:///d:/p/loja': { name: 'Gil', look: 'm', seed: 6, at: NOW },
+            // Já normalizadas: ficam iguais.
+            [String.raw`D:\p\site`]: { name: 'Iris', look: 'f', seed: 7, at: NOW },
+            '/p/srv': { name: 'Juca', look: 'm', seed: 8, at: NOW },
+          },
+        }),
+      );
+      const s = new NameStore(file, { now: () => NOW });
+      s.load();
+      expect(s.character(String.raw`D:\p\api`)).toEqual({ name: 'Ana', look: 'f', seed: 1, parts: { hairStyle: 'bob' }, owner: 's1', at: NOW - DAY });
+      expect(s.character(String.raw`C:\p\cli`)).toMatchObject({ name: 'Davi', owner: 's4' });
+      expect(s.character(String.raw`D:\p\web`)?.name).toBe('Eva');
+      expect(s.character(String.raw`D:\p\loja`)?.name).toBe('Gil');
+      expect(s.character(String.raw`D:\p\site`)?.name).toBe('Iris');
+      expect(s.character('/p/srv')?.name).toBe('Juca');
+      for (const r of [String.raw`d:\p\api`, String.raw`c:\p\cli`, String.raw`\\?\D:\p\web`, 'file:///d:/p/loja']) expect(s.character(r)).toBeUndefined();
+      expect([...s.reservedNames().keys()].sort()).toEqual(['Ana', 'Davi', 'Eva', 'Gil', 'Iris', 'Juca']);
+      s.flush();
+      expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).rooms).sort()).toEqual(
+        ['/p/srv', String.raw`C:\p\cli`, String.raw`D:\p\api`, String.raw`D:\p\loja`, String.raw`D:\p\site`, String.raw`D:\p\web`].sort(),
+      );
     } finally {
       tmp.cleanup();
     }
@@ -344,6 +436,129 @@ describe('Office', () => {
     expect(a.recent.filter((x) => x.kind === 'done')).toHaveLength(1);
   });
 
+  it('subagente: o "Concluiu" do transcript que chega depois do completeSub substitui o sintetizado, sem duplicar', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    office.addActivity('s1:x', act('a1', now()), true);
+    advance(30_000);
+    office.completeSub('s1:x');
+    const synth = office.get('s1:x')!.activity!;
+    expect(synth).toMatchObject({ kind: 'done', durationMs: 30_000 });
+    advance(10);
+    office.addActivity('s1:x', { ...act('real', now(), 'done'), text: 'Concluiu em 29s', durationMs: 29_000 }, true);
+    const sub = office.get('s1:x')!;
+    expect(sub.activity).toMatchObject({ id: synth.id, text: 'Concluiu em 29s' });
+    expect(sub.recent.filter((x) => x.kind === 'done')).toHaveLength(1);
+    expect(office.detail('s1:x')!.history.filter((x) => x.kind === 'done')).toHaveLength(1);
+  });
+
+  it('subagente: a resposta final chega entre o completeSub e o "Concluiu" do transcript: um "Concluiu" só, e o balão termina nele', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    office.addActivity('s1:x', act('a1', now()), true);
+    advance(30_000);
+    office.completeSub('s1:x');
+    advance(10);
+    office.addActivity('s1:x', { ...act('resp', now(), 'respond'), text: 'Escrevendo a resposta' }, true);
+    advance(1);
+    office.addActivity('s1:x', { ...act('real', now(), 'done'), text: 'Concluiu em 29s', durationMs: 29_000 }, true);
+    const sub = office.get('s1:x')!;
+    expect(sub.recent.filter((x) => x.kind === 'done')).toHaveLength(1);
+    expect(office.detail('s1:x')!.history.filter((x) => x.kind === 'done')).toHaveLength(1);
+    expect(sub.activity).toMatchObject({ kind: 'done', text: 'Concluiu em 29s' });
+    expect(sub.recent.some((x) => x.text === 'Escrevendo a resposta')).toBe(true);
+  });
+
+  it('subagente: reativado depois de entregar, o "Concluiu" do turno seguinte entra como um item novo (não troca o do turno anterior)', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    office.addActivity('s1:x', act('a1', now()), true);
+    advance(5_000);
+    office.completeSub('s1:x');
+    advance(5_000);
+    office.addActivity('s1:x', { ...act('resp', now(), 'respond'), text: 'Escrevendo a resposta' }, true);
+    office.reactivateSub('s1:x');
+    expect(office.get('s1:x')!.status).toBe('working');
+    advance(1_000);
+    office.addActivity('s1:x', { ...act('fim2', now(), 'done'), text: 'Concluiu em 2s' }, true);
+    const done = office.get('s1:x')!.recent.filter((x) => x.kind === 'done');
+    expect(done).toHaveLength(2);
+    expect(done[1]).toMatchObject({ id: 'fim2', text: 'Concluiu em 2s' });
+  });
+
+  it('Codex: a troca do "Concluiu" sintetizado também atualiza o item do feed (mesmo id); já transmitido, vai de novo', () => {
+    const { office, advance, now } = makeOffice();
+    const done = (id: string, text: string): Activity => ({ ...act(id, now(), 'done'), text });
+    // Transmitido antes da troca (o Stop do hook numa rodada, o task_complete na seguinte).
+    office.addMain({ id: 'acc:1', provider: 'codex', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    advance(96_000);
+    office.setStatus('acc:1', 'idle');
+    const synth = office.get('acc:1')!.activity!;
+    expect(office.commit().feed.map((f) => [f.id, f.activity.text])).toEqual([[synth.id, 'Concluiu em 1min 36s']]);
+    advance(10);
+    office.addActivity('acc:1', done('fim', 'Concluiu em 1min 41s'), true);
+    expect(office.commit().feed.map((f) => [f.id, f.activity.text])).toEqual([[synth.id, 'Concluiu em 1min 41s']]);
+    expect(office.recentFeed(10).map((f) => [f.id, f.activity.text])).toEqual([[synth.id, 'Concluiu em 1min 41s']]);
+    // Na mesma rodada: um item só, já com o texto do rollout.
+    office.addMain({ id: 'acc:2', provider: 'codex', account: 'acc', sessionId: 's2', cwd: '/p/b', role: 'x', startedAt: now(), status: 'working' });
+    office.commit();
+    advance(5_000);
+    office.setStatus('acc:2', 'idle');
+    office.addActivity('acc:2', done('fim2', 'Concluiu em 4s'), true);
+    expect(office.commit().feed.map((f) => f.activity.text)).toEqual(['Concluiu em 4s']);
+  });
+
+  it('Claude: a troca do "Concluiu" sintetizado não mexe no feed (como antes)', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    advance(30_000);
+    office.setStatus('acc:1', 'idle');
+    const synth = office.get('acc:1')!.activity!;
+    office.commit();
+    office.addActivity('acc:1', { ...act('real', now(), 'done'), text: 'Concluiu em 29s', durationMs: 29_000 }, true);
+    expect(office.get('acc:1')!.activity).toMatchObject({ id: synth.id, text: 'Concluiu em 29s' });
+    expect(office.commit().feed).toEqual([]);
+    expect(office.recentFeed(10).map((f) => [f.id, f.activity.text])).toEqual([[synth.id, 'Concluiu em 30s']]);
+  });
+
+  it('subagente: com o "Concluiu" já na tela, o completeSub não sintetiza outro', () => {
+    const { office, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    office.addActivity('s1:x', { ...act('fim', now(), 'done'), text: 'Concluiu em 3s' }, true);
+    office.completeSub('s1:x');
+    expect(office.get('s1:x')!.recent.map((x) => x.id)).toEqual(['fim']);
+  });
+
+  it('mesmo id: sem replace fica a 1ª; com replace troca no lugar (mesmo horário), sem item novo no feed', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    const t0 = now();
+    office.addActivity('acc:1', { ...act('c1', t0, 'run'), text: 'Rodando Get-Content' }, true);
+    office.addActivity('acc:1', act('outra', t0 + 1), false);
+    office.commit();
+    advance(1_000);
+    office.addActivity('acc:1', { ...act('c1', now()), text: 'Lendo soma.ts' }, true);
+    expect(office.get('acc:1')!.activity).toMatchObject({ id: 'c1', text: 'Rodando Get-Content' });
+    office.addActivity('acc:1', { ...act('c1', now()), text: 'Lendo soma.ts' }, true, { replace: true });
+    const a = office.get('acc:1')!;
+    expect(a.activity).toEqual({ ...act('c1', t0), text: 'Lendo soma.ts' });
+    expect(a.recent.map((x) => [x.id, x.text])).toEqual([
+      ['c1', 'Lendo soma.ts'],
+      ['outra', 'Lendo x'],
+    ]);
+    expect(office.detail('acc:1')!.history.map((x) => x.id)).toEqual(['c1', 'outra']);
+    const r = office.commit();
+    expect(r.changed).toBe(true);
+    expect(r.feed).toEqual([]);
+    // Id novo com replace: entra como sempre.
+    office.addActivity('acc:1', act('c2', now()), true, { replace: true });
+    expect(office.commit().feed.map((f) => f.id)).toEqual(['c2']);
+  });
+
   it('ocupado com o balão ainda em "Concluiu" antigo: mostra que acompanha os subagentes (fora do feed)', () => {
     const { office, advance, now } = makeOffice();
     office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
@@ -461,6 +676,27 @@ describe('Office', () => {
     const off = office.commit().snapshot;
     expect(off.meta.demo).toBe(false);
     expect(off.agents.map((a) => a.id)).toEqual(['acc:1']);
+  });
+
+  it('mesma pasta no Claude e no Codex com grafias diferentes: uma sala só, com o id que o Claude já usava', () => {
+    const { office, now } = makeOffice();
+    const loja = String.raw`D:\Projetos\loja`;
+    // O Claude grava o cwd assim; o Codex pode trazer \\?\, URI file:// ou o drive em minúscula.
+    const grafias = [loja, String.raw`\\?\D:\Projetos\loja`, 'file:///d:/Projetos/loja', String.raw`d:\Projetos\loja`];
+    grafias.forEach((cwd, i) =>
+      office.addMain({ id: `acc:${i}`, account: 'acc', sessionId: `s${i}`, cwd, role: 'Agente principal', startedAt: now(), status: 'working' }),
+    );
+    office.addMain({ id: 'acc:p1', account: 'acc', sessionId: 'p1', cwd: '/home/x/api', role: 'Agente principal', startedAt: now(), status: 'working' });
+    office.addMain({ id: 'acc:p2', account: 'acc', sessionId: 'p2', cwd: 'file:///home/x/api/', role: 'Agente principal', startedAt: now(), status: 'idle' });
+    const snap = office.commit().snapshot;
+    expect(snap.rooms.map((r) => [r.id, r.path, r.name]).sort()).toEqual([
+      ['/home/x/api', '/home/x/api', 'api'],
+      [loja, loja, 'loja'],
+    ]);
+    const roomOf = new Map(snap.agents.map((a) => [a.id, a.roomId]));
+    for (let i = 0; i < grafias.length; i++) expect(roomOf.get(`acc:${i}`)).toBe(loja);
+    expect(roomOf.get('acc:p1')).toBe('/home/x/api');
+    expect(roomOf.get('acc:p2')).toBe('/home/x/api');
   });
 
   it('meta.terminal: só com o terminal ligado', () => {
@@ -713,6 +949,35 @@ describe('Office: personagem do projeto', () => {
         expect(office.get('acc:2')).toMatchObject({ name: 'Zé Backend', seed: 42, custom: true });
         expect(names.character('/p/api')?.owner).toBe('s2');
         names.flush();
+      } finally {
+        tmp.cleanup();
+      }
+    });
+
+    it('personagem gravado na sala com o drive em minúscula: depois da atualização, continua na sala de id normalizado', () => {
+      const tmp = tempDir();
+      try {
+        const file = join(tmp.dir, 'names.json');
+        const at = Date.now();
+        writeFileSync(
+          file,
+          JSON.stringify({
+            version: 1,
+            names: {},
+            rooms: { [String.raw`d:\p\api`]: { name: 'Zé Backend', look: 'm', seed: 42, owner: 's1', at } },
+          }),
+        );
+        const names = new NameStore(file);
+        names.load();
+        const { office, now } = makeOffice(names);
+        office.addMain(main('acc:1', 's1', String.raw`D:\p\api`, now()));
+        office.addMain(main('acc:2', 's2', String.raw`d:\p\api`, now()));
+        expect(office.get('acc:1')).toMatchObject({ roomId: String.raw`D:\p\api`, name: 'Zé Backend', seed: 42, custom: true });
+        expect(office.get('acc:2')!.roomId).toBe(String.raw`D:\p\api`);
+        expect(office.get('acc:2')!.custom).toBeUndefined();
+        expect(names.character(String.raw`D:\p\api`)?.owner).toBe('s1');
+        names.flush();
+        expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).rooms)).toEqual([String.raw`D:\p\api`]);
       } finally {
         tmp.cleanup();
       }

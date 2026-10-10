@@ -1,7 +1,7 @@
 // GitHub no escritório: PR aberto ou mergeado, push, CI e release viram avisos e efeitos na sala do
 // projeto (festa ou alarme). Código puro, usado pelo servidor (eventos detectados nos transcripts, ver
 // server/sources/github.ts) e pelo simulador de demonstração.
-import { maskSecrets, truncate, type MarkedDescription } from './activity';
+import { maskedCut, type MarkedDescription } from './activity';
 import type { NoticeLevel, RoomEffect } from './types';
 
 export type GitHubEventKind = 'pr_opened' | 'pr_merged' | 'push' | 'ci_failed' | 'ci_passed' | 'release';
@@ -33,7 +33,7 @@ const MAX_TEXT = 46;
 const MAX_BANNER = 30;
 
 function clean(s: string, max: number): string {
-  return truncate(maskSecrets(s.slice(0, max * 4)), max);
+  return maskedCut(s, max);
 }
 
 /** Onde o CI rodou, para os textos: branch, PR ou workflow. */

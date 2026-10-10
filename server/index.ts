@@ -3,10 +3,10 @@
 //   npm run dev    -> tsx server/index.ts --dev (Vite em middleware mode, HMR no mesmo servidor)
 //   npm start      -> node dist/server/index.js (serve dist/client)
 import http from 'node:http';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { codexDirsRefused } from './accounts/detect';
 import { AccountsService } from './accounts/service';
-import { loadConfig, messagesOffReason, terminalOffReason } from './config';
+import { codexAppServerOffReason, loadConfig, messagesOffReason, terminalOffReason } from './config';
 import { createApiHandler, sendJson } from './http/app';
 import { createRequestGuard } from './http/guard';
 import { Hub } from './http/sse';
@@ -25,9 +25,11 @@ import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
 import { PermissionRegistry } from './permissions/registry';
 import { codexAccountOf } from './codex/http';
+import { HOOK_KEY_FILE, loadHookKey } from './codex/key';
 import { createCodexQueueRunner, findCodexBin } from './messages/codex';
 import { createMessageRoutes } from './messages/http';
 import { MessageRegistry } from './messages/registry';
+import { CodexAppServerService } from './sources/codex/appserver/service';
 import type { CodexLive } from './sources/codex/live';
 import { ClaudeWatcher } from './sources/watcher';
 import { discoverCodexDirs } from './sources/codex/accounts';
@@ -56,7 +58,7 @@ const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
 roomAliases.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry } = {};
+const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; codexAppServer?: CodexAppServerService } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -94,11 +96,32 @@ const office = new Office({
 const claude = new ClaudeWatcher({ accounts, office, inDocker: config.inDocker });
 const agents = new SourceSet([claude]);
 const codexDirs = config.codex ? discoverCodexDirs(process.env, config.home) : [];
-const codex = codexDirs.length ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home }) : undefined;
+// O turno de cada thread vai ao canal paralelo (criado mais abaixo, só com ele ligado), que solta a thread de um TUI
+// fechado: lido na hora de cada aviso, pela ligação tardia.
+const codex = codexDirs.length
+  ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home, onTurn: (a, t, open) => late.codexAppServer?.setTurnOpen(a, t, open) })
+  : undefined;
 if (codex) agents.add(codex);
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
 const codexLive: CodexLive | undefined = codex;
+// Chave local do hook do Codex (codex/key.ts), só com o Codex no escritório: a prova das chamadas do hook que não vêm
+// pelo loopback (no Docker, todas). Fora do Docker, ~/.habblaud/codex-hook.key (a pasta do codex-hook.json que o hook lê),
+// criada se faltar, depois da migração do ~/.codetown lá em cima; no Docker, só lida do arquivo que o docker:up monta
+// (HABBLAUD_CODEX_HOOK_KEY, terminado em codex-hook.key).
+function loadCodexHookKey(): Buffer | undefined {
+  if (!config.inDocker) return loadHookKey(join(config.home, '.habblaud'), { create: true });
+  const file = process.env.HABBLAUD_CODEX_HOOK_KEY?.trim();
+  return file && basename(file) === HOOK_KEY_FILE ? loadHookKey(dirname(file)) : undefined;
+}
+const codexHookKey = codex ? loadCodexHookKey() : undefined;
+if (codex && !codexHookKey) {
+  log.warn(
+    config.inDocker
+      ? 'Codex: sem a chave do hook (HABBLAUD_CODEX_HOOK_KEY); os eventos do hook do Codex vão ser recusados no container. Rode o npm run docker:up de novo.'
+      : `Codex: não consegui ler nem criar ${join(config.home, '.habblaud', HOOK_KEY_FILE)} (precisa ter 32 bytes; apague para recriar); as chamadas do hook do Codex só valem pelo loopback.`,
+  );
+}
 late.office = office;
 late.agents = agents;
 const hub = new Hub(office);
@@ -133,6 +156,22 @@ const permissions = config.terminal
     })
   : undefined;
 late.permissions = permissions;
+// Aprovação do codex no terminal pelo escritório (canal paralelo, sources/codex/appserver/service.ts): junta-se ao daemon
+// do app-server que o TUI já subiu em cada conta Codex (nunca o inicia). Mesma trava do terminal, fora do Docker e
+// HABBLAUD_CODEX_APPSERVER=0 desliga (config.codexAppServer). O binário é procurado aqui, à parte do das mensagens (que só
+// é procurado com elas ligadas).
+const codexAppServerBin = codex && config.codexAppServer ? findCodexBin(process.env) : undefined;
+const codexAppServer =
+  permissions && codex && config.codexAppServer
+    ? new CodexAppServerService({
+        accounts: () => accounts.entriesOf('codex').map((e) => ({ id: e.id, home: e.detected.configDir })),
+        registry: permissions,
+        codexBin: codexAppServerBin,
+        version: config.version,
+      })
+    : undefined;
+late.codexAppServer = codexAppServer;
+permissions?.setParallelSink(codexAppServer);
 // Mensagens pelo escritório (plugin habblaud-mensagens): entram na sessão como se você as tivesse digitado, então
 // seguem a mesma trava (e HABBLAUD_MENSAGENS=0 desliga só elas). Ao Codex vão por `codex queue` (messages/codex.ts):
 // fora do Docker o próprio servidor roda o comando (HABBLAUD_CODEX_BIN ou `codex` do PATH); no Docker, o auxiliar do
@@ -161,6 +200,7 @@ if (timeline) {
   timeline.ingest(hub.current());
 }
 permissions?.start();
+codexAppServer?.start();
 messages?.start();
 stats.start();
 updates.start();
@@ -193,6 +233,7 @@ const api = createApiHandler({
   permissions: permissions ? createPermissionRoutes(permissions) : undefined,
   messages: messages ? createMessageRoutes(messages) : undefined,
   codexLive,
+  codexHookKey,
   stats,
   updates,
 });
@@ -266,6 +307,9 @@ server.listen(config.port, config.host, () => {
     for (const a of codexAccounts) {
       log.info(`   Conta ${a.detected.short} do Codex (${a.id}): uso: ${accounts.usageView(a.id).status} · ${a.detected.configDir}`);
     }
+    // Sem o binário, o próprio serviço já avisou no start().
+    if (!codexAppServer) log.info(`   Aprovação do codex no terminal pelo escritório: desligada (${codexAppServerOffReason(process.env, config.host, config.inDocker)}).`);
+    else if (codexAppServerBin) log.info(`   Aprovação do codex no terminal pelo escritório: pelo daemon do app-server, quando o codex o deixar no ar (${codexAppServerBin}).`);
   } else {
     log.info(`   Codex: ${config.codex ? 'nenhuma pasta do Codex encontrada (defina HABBLAUD_CODEX_DIRS)' : 'desligado (HABBLAUD_CODEX=0)'}.`);
   }
@@ -307,6 +351,7 @@ function shutdown(signal: string): void {
   hub.stop();
   terminals?.stop();
   timeline?.stop();
+  codexAppServer?.stop();
   permissions?.stop();
   messages?.stop();
   updates.stop();

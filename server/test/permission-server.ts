@@ -2,7 +2,9 @@
 // /api/permissions) numa porta livre do 127.0.0.1, com um agente principal na sessão "sess-1".
 // Usado pelos testes das rotas e do hook (mod/habblaud-permissoes/hooks/permission-hook.mjs rodado como processo).
 // Com `codex`, também um agente principal do Codex (conta ".codex", thread CODEX_THREAD) e a fonte do Codex ao vivo
-// (`codexLive`, um falso) para o hook do Codex (mod/habblaud-codex/hook.mjs).
+// (`codexLive`, um falso) para o hook do Codex (mod/habblaud-codex/hook.mjs); `codexHookKey` é a chave local do hook
+// (server/codex/key.ts) e `inDocker` liga a regra do container. O cabeçalho `x-test-remote` troca o endereço de quem
+// conecta (o servidor escuta no 127.0.0.1), para simular o gateway do Docker.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { AccountsService } from '../accounts/service';
@@ -33,7 +35,16 @@ export interface PermissionServer {
 }
 
 export async function servePermissions(
-  opts: { enabled?: boolean; viewers?: number; demo?: boolean; registry?: Partial<RegistryOptions>; codex?: boolean; codexLive?: CodexLive } = {},
+  opts: {
+    enabled?: boolean;
+    viewers?: number;
+    demo?: boolean;
+    registry?: Partial<RegistryOptions>;
+    codex?: boolean;
+    codexLive?: CodexLive;
+    codexHookKey?: Buffer;
+    inDocker?: boolean;
+  } = {},
 ): Promise<PermissionServer> {
   const tmp = tempDir();
   const enabled = opts.enabled ?? true;
@@ -69,13 +80,17 @@ export async function servePermissions(
     accounts,
     sources: () => [],
     version: 't',
-    inDocker: false,
+    inDocker: opts.inDocker ?? false,
     terminal: enabled,
     permissions: registry ? createPermissionRoutes(registry) : undefined,
     codexLive: opts.codexLive,
+    codexHookKey: opts.codexHookKey,
   });
   const guard = createRequestGuard({ allowedHosts: new Set(['habblaud.lan']) });
   const server = http.createServer((req, res) => {
+    // A cada requisição (o keep-alive reaproveita o socket): o endereço do cabeçalho de teste, senão o loopback.
+    const remote = req.headers['x-test-remote'];
+    Object.defineProperty(req.socket, 'remoteAddress', { value: typeof remote === 'string' ? remote : '127.0.0.1', configurable: true });
     if (guard(req, res)) return;
     if (!api(req, res, new URL(req.url ?? '/', 'http://x'))) res.writeHead(404).end();
   });

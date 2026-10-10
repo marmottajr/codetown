@@ -4,7 +4,7 @@
 // Tipos de linha desconhecidos são ignorados; uma linha inválida nunca derruba a leitura.
 import { createReadStream } from 'node:fs';
 import type { Activity, AgentStats, TaskItem, TaskStatus } from '../../shared/types';
-import { describePrompt, describeShellJob, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../shared/activity';
+import { describePrompt, describeShellJob, describeTool, maskedCut, SPECIAL, type ActivityDescription } from '../../shared/activity';
 import type { GitHubEvent } from '../../shared/github';
 import { detectGitHubNotification, detectGitHubResult, githubCallOf, type GitHubCall } from './github';
 import type { ShellStart } from './shells';
@@ -55,9 +55,9 @@ function todosToTasks(raw: unknown): TaskItem[] {
     const title = str(t.content) ?? str(t.subject) ?? str(t.title);
     if (!title) return;
     const status = typeof t.status === 'string' && TASK_STATUSES.has(t.status) ? (t.status as TaskStatus) : 'pending';
-    const task: TaskItem = { id: str(t.id) ?? String(i + 1), title: truncate(title, 120), status };
+    const task: TaskItem = { id: str(t.id) ?? String(i + 1), title: maskedCut(title, 120), status };
     const af = str(t.activeForm);
-    if (af) task.activeForm = truncate(af, 120);
+    if (af) task.activeForm = maskedCut(af, 120);
     out.push(task);
   });
   return out;
@@ -104,6 +104,11 @@ export interface ParsedActivity {
   current: boolean;
   /** Chamada de ferramenta que originou a atividade, quando houver. */
   toolUseId?: string;
+  /**
+   * Substitui a atividade de mesmo id que já esteja no escritório (sem isso, fica a primeira). Só o Codex usa: o
+   * comando em andamento (function_call ou hook) chega antes e o item concluído o descreve melhor (parsed_cmd).
+   */
+  replace?: boolean;
 }
 
 export interface TranscriptState {
@@ -229,7 +234,7 @@ function textOf(content: unknown): string {
 
 function firstLine(s: string, max = 140): string | undefined {
   const line = s.split('\n').find((l) => l.trim());
-  return line ? truncate(line.replace(/<\/?[a-z_-]+>/gi, ''), max) : undefined;
+  return line ? maskedCut(line.replace(/<\/?[a-z_-]+>/gi, ''), max) : undefined;
 }
 
 /** Extrai os campos de um `<task-notification>` (resultado de tarefa em segundo plano). */
@@ -339,7 +344,7 @@ class LineParser {
         return this.meta('aiTitle', j.aiTitle);
       case 'last-prompt': {
         const p = str(j.lastPrompt);
-        if (p && !p.trimStart().startsWith('<')) this.meta('lastPrompt', truncate(maskSecrets(p.slice(0, 1_000)), 200));
+        if (p && !p.trimStart().startsWith('<')) this.meta('lastPrompt', maskedCut(p, 200));
         return;
       }
       case 'permission-mode':
@@ -488,7 +493,7 @@ class LineParser {
         const tid = String(++s.taskSeq);
         remember(s.pendingTaskCreates, id, tid, 64);
         const af = str(input.activeForm);
-        this.taskOp(af ? { op: 'create', id: tid, title: truncate(title, 120), activeForm: truncate(af, 120) } : { op: 'create', id: tid, title: truncate(title, 120) });
+        this.taskOp(af ? { op: 'create', id: tid, title: maskedCut(title, 120), activeForm: maskedCut(af, 120) } : { op: 'create', id: tid, title: maskedCut(title, 120) });
         break;
       }
       case 'TaskUpdate': {
@@ -498,9 +503,9 @@ class LineParser {
         const op: TaskOp = { op: 'update', id: tid };
         if (status) op.status = status;
         const title = str(input.subject);
-        if (title) op.title = truncate(title, 120);
+        if (title) op.title = maskedCut(title, 120);
         const af = str(input.activeForm);
-        if (af) op.activeForm = truncate(af, 120);
+        if (af) op.activeForm = maskedCut(af, 120);
         this.taskOp(op);
         break;
       }
@@ -580,7 +585,7 @@ class LineParser {
       prompt = `${cmd} ${args}`.trim();
     }
     this.s.ended = false;
-    this.meta('lastPrompt', truncate(maskSecrets(prompt.slice(0, 1_000)), 200));
+    this.meta('lastPrompt', maskedCut(prompt, 200));
     this.push(describePrompt(prompt));
   }
 
@@ -730,7 +735,7 @@ export function parseLine(state: TranscriptState, raw: string, ctx: ParseContext
 /** Título exibido: custom-title > agent-name > ai-title > último prompt (truncado). */
 export function titleOf(state: TranscriptState): string | undefined {
   const t = state.customTitle ?? state.agentName ?? state.aiTitle ?? state.lastPrompt;
-  return t ? truncate(t, 90) : undefined;
+  return t ? maskedCut(t, 90) : undefined;
 }
 
 // ------------------------------------------------------------------ prefixo do arquivo

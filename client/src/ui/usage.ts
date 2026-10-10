@@ -1,4 +1,4 @@
-// Cartões de USO POR CONTA na barra superior: sessão de 5 horas e semanal, com reinício e origem dos números.
+// Cartões de USO POR CONTA na barra superior: as janelas do plano, com reinício e origem dos números.
 // Regras de apresentação:
 // - número velho nunca passa por atual: janela que já renovou depois da leitura mostra "—" e "renovada";
 //   números antigos ficam acinzentados com a idade ("há 6 d") no cabeçalho ou, no celular, um selo no chip;
@@ -7,10 +7,12 @@
 // Conta do Codex: os números vêm dos arquivos de sessão dele, que só se renovam enquanto alguma sessão roda; por isso
 // a idade ("há 12 min") fica sempre à mostra. Sem cota nem créditos ("sem cota") nunca vira 0%. Não há o que
 // instalar para o uso: "Como funciona" abre a ajuda na seção do Codex. Sem Opus/Sonnet nem e-mail (só o plano).
+// Os medidores são só as janelas que o plano tem (`windows`, na ordem do rate_limits, rótulo pela duração): no plano
+// só semanal, nada de "5h —". Sem `windows` (Claude Code), 5 h e semana.
 import type { AccountInfo } from '../../../shared/types';
 import type { UiContext } from './context';
 import { h, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
-import { FIVE_HOURS_MS, relativeTime, usageLevel, usageWindowView, WEEK_MS, type UsageWindowView } from './format';
+import { compactDuration, FIVE_HOURS_MS, formatDuration, relativeTime, usageLevel, usageWindowView, WEEK_MS, type UsageWindowView } from './format';
 import { ICONS } from './icons';
 import { isCodex } from './provider';
 import { createAccountChip, createProviderTag, updateAccountChip, updateProviderTag } from './widgets';
@@ -50,6 +52,8 @@ export function richText(text: string): Node[] {
 
 interface Meter {
   el: HTMLElement;
+  labelLong: HTMLElement;
+  labelShort: HTMLElement;
   bar: HTMLElement;
   pct: HTMLElement;
   reset: HTMLElement;
@@ -66,8 +70,8 @@ interface CardRefs {
   state: HTMLElement;
   stateText: HTMLElement;
   meters: HTMLElement;
-  five: Meter;
-  week: Meter;
+  /** Um medidor por janela, na ordem (os que sobram ficam escondidos). */
+  meterList: Meter[];
   msg: HTMLElement;
   msgLong: HTMLElement;
   msgShort: HTMLElement;
@@ -89,14 +93,11 @@ function createMeter(long: string, short: string, title: string): Meter {
   const resetLong = h('span', { class: 'ui-meter__reset-long' });
   const resetShort = h('span', { class: 'ui-meter__reset-short' });
   const reset = h('span', { class: 'ui-meter__reset' }, resetLong, resetShort);
-  const label = h(
-    'span',
-    { class: 'ui-meter__label' },
-    h('span', { class: 'ui-meter__label-long', text: long }),
-    h('span', { class: 'ui-meter__label-short', text: short, attrs: { 'aria-hidden': 'true' } }),
-  );
+  const labelLong = h('span', { class: 'ui-meter__label-long', text: long });
+  const labelShort = h('span', { class: 'ui-meter__label-short', text: short, attrs: { 'aria-hidden': 'true' } });
+  const label = h('span', { class: 'ui-meter__label' }, labelLong, labelShort);
   const el = h('div', { class: 'ui-meter', role: 'img', attrs: { 'aria-label': title } }, label, bar, pct, reset);
-  return { el, bar, pct, reset, resetLong, resetShort };
+  return { el, labelLong, labelShort, bar, pct, reset, resetLong, resetShort };
 }
 
 function updateMeter(m: Meter, view: UsageWindowView | null, windowName: string): void {
@@ -123,6 +124,26 @@ function updateMeter(m: Meter, view: UsageWindowView | null, windowName: string)
   setText(m.resetShort, view.resetShort ? `↻${view.resetShort}` : '');
   setAttr(m.el, 'aria-label', `${windowName}: ${view.summary}`);
   setTitle(m.el, `${windowName}: ${view.summary}`);
+}
+
+/**
+ * Um medidor por janela, na ordem: reaproveita os do cartão (o mesmo cartão segue a conta entre atualizações), cria
+ * os que faltam e esconde os que sobram (a conta que tinha duas janelas e passou a ter uma).
+ */
+function syncMeters(box: HTMLElement, pool: Meter[], meters: UsageMeter[]): void {
+  while (pool.length < meters.length) {
+    const m = createMeter('', '', '');
+    pool.push(m);
+    box.append(m.el);
+  }
+  pool.forEach((m, i) => {
+    const spec = meters[i];
+    setHidden(m.el, !spec);
+    if (!spec) return;
+    setText(m.labelLong, spec.long);
+    setText(m.labelShort, spec.short);
+    updateMeter(m, spec.view, spec.name);
+  });
 }
 
 function syncRows(dl: HTMLElement, rows: [string, string][]): void {
@@ -152,8 +173,54 @@ export function createUsageSetup(): HTMLElement {
 /** ok/stale: números recentes/antigos; empty: sem números; noquota: Codex sem cota nem créditos (nunca 0%). */
 export type CardState = 'ok' | 'stale' | 'empty' | 'noquota';
 
+/** Rótulos de um medidor, pela duração da janela. */
+export interface WindowLabel {
+  /** Rótulo ao lado da barra ("5h", "Semana", "3d") e a versão dos cartões estreitos ("Sem."). */
+  long: string;
+  short: string;
+  /** Nome da janela no leitor de tela e no título do medidor ("Sessão de 5 horas"). */
+  name: string;
+  /** Rótulo da linha na dica do cartão ("Sessão de 5 h"). */
+  row: string;
+}
+
+/** Um medidor do cartão: os rótulos da janela e os números (já considerando a idade da leitura). */
+export interface UsageMeter extends WindowLabel {
+  view: UsageWindowView | null;
+}
+
+/** Rótulos pela duração da janela (minutos): 300 → "5h", 10080 → "Semana" (os mesmos do Claude Code); outras em horas ou dias ("2h", "3d"). */
+export function windowLabel(minutes: number): WindowLabel {
+  if (minutes === 300) return { long: '5h', short: '5h', name: 'Sessão de 5 horas', row: 'Sessão de 5 h' };
+  if (minutes === 10080) return { long: 'Semana', short: 'Sem.', name: 'Semana', row: 'Semana' };
+  const ms = minutes * 60_000;
+  const label = compactDuration(ms);
+  const name = `Janela de ${formatDuration(ms)}`;
+  return { long: label, short: label, name, row: name };
+}
+
+/**
+ * Medidores do cartão. Com `windows` (Codex): só as janelas que o plano tem, na ordem do rate_limits, cada uma com o
+ * rótulo da sua duração. Sem `windows` (Claude Code, leituras antigas): 5 h e semana, como sempre.
+ */
+export function usageMeters(a: Pick<AccountInfo, 'usage'>, now: number): UsageMeter[] {
+  const u = a.usage;
+  if (!u) return [];
+  if (u.windows?.length)
+    return u.windows.map((w) => ({
+      ...windowLabel(w.windowMinutes),
+      view: usageWindowView({ utilization: w.usedPercent, resetsAt: w.resetsAt }, u.fetchedAt, now, w.windowMinutes * 60_000),
+    }));
+  return [
+    { ...windowLabel(300), view: usageWindowView(u.fiveHour, u.fetchedAt, now, FIVE_HOURS_MS) },
+    { ...windowLabel(10080), view: usageWindowView(u.sevenDay, u.fetchedAt, now, WEEK_MS) },
+  ];
+}
+
+/** Há números de alguma janela? (`windows` conta: a janela que já reiniciou continua lá e mostra "—".) */
 function hasWindows(a: Pick<AccountInfo, 'usage'>): boolean {
-  return !!a.usage && !!(a.usage.fiveHour || a.usage.sevenDay);
+  const u = a.usage;
+  return !!u && (!!u.windows?.length || !!(u.fiveHour || u.sevenDay));
 }
 
 /** Estado efetivo do cartão. */
@@ -273,8 +340,7 @@ export class UsageCards {
       state,
       stateText,
       meters,
-      five,
-      week,
+      meterList: [five, week],
       msg,
       msgLong,
       msgShort,
@@ -304,14 +370,11 @@ export class UsageCards {
     const usage = a.usage;
     const state = cardState(a);
     setVariant(card, 'is-', state);
-    const five = usage ? usageWindowView(usage.fiveHour, usage.fetchedAt, now, FIVE_HOURS_MS) : null;
-    const week = usage ? usageWindowView(usage.sevenDay, usage.fetchedAt, now, WEEK_MS) : null;
+    // Só as janelas que o plano tem (Codex com windows); sem windows, 5 h e semana.
+    const meters = usageMeters(a, now);
     const showMeters = hasWindows(a);
     setHidden(r.meters, !showMeters);
-    if (usage && showMeters) {
-      updateMeter(r.five, five, 'Sessão de 5 horas');
-      updateMeter(r.week, week, 'Semana');
-    }
+    if (showMeters) syncMeters(r.meters, r.meterList, meters);
     r.meters.classList.toggle('is-dim', state !== 'ok');
 
     // Idade dos números antigos no cabeçalho (no celular, um selo no chip faz esse papel). No Codex a idade fica
@@ -345,10 +408,10 @@ export class UsageCards {
     setText(r.howShort, codex ? 'Saber' : 'Ativar');
     r.how.dataset.help = codex ? 'codex' : 'usage';
     setTitle(r.how, codex ? 'Como o uso do Codex chega ao Habblaud (abre a ajuda em “Codex”)' : 'Como mostrar o uso desta conta (abre a ajuda em “Contas e uso”)');
-    this.updateTip(r, a, state, five, week, now);
+    this.updateTip(r, a, state, meters, now);
   }
 
-  private updateTip(r: CardRefs, a: AccountInfo, state: CardState, five: UsageWindowView | null, week: UsageWindowView | null, now: number): void {
+  private updateTip(r: CardRefs, a: AccountInfo, state: CardState, meters: UsageMeter[], now: number): void {
     const codex = isCodex(a);
     setText(r.tipTitle, `${a.name}${codex && !/codex/i.test(a.name) ? ' · Codex' : ''}${a.plan ? ` · plano ${a.plan}` : ''}`);
     const rows: [string, string][] = [];
@@ -359,9 +422,8 @@ export class UsageCards {
     rows.push(['Pasta', a.configDir]);
     rows.push(['Sessões abertas', String(a.sessions)]);
     const u = a.usage;
-    if (u && (u.fiveHour || u.sevenDay)) {
-      rows.push(['Sessão de 5 h', five?.summary ?? '—']);
-      rows.push(['Semana', week?.summary ?? '—']);
+    if (u && hasWindows(a)) {
+      for (const m of meters) rows.push([m.row, m.view?.summary ?? '—']);
       // Opus e Sonnet são janelas do Claude: no Codex não existem.
       const opus = codex ? null : usageWindowView(u.sevenDayOpus, u.fetchedAt, now, WEEK_MS);
       const sonnet = codex ? null : usageWindowView(u.sevenDaySonnet, u.fetchedAt, now, WEEK_MS);
@@ -389,7 +451,7 @@ export class UsageCards {
       note = u ? `A última leitura (${sourceLabel(u)}, ${relativeTime(u.fetchedAt, now)}) não trouxe números de 5 h nem da semana.` : 'Ainda não há números de uso para esta conta.';
     else if (state === 'stale') note = 'Números antigos: refletem a última leitura, não o uso de agora.';
     else if (u?.source === 'cache') note = 'Cache do /usage: atualiza quando alguém roda /usage nesta conta.';
-    else if (five?.renewed || week?.renewed) note = 'Uma das janelas já reiniciou depois da última leitura.';
+    else if (meters.some((m) => m.view?.renewed)) note = 'Uma das janelas já reiniciou depois da última leitura.';
     setText(r.tipNote, note);
     setHidden(r.tipNote, !note);
     // O passo a passo aparece sempre que os números não são ao vivo.

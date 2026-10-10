@@ -83,6 +83,19 @@ describe('PermissionRegistry: pedidos do Codex', () => {
     expect(snapAgent(office, CLAUDE)!.permission).toBeUndefined();
   });
 
+  it('a espera diz o tipo do pedido: edição de arquivo (apply_patch), acesso à rede e MCP têm rótulo próprio', () => {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Update File: src/a.ts\n-x\n+y\n*** End Patch' } }, 'aprovar uma edição'],
+      [{ tool_name: 'Bash', tool_input: { command: 'curl https://api.exemplo.dev', description: 'network-access api.exemplo.dev:443' } }, 'aprovar uma permissão'],
+      [{ tool_name: 'mcp__github__create_issue', tool_input: { title: 'x' } }, 'aprovar uma permissão'],
+    ];
+    for (const [over, reason] of cases) {
+      const { office, registry } = setup();
+      registered(registry.register(codexInput(over)));
+      expect(snapAgent(office, MAIN)).toMatchObject({ status: 'waiting', waitingFor: reason });
+    }
+  });
+
   it('casa pelo thread: agent_id do subagente conhecido vai para ele; desconhecido vai para o principal com o tipo', () => {
     const { office, registry } = setup();
     registered(registry.register(codexInput({ agent_id: CHILD, agent_type: 'worker' })));
@@ -122,6 +135,27 @@ describe('PermissionRegistry: pedidos do Codex', () => {
     expect(await w2.result).toEqual({ status: 'released', reason: 'terminal' });
   });
 
+  it('prazo do hook vencido (o hook do Codex já desistiu e o terminal pede): a decisão é recusada como pedido vencido, sem atividade; no Claude Code, nada muda', () => {
+    const { office, registry, clock } = setup();
+    office.commit();
+    const id = registered(registry.register(codexInput()));
+    const claude = registered(registry.register({ session_id: 'sess-1', tool_name: 'Bash', tool_input: { command: 'ls' }, timeout_ms: 25_000 }));
+    office.commit();
+
+    // Até o prazo, ainda vale.
+    clock.advance(25_000);
+    expect(registry.detail(id)).toBeDefined();
+    clock.advance(1);
+    for (const d of [{ behavior: 'allow' }, { behavior: 'deny', message: 'não' }, { behavior: 'terminal' }] as const) expect(registry.decide(id, d)).toBe('not-found');
+    expect(office.commit().feed.map((f) => f.activity.text)).not.toContain('Aprovado no Habblaud');
+    // O cartão segue até a folga (o relógio o fecha), sem ninguém para receber.
+    expect(registry.detail(id)).toBeDefined();
+
+    // Claude Code: o hook dele pode voltar a esperar; a decisão tardia continua valendo.
+    expect(registry.decide(claude, { behavior: 'allow' })).toBe('ok');
+    expect(office.commit().feed.map((f) => f.activity.text)).toContain('Aprovado no Habblaud');
+  });
+
   it('AskUserQuestion vindo do Codex não é pergunta: aprova-se como os outros pedidos', () => {
     const { registry } = setup();
     const id = registered(registry.register(codexInput({ tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Qual?', options: [{ label: 'A' }] }] } })));
@@ -152,6 +186,11 @@ describe('codexToolView: nomes de ferramenta do Codex', () => {
     expect(net).toMatchObject({ title: 'Rede(api.exemplo.dev:443)', text: 'Acessar a rede: api.exemplo.dev:443', icon: '🌐', input: 'curl https://api.exemplo.dev' });
   });
 
+  it('mascara antes de cortar: o token que cruza o teto do comando não aparece partido', () => {
+    const v = codexToolView('Bash', { command: `${' '.repeat(7980)}grep ghp_${'A'.repeat(36)}` });
+    expect(JSON.stringify(v)).not.toContain('ghp_A');
+  });
+
   it('apply_patch: arquivos do patch no título e o patch como diff', () => {
     const patch = ['*** Begin Patch', '*** Update File: /p/src/app.ts', '@@', '-antes', '+depois', '*** Add File: /p/src/novo.ts', '+export {};', '*** End Patch'].join('\n');
     expect(patchFiles(patch)).toEqual([
@@ -163,6 +202,29 @@ describe('codexToolView: nomes de ferramenta do Codex', () => {
     expect(v.input).toContain('-antes\n+depois');
     expect(codexToolView('apply_patch', { command: '*** Begin Patch\n*** Add File: novo.md\n+oi\n*** End Patch' })).toMatchObject({ title: 'apply_patch(novo.md)', text: 'Criando novo.md', icon: '📝' });
     expect(codexToolView('apply_patch', { command: '*** Begin Patch\n*** Delete File: velho.md\n*** End Patch' })).toMatchObject({ text: 'Apagando velho.md', icon: '🗑️' });
+  });
+
+  it('máscara antes do corte no resumo do cartão: o começo de um token nunca aparece (hook e canal paralelo, e os demais nomes)', () => {
+    const token = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+    const leaks = (s: string | undefined) => /ghp_[A-Za-z0-9]/.test(s ?? '') || (s ?? '').includes('A1b2C3');
+    for (const tool of ['Bash', 'exec_command']) {
+      const v = codexToolView(tool, { command: `rg "uso de ${token}" src` });
+      expect(v.text, tool).toMatch(/^Buscando/);
+      expect(leaks(v.text), `${tool}: ${v.text}`).toBe(false);
+      expect(leaks(v.title), `${tool}: ${v.title}`).toBe(false);
+      expect(leaks(v.input), tool).toBe(false);
+      const described = codexToolView(tool, { command: 'npm run deploy', description: `publica com ${token}` });
+      expect(leaks(described.text), `${tool}: ${described.text}`).toBe(false);
+    }
+    for (const [tool, input] of [
+      ['Grep', { pattern: `uso de ${token}` }],
+      ['Glob', { pattern: `${token}/**` }],
+      ['WebSearch', { query: `onde vaza ${token}` }],
+    ] as const) {
+      const v = codexToolView(tool, input);
+      expect(leaks(v.text), `${tool}: ${v.text}`).toBe(false);
+      expect(leaks(v.title), `${tool}: ${v.title}`).toBe(false);
+    }
   });
 
   it('request_permissions, mcp__ e write_stdin (session_id ali é de processo; o texto só no detalhe, mascarado)', () => {

@@ -34,6 +34,11 @@ describe('textos', () => {
     expect(bannerOf({ kind: 'release', tag: 'v2.0.0' })).toBe('Release v2.0.0 no ar!');
     expect(bannerOf({ kind: 'push', branch: 'main' })).toBeUndefined();
   });
+
+  it('mascara antes de cortar, mesmo com brancos de sobra antes do segredo', () => {
+    const ev = describeGitHubEvent({ kind: 'pr_opened', number: 1, url: `${' '.repeat(1190)}ghp_${'A'.repeat(36)}` }, 'Danilo', 'habblaud');
+    expect(ev.activity.detail).toBe('gh*_***');
+  });
 });
 
 describe('efeitos das salas', () => {

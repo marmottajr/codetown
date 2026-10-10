@@ -223,6 +223,14 @@ Depois, **abra o Codex e aprove os hooks do Habblaud em `/hooks`**: o Codex só 
 aprova (o Habblaud nunca grava essa aprovação). Com o Habblaud no Docker, para mandar mensagens às sessões do Codex
 deixe também `npm run codex:bridge` rodando no Mac (veja [Codex](#codex)).
 
+No Windows, o Codex roda os hooks pelo PowerShell, e o `codex:install` grava `node "<caminho do hook>"`, que roda no
+PowerShell, no cmd e no sh (se o `node` do PATH não for 22+, ou com `--node`, grava `& "<node>" "<hook>"`, que só roda
+no PowerShell). Se você instalou os hooks numa versão anterior, rode o `codex:install` de novo e aprove os hooks outra
+vez em `/hooks`: o comando mudou, e o Codex trata hook com comando novo como alterado (o install avisa).
+
+O `codex` no terminal, que roda as sessões num servidor em segundo plano (o daemon do app-server), também pode ser
+aprovado pelo escritório **sem os hooks**, pelo canal paralelo, com o Habblaud no modo Node (veja [Codex](#codex)).
+
 ### Abrir no celular (opcional)
 
 Por padrão o Habblaud só aceita conexões do próprio computador. Para abrir no celular (no mesmo Wi-Fi), com Docker:
@@ -467,31 +475,73 @@ terminal: o lápis só aparece com o terminal ligado (sem `HABBLAUD_TERMINAL=0`)
 ### Codex
 
 As sessões do Codex (CLI ou app) aparecem como as do Claude Code: personagem, sala do projeto, atividade, tarefas,
-subagentes, terminal e histórico, uso de 5 horas e semanal e o **Meu dia** (só tokens: o Codex não informa custo). O
+subagentes, terminal e histórico, uso das janelas do plano e o **Meu dia** (só tokens: o Codex não informa custo). O
 chip da conta do Codex é vazado e leva o selo **CODEX**.
 
-- **Sem instalar nada**, o Habblaud lê os arquivos que o próprio Codex grava (as conversas em `~/.codex/sessions` e as
-  travas das sessões abertas em `~/.codex/thread-writer-locks`). Só que o Codex grava cada passo **depois** que ele
-  termina e nunca grava "esperando você": sem os hooks, o escritório mostra o Codex com atraso e não avisa quando ele
-  precisa de você.
+- **Sem instalar nada**, o Habblaud lê os arquivos que o próprio Codex grava (as conversas em `~/.codex/sessions`, as
+  travas das sessões abertas em `~/.codex/thread-writer-locks` e os nomes das conversas em
+  `~/.codex/session_index.jsonl`). Só que o Codex grava cada passo **depois** que ele termina e nunca grava "esperando
+  você" numa aprovação: sem os hooks, o escritório mostra o Codex com atraso.
 - **Com os hooks** (`npm run codex:install` e aprovar em `/hooks`), o Codex avisa o Habblaud a cada passo: a sessão
   aparece na hora, a atividade é a de agora e um pedido de aprovação levanta a mão do personagem.
-- **Aprovar pelo escritório:** com alguma página do Habblaud aberta, o pedido de aprovação do Codex espera a sua
-  resposta no cartão **Pede permissão** por até **25 segundos** (`npm run codex:install -- --espera <s>`, de 5 a 120):
-  **Aprovar** ou **Recusar** (com o motivo). Diferente do Claude Code, o Codex só mostra a aprovação no terminal
-  **depois** que o escritório responde ou o prazo acaba — nesse meio-tempo o terminal mostra "Aguardando resposta no
-  Habblaud…". Não há "sempre permitir" nem "interromper", e o Codex não deixa responder as perguntas dele por fora.
+- **Aprovar pelo escritório**, de um de dois jeitos, conforme o Codex que pediu:
+  - **`codex` no terminal, ligado ao daemon** (o servidor em segundo plano em que a CLI roda as sessões): o pedido
+    aparece no cartão **Pede permissão** e no terminal **ao mesmo tempo**, sem prazo, e vale o que você responder
+    primeiro. Os botões são **Aprovar**, **Aprovar nesta sessão** (quando o Codex oferece; ele não pergunta de novo
+    por pedidos iguais nesta sessão) e **Recusar** (sem motivo: esse canal não leva texto). Respondeu no terminal, o
+    cartão fecha sozinho. O cartão mostra o comando de dentro (sem o `pwsh.exe -Command` em volta), e um pedido sem
+    nenhuma resposta que o escritório saiba dar fica só no terminal. Funciona sem os hooks, só com o Habblaud no modo
+    Node (no Docker, o container não alcança o daemon) e com o terminal do Habblaud ligado (mesma trava). O Habblaud só
+    se junta a um daemon que já está rodando: nunca o inicia nem muda a configuração dele. Também só se junta às
+    conversas que o daemon já tem carregadas (nunca carrega uma), solta cada uma 60 segundos depois de o turno fechar e a
+    assina de novo quando um turno abre, para não segurar a sessão de um terminal que você fechou. A cada 15 segundos
+    ele confere se o daemon responde; sem resposta em 10 segundos (um daemon travado por mais que isso conta como
+    morto), a ligação cai, os cartões abertos fecham, os pedidos novos vão pelo hook e ele tenta se ligar de novo logo
+    depois. No Windows, o canal paralelo e as mensagens usam o `codex.exe` do PATH; com o Codex instalado só pelo npm
+    (que põe no PATH só os atalhos `codex.cmd`/`codex.ps1`, sem o `codex.exe`), aponte `HABBLAUD_CODEX_BIN` para o
+    executável nativo. `HABBLAUD_CODEX_APPSERVER=0` desliga.
+  - **Nos demais** (o app do Codex, a extensão do VS Code e a CLI fora do daemon): pelo hook. Com alguma página do
+    Habblaud aberta, o pedido espera a sua resposta por até **25 segundos** (`npm run codex:install -- --espera <s>`,
+    de 5 a 120): **Aprovar** ou **Recusar** (com o motivo). Diferente do Claude Code, o Codex só mostra a aprovação no
+    terminal **depois** que o escritório responde ou o prazo acaba — nesse meio-tempo o terminal mostra "Aguardando
+    resposta no Habblaud…". Passado o prazo, os botões do cartão desligam: a decisão já não chegaria ao Codex.
+
+  Não há "sempre permitir" nem "interromper", e o Codex não deixa responder as perguntas dele por fora. O hook só
+  aceita a decisão de um Habblaud que prove ser o desta máquina, com a chave local `~/.habblaud/codex-hook.key` (o
+  Habblaud cria ao subir; no Docker, o `docker:up` cria no computador e a monta): sem ela, o pedido segue no terminal.
+  Depois de atualizar o Habblaud, reinicie-o, senão o hook novo não decide.
 - **Mandar mensagens:** a caixa **Mandar mensagem** funciona para o Codex também, pelo `codex queue`: a mensagem entra
   na fila da sessão e o Codex a pega quando termina o que está fazendo (até uns 10 segundos depois). No modo Node o
   próprio Habblaud roda o comando; **no Docker**, deixe `npm run codex:bridge` rodando no Mac (o container não
   enxerga o seu Codex).
-- **Uso de 5 horas e semanal:** vem dos próprios arquivos do Codex e só se renova enquanto alguma sessão roda; o cartão
-  mostra a idade dos números e "sem cota" quando o workspace ficou sem créditos.
+- **Uso do plano:** vem dos próprios arquivos do Codex e só se renova enquanto alguma sessão roda (sem sessão aberta, o
+  Habblaud relê a cada minuto, para pegar uma sessão curta que já fechou); o cartão mostra só os medidores que o plano
+  tem (num plano só semanal, só a semana), a idade dos números e "sem cota" quando o workspace ficou sem créditos.
 - **Quando a sessão entra:** com a primeira mensagem (é quando o Codex grava a pasta do projeto); uma CLI aberta e
   ainda sem conversa não aparece.
-- **Quando a sessão sai do escritório:** a CLI do Codex roda as sessões num servidor em segundo plano, que as mantém
-  carregadas até um minuto depois de ficarem ociosas e sem ninguém olhando; por isso o personagem pode demorar um
-  pouco para ir embora depois que você fecha o terminal.
+- **Enquanto está aberta:** o Habblaud confere se o Codex ainda segura a trava da sessão (sem nunca travá-la). No
+  Windows e no Linux, a sessão fica no escritório pelo tempo que estiver aberta, mesmo parada há horas, e um turno
+  longo continua "trabalhando"; no macOS e no Docker, onde isso não dá para conferir, a sessão sem nenhuma linha nova
+  há 12 horas sai, e um turno sem nenhuma escrita há 30 minutos fica ocioso (e volta a trabalhar quando o arquivo volta
+  a crescer). Reiniciado no meio de um turno, o Habblaud lê a conversa de trás para frente até o começo dele.
+- **Quando a sessão sai do escritório:** a CLI do Codex roda as sessões num servidor em segundo plano, que só
+  descarrega a conversa depois de ela ficar ociosa e sem ninguém inscrito, num prazo do próprio Codex (no teste com o
+  0.160.1, cerca de 1 a 2 minutos; o código do Codex prevê até 30 minutos, `thread_unload_delay_secs`); até lá a trava
+  continua presa, e o personagem pode continuar no escritório mesmo com o terminal fechado. O Habblaud segura a
+  conversa só 60 segundos depois de o turno fechar (e de novo por uns 60 segundos quando é reiniciado ou quando outro
+  cliente do Codex volta a carregar a conversa, o que recomeça a contagem do Codex), então um terminal fechado sai no
+  tempo do Codex: no pior caso, esses 60 segundos mais o prazo do Codex.
+  No Windows e no Linux (fora do Docker), a sessão sai segundos depois de o processo que segura a trava dela fechar (o
+  app, a CLI fora do daemon ou o próprio daemon, ao descarregar a conversa), mesmo que ele tenha caído sem avisar. O
+  subagente que ainda não concluiu espera 2 minutos antes de sair, porque volta com o mesmo id quando o pai manda um
+  novo pedido a ele (`followup_task`).
+- **O que aparece:** comandos rodados pelo PowerShell ou pelo cmd aparecem pelo comando de dentro (`npm test`, não
+  `pwsh.exe -Command …`), e com eles push e PR do GitHub; uma pergunta do Codex deixa o personagem esperando você, com
+  as perguntas; o plano do code mode atualiza as tarefas; subagentes contam e chegam com a tarefa como título; busca
+  na web, espera e geração de imagem viram atividades; comando que continua rodando depois do turno deixa o
+  personagem "esperando um shell". O terminal mostra também o comando em andamento, o plano, as perguntas e os
+  subagentes disparados. O histórico traz as sessões principais dos últimos 7 dias (os subagentes não tomam as vagas),
+  pela data das conversas, com o nome que a conversa tem no Codex.
 - Conversas da nuvem do ChatGPT (sem arquivo no computador) não aparecem. `HABBLAUD_CODEX=0` desliga o Codex.
 
 ### GitHub no escritório
@@ -611,7 +661,8 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0` desliga só as mensagens pelo escritório (a caixa no terminal e nos detalhes do agente). |
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
-| `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
+| `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`, e que o canal paralelo usa para se juntar ao daemon. |
+| `HABBLAUD_CODEX_APPSERVER` | ligado (só no modo Node, com o terminal) | `0` desliga o canal paralelo: aprovar pelo escritório os pedidos do `codex` no terminal ligado ao daemon (veja [Codex](#codex)). |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |
 | `HABBLAUD_ACCOUNTS` | — | JSON para personalizar nome, letra ou cor, casado pelo nome da pasta da conta. Ex.: `[{"id":".claude-conta2","name":"Trabalho","short":"T","color":"#5cc97b"}]`. |
 
@@ -675,9 +726,9 @@ mod/      o mod do Habblaud e os plugins de permissões e de mensagens (plugins 
 | `POST /api/demo` | `{"enabled": true \| false}` liga ou desliga os agentes simulados. |
 | `POST /api/rooms/rename` | `{"id": sala, "name": nome}` renomeia a sala (vazio volta ao nome da pasta); o nome fica em `rooms.json`, na pasta de dados. Só com acesso local. |
 | `GET /api/mod/summary` | Para o mod do Claude Code: versão, quantos agentes, quantos trabalham e quem precisa de você (sem o demo e, com `?account=&session=`, sem a própria sessão). |
-| `/api/permissions…` | Responder pelo escritório: o hook de permissão registra o pedido (permissão ou pergunta) e espera; a página busca o detalhe e decide ou responde. Só com acesso local. |
+| `/api/permissions…` | Responder pelo escritório: o hook de permissão registra o pedido (permissão ou pergunta) e espera; a página busca o detalhe e decide ou responde. Só com acesso local; as chamadas do hook do Codex vindas de fora do loopback (Docker) só valem com a prova da chave do hook. |
 | `/api/messages…` e `/api/mod/inbox…` | Mandar mensagens: a página deixa a mensagem na fila e acompanha a entrega; o plugin `habblaud-mensagens` a busca, entrega à sessão e confirma. Só com acesso local. |
-| `POST /api/codex/events` | Eventos dos hooks do Codex (sessão aberta, ferramenta, aprovação, fim do turno). Só com acesso local. |
+| `POST /api/codex/events` | Eventos dos hooks do Codex (sessão aberta, ferramenta, aprovação, fim do turno). Só com acesso local: pelo loopback ou, no Docker, com a prova da chave do hook (`~/.habblaud/codex-hook.key`). |
 | `/api/codex/bridge/poll` e `/ack` | O `npm run codex:bridge` busca as mensagens para o Codex e confirma a entrega. Só com acesso local. |
 
 Mais detalhes do servidor em [`server/README.md`](server/README.md).
@@ -692,11 +743,14 @@ Mais detalhes do servidor em [`server/README.md`](server/README.md).
 | `<conta>/sessions/` | `/claude/<conta>/sessions` (somente leitura) | Sessões abertas e seus status. |
 | `<conta>/projects/` | `/claude/<conta>/projects` (somente leitura) | Transcripts das sessões e dos subagentes. |
 | `~/.habblaud/usage/` | `/usage` (somente leitura) | Uso capturado pelo mod (ou pelo tap de statusline). |
+| `<pasta do Codex>/sessions/`, `archived_sessions/`, `thread-writer-locks/` e `session_index.jsonl` | `/codex/<conta>/...` (somente leitura) | Conversas do Codex, travas das sessões abertas e nomes das conversas. A pasta do Codex sem `sessions/` fica de fora. |
+| `~/.habblaud/codex-hook.key` | `/keys/codex-hook.key` (somente leitura) | Chave do hook do Codex (o `docker:up` cria se faltar): no container, os eventos e pedidos do hook chegam pela rede do Docker e só valem com a prova dela. |
 | volume `habblaud-data` | `/data` | Dados do próprio Habblaud (nomes dos personagens, linha do tempo do timelapse e estatísticas do Meu dia). |
 
-A pasta da conta **nunca** é montada inteira (lá ficam credenciais e configurações). O container roda como usuário sem
-privilégios, com sistema de arquivos somente leitura, sem capabilities extras e com `no-new-privileges`. Os metadados
-das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e passados ao container.
+Com `HABBLAUD_CODEX=0` (no `.env` ou no ambiente), nada do Codex é montado. A pasta da conta **nunca** é montada inteira
+(lá ficam credenciais e configurações). O container roda como usuário sem privilégios, com sistema de arquivos
+somente leitura, sem capabilities extras e com `no-new-privileges`. Os metadados das contas (letra, e-mail,
+organização) são lidos no host pelo `docker:up` e passados ao container.
 
 </details>
 
@@ -722,7 +776,8 @@ das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e 
 - **Sem credenciais:** o Habblaud não lê senhas nem tokens de acesso. Do `.claude.json` de cada conta aproveita só o
   e-mail, a organização e o cache do `/usage`; o uso ao vivo vem do mod (ou do tap de statusline).
 - **Segredos mascarados:** tokens e senhas com formato conhecido (`Bearer`, `-u usuário:senha`, `TOKEN=`, chaves
-  `sk-…`, `ghp_…`, `AKIA…`, JWTs, senhas em URLs) viram `***` antes de chegar ao navegador.
+  `sk-…`, `ghp_…`, `AKIA…`, JWTs, senhas em URLs) viram `***` antes de chegar ao navegador, sempre antes de qualquer
+  corte do texto (um token cortado ao meio escaparia da máscara), inclusive em títulos de tarefas e erros.
 - **Protegido contra sites maliciosos:** o servidor recusa endereços que não sejam `localhost`/IP (DNS rebinding) e
   `POST` vindos de outras origens (CSRF), e não deixa a página ser embutida em outros sites.
 - **Terminal só local:** a conversa completa das sessões (e o histórico das sessões encerradas, com os
@@ -755,13 +810,20 @@ das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e 
   e o servidor responde `403`. As mudanças exigem JSON e origem local. `HABBLAUD_TERMINAL=0` desliga junto.
 - **Estatísticas do Meu dia:** só números agregados (tempo por status, contagens, tokens, custo) com nomes de projeto,
   conta e agente, guardados em `HABBLAUD_DATA_DIR/stats/` por 30 dias — nada da conversa.
-- **Codex:** o Habblaud lê só as conversas (`sessions/`, `archived_sessions/`) e as travas das sessões abertas
-  (`thread-writer-locks/`); no Docker, só essas três pastas são montadas, somente leitura. Nunca lê o `auth.json`, o
-  `config.toml`, o ambiente do shell (`shell_snapshots/`), o histórico de prompts, os logs nem os bancos do Codex, e não
-  mostra os ids da conta ChatGPT. O `npm run codex:install` só acrescenta grupos no `hooks.json` (com backup; os de
-  outros apps ficam no mesmo lugar) e grava `~/.habblaud/codex-hook.json`; a aprovação dos hooks é sempre sua, em
-  `/hooks`. Os hooks só falam com `127.0.0.1`. As mensagens ao Codex têm o mesmo aviso das do Claude Code: qualquer
-  programa desta máquina que fale com o Habblaud consegue deixar uma mensagem na fila de uma sessão.
+- **Codex:** o Habblaud lê só as conversas (`sessions/`, `archived_sessions/`), os nomes delas
+  (`session_index.jsonl`) e as travas das sessões abertas (`thread-writer-locks/`), que ele só sonda, sem nunca
+  travar; no Docker, só esses itens são montados, somente leitura. Nunca lê o `auth.json`, o `config.toml`, o ambiente
+  do shell (`shell_snapshots/`), o histórico de prompts, os logs nem os bancos do Codex, e não mostra os ids da conta
+  ChatGPT. O `npm run codex:install` só acrescenta grupos no `hooks.json` (com backup; os de outros apps ficam no mesmo
+  lugar) e grava `~/.habblaud/codex-hook.json`; a aprovação dos hooks é sempre sua, em `/hooks`. Os hooks só falam com
+  `127.0.0.1` e só aceitam uma decisão que traga a prova da chave local `~/.habblaud/codex-hook.key` (fora da pasta do
+  Codex): quem ocupar a porta com o Habblaud parado não aprova nada. Para o canal paralelo, o Habblaud roda
+  `codex app-server daemon version` e `codex app-server proxy` com a pasta da conta: só se junta a um daemon que já
+  está rodando e a conversas que ele já tem carregadas, nunca inicia nem configura o daemon nem carrega uma conversa, e
+  o canal não grava nada na pasta do Codex. Fora o `codex:install`, a
+  única escrita lá é a do próprio Codex: o `codex queue` que entrega uma mensagem guarda a fila no estado dele (só
+  quando você manda uma). As mensagens ao Codex têm o mesmo aviso das do Claude Code: qualquer programa desta máquina
+  que fale com o Habblaud consegue deixar uma mensagem na fila de uma sessão.
 - **O que aparece na tela:** resumos das atividades (ferramenta, arquivo, comando ou consulta), títulos das sessões,
   tarefas e estatísticas (e, no terminal, a conversa). Não exponha a porta em redes em que você não
   confia.
@@ -900,8 +962,29 @@ pasta com `HABBLAUD_CODEX_DIRS` (e rode `npm run docker:up` de novo: no Docker, 
 `docker:up` são montadas). Sem os hooks, o Codex aparece pelos arquivos dele, que só são gravados depois de cada passo:
 rode `npm run codex:install`, **aprove os hooks em `/hooks` no Codex** e confira com `npm run codex:status`. O Codex roda
 os hooks pelo shell de login, que pode ter um Node antigo; o `codex:install` escolhe um Node 22+ e diz qual (ou use
-`--node <caminho>`). Uma sessão da CLI recém-aberta só aparece com a **primeira mensagem**: antes disso o Codex não
-diz em que pasta ela está (só cria a trava da sessão), e sem a pasta não há sala.
+`--node <caminho>`). No Windows, ele os roda pelo PowerShell, com o `node` do PATH (ou o Node 22+ que o install gravou
+na forma `& "<node>" "<hook>"`). Uma sessão da CLI recém-aberta só aparece com a **primeira mensagem**: antes disso o
+Codex não diz em que pasta ela está (só cria a trava da sessão), e sem a pasta não há sala.
+
+</details>
+
+<details>
+<summary><b>O pedido de aprovação do Codex não aparece no escritório</b></summary>
+
+No `codex` do terminal ligado ao daemon, o log de inicialização tem a linha "Aprovação do codex no terminal pelo
+escritório": ela diz se o canal paralelo está ligado e, se não estiver, por quê (Docker, `HABBLAUD_CODEX_APPSERVER=0`,
+terminal desligado). Sem o binário do Codex, o log avisa; no Windows, ele precisa ser o `codex.exe` (os atalhos
+`codex.cmd`/`codex.ps1` do npm não servem): aponte `HABBLAUD_CODEX_BIN` para o executável nativo. "O app-server não
+ficou pronto" no log quer dizer que a ligação ao daemon não ficou pronta em 15 segundos ou foi recusada; "a conexão
+com o app-server caiu (o daemon não responde)", que o daemon passou mais de 10 segundos sem responder. Nos dois casos
+os pedidos vão pelo hook e o Habblaud tenta de novo; um `thread/resume` que falha também deixa uma linha, uma por
+conversa. Um pedido em que o Codex não oferece nenhuma resposta que o escritório saiba dar (aprovar, aprovar na
+sessão, recusar; por exemplo, só `cancel`) fica só no terminal, e o log diz isso. Nos demais clientes do Codex, o
+pedido passa pelo hook: confira com `npm run codex:status`, aprove os hooks em `/hooks` (no Windows, de novo depois de
+um `codex:install` que trocou o comando) e deixe uma página do Habblaud aberta por `http://localhost`; passado o prazo
+do hook, o cartão desliga os botões. Depois de atualizar o Habblaud, reinicie-o: o hook novo só decide com a prova da
+chave `~/.habblaud/codex-hook.key`, que um servidor antigo não manda. No Docker, rode `npm run docker:up` de novo (ele
+cria a chave e a monta no container); com `HABBLAUD_HOOK_DEBUG=1`, o hook conta no stderr o que fez.
 
 </details>
 
@@ -951,6 +1034,10 @@ O Habblaud é um projeto independente, **não afiliado, patrocinado nem endossad
 Para mostrar os agentes, o Habblaud lê apenas arquivos locais que o próprio Claude Code grava na sua máquina
 (registros das sessões abertas, transcripts e configurações das contas). Esse formato não é documentado e pode mudar entre versões do Claude Code:
 depois de uma atualização, o Habblaud pode deixar de funcionar, total ou parcialmente, até ser ajustado.
+
+O Habblaud também não tem vínculo com a OpenAI; "Codex" é marca da OpenAI. Do Codex, ele lê os arquivos que o próprio
+Codex grava e conversa com o servidor em segundo plano dele (o app-server), dois formatos sem documentação oficial
+estável: o mesmo aviso vale para as atualizações do Codex.
 
 ## Licença
 

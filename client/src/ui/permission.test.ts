@@ -4,11 +4,14 @@ import {
   answerFor,
   buildAnswers,
   CODEX_PERMISSION_NOTE,
+  codexHookExpired,
   destinationLabel,
   expiryText,
   isLocalHostname,
   isQuestionRequest,
   nextPermissionAgent,
+  PARALLEL_NOTE,
+  parallelOptions,
   permissionAgents,
   permissionOptions,
   type AskChoice,
@@ -67,6 +70,19 @@ describe('responder pelo escritório (peças puras)', () => {
     expect(permissionOptions({}, { kind: 'sub', background: true }).note).toMatch(/^Este subagente roda em segundo plano/);
   });
 
+  it('hook do Codex com o prazo vencido ("voltando ao terminal…"): o cartão não responde mais; Claude Code e canal paralelo, nunca', () => {
+    const p = { expiresAt: 25_000 };
+    expect(codexHookExpired({ ...p, provider: 'codex' }, 24_999)).toBe(false);
+    expect(codexHookExpired({ ...p, provider: 'codex' }, 25_000)).toBe(true);
+    expect(codexHookExpired({ ...p, provider: 'codex', mode: 'blocking' }, 30_000)).toBe(true);
+    // O mesmo instante em que o prazo diz "voltando ao terminal…".
+    expect(expiryText(25_000, 25_000, true)).toBe('voltando ao terminal…');
+    // Claude Code: o hook dele pode voltar a esperar.
+    expect(codexHookExpired(p, 30_000)).toBe(false);
+    // Canal paralelo: sem prazo.
+    expect(codexHookExpired({ provider: 'codex', mode: 'parallel', expiresAt: 1 }, 30_000)).toBe(false);
+  });
+
   it('destinationLabel', () => {
     expect(destinationLabel('localSettings')).toBe('neste projeto, só para você');
     expect(destinationLabel('userSettings')).toBe('em todos os projetos');
@@ -88,6 +104,21 @@ describe('responder pelo escritório (peças puras)', () => {
   it('isLocalHostname: a mesma regra do servidor para aceitar respostas', () => {
     for (const h of ['localhost', 'habblaud.localhost', '127.0.0.1', '127.1.2.3', '[::1]', '::1', 'LOCALHOST']) expect(isLocalHostname(h), h).toBe(true);
     for (const h of ['192.168.0.10', 'meu-mac.local', 'habblaud.lan', '128.0.0.1', '127.0.0.1.nip.io']) expect(isLocalHostname(h), h).toBe(false);
+  });
+});
+
+describe('cartão parallel (canal do app-server do Codex)', () => {
+  it('parallelOptions: botões conforme as decisões do canal e a dica de quem responde primeiro', () => {
+    expect(parallelOptions({ mode: 'parallel', decisions: ['accept', 'acceptForSession', 'decline', 'cancel'] })).toEqual({ approve: true, session: true, deny: true, note: PARALLEL_NOTE });
+    expect(parallelOptions({ mode: 'parallel', decisions: ['accept', 'decline'] })).toEqual({ approve: true, session: false, deny: true, note: PARALLEL_NOTE });
+    // Sem a lista: nada a oferecer (o servidor recusaria qualquer decisão).
+    expect(parallelOptions({ mode: 'parallel' })).toEqual({ approve: false, session: false, deny: false, note: PARALLEL_NOTE });
+    expect(PARALLEL_NOTE).toBe('Vale quem responder primeiro: aqui ou no terminal');
+  });
+
+  it('fora do canal paralelo: undefined (vale permissionOptions, como hoje)', () => {
+    expect(parallelOptions({})).toBeUndefined();
+    expect(parallelOptions({ mode: 'blocking', decisions: ['accept'] })).toBeUndefined();
   });
 });
 

@@ -140,6 +140,31 @@ describe('parseLine — títulos, tarefas e números', () => {
     expect(titleOf(s)).toBe('Loja');
   });
 
+  it('segredos mascarados antes do corte: tarefas, primeira linha do erro e último prompt', () => {
+    const tok = `ghp_${'A'.repeat(36)}`;
+    const s = createTranscriptState();
+    const r = feed(s, [
+      L.prompt(`${' '.repeat(990)}${tok}`),
+      L.assistant([L.tool('t1', 'TodoWrite', { todos: [{ content: `Testar com GITHUB_TOKEN=${tok}`, status: 'pending', activeForm: `Testando ${tok}` }] })]),
+      L.assistant([L.tool('a', 'Bash', { command: 'npm test' })]),
+      L.result('a', `Error: ${'x'.repeat(120)} ${tok}`, { error: true }),
+    ]);
+    expect(s.tasks).toEqual([{ id: '1', title: 'Testar com GITHUB_TOKEN=***', status: 'pending', activeForm: 'Testando gh*_***' }]);
+    const error = acts(r).find((x) => x.activity.kind === 'error');
+    expect(error?.activity.detail).toBe(`Error: ${'x'.repeat(120)} gh*_***`);
+    expect(s.lastPrompt).toBe('gh*_***');
+    feed(s, [L.raw('custom-title', { customTitle: `Deploy com ${tok}` })]);
+    expect(titleOf(s)).toBe('Deploy com gh*_***');
+    const s2 = createTranscriptState();
+    feed(s2, [
+      L.assistant([L.tool('c1', 'TaskCreate', { subject: `Rodar com ${tok}`, activeForm: `Rodando com ${tok}` })]),
+      L.result('c1', 'Task #7 created successfully', { toolUseResult: { task: { id: '7', subject: 'x' } } }),
+      L.assistant([L.tool('u1', 'TaskUpdate', { taskId: '7', subject: `Rodar de novo com ${tok}`, activeForm: `Rodando de novo com ${tok}` })]),
+    ]);
+    expect(JSON.stringify(s2.tasks)).not.toContain('ghp_A');
+    expect(s2.tasks[0]).toMatchObject({ title: 'Rodar de novo com gh*_***', activeForm: 'Rodando de novo com gh*_***' });
+  });
+
   it('TodoWrite substitui a lista; TaskCreate/TaskUpdate editam (id vindo do resultado)', () => {
     const s = createTranscriptState();
     feed(s, [

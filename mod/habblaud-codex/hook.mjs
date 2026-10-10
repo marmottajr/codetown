@@ -21,11 +21,19 @@
 //    do ar ou sem página aberta): sai sem imprimir nada e o Codex segue a aprovação normal. Atenção: o Codex só mostra
 //    a aprovação no terminal DEPOIS que o hook termina (enquanto isso, o terminal mostra o statusMessage do hook).
 //
+// Prova (a porta não basta: com o Habblaud parado, qualquer processo pode ocupá-la): o hook lê a chave local em
+// ~/.habblaud/codex-hook.key (32 bytes; o servidor cria, e no Docker o docker:up cria no host). Cada chamada leva um
+// nonce novo (`<epoch ms>.<16 bytes hex>`, x-habblaud-nonce) e a prova HMAC-SHA256(chave, "hook:<nonce>")
+// (x-habblaud-proof); o Habblaud desta máquina responde com HMAC-SHA256(chave, "server:<nonce>"). Só vale um 201 ou
+// uma decisão cuja resposta traga essa prova, e o pedido só é registrado se a resposta do evento também a trouxe. Sem
+// chave (ou ilegível) os eventos vão sem prova e o PermissionRequest sai sem decidir: o pedido segue no terminal.
+//
 // Regras: Node puro (22+), só `node:*`, sem dependências; nunca trava nem quebra a sessão: todo erro = sair com 0 e
 // sem saída (nunca com 2, que no Codex recusa o pedido). Nunca imprime updatedInput, updatedPermissions nem interrupt
 // (o Codex não os aceita: o hook "falha" sem decidir). Nos eventos de observação, nada vai para o stdout (no
 // UserPromptSubmit e no SessionStart ele viraria contexto do modelo). Só fala com 127.0.0.1.
 // HABBLAUD_HOOK_DEBUG=1 escreve o que acontece no stderr.
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
@@ -38,6 +46,11 @@ export const MIN_WAIT_S = 5;
 export const MAX_WAIT_S = 120;
 /** Arquivo de configuração, em ~/.habblaud (o instalador grava). */
 export const CONFIG_FILE = 'codex-hook.json';
+/** Chave local do hook, em ~/.habblaud (a mesma de server/codex/key.ts: 32 bytes brutos). */
+export const KEY_FILE = 'codex-hook.key';
+export const NONCE_HEADER = 'x-habblaud-nonce';
+export const PROOF_HEADER = 'x-habblaud-proof';
+const KEY_BYTES = 32;
 /** Eventos mandados ao Habblaud (o PermissionRequest também, antes de registrar o pedido). */
 export const OBSERVED = new Set(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStart', 'SubagentStop', 'PermissionRequest']);
 /** Prazo do envio de um evento: o Habblaud responde na hora (e o hook não pode atrasar o Codex). */
@@ -86,6 +99,27 @@ export function readConfig(env = process.env) {
     port: validPort(filePort) ? filePort : validPort(envPort) ? envPort : DEFAULT_PORT,
     waitMs: (Number.isFinite(wait) && wait > 0 ? Math.min(MAX_WAIT_S, Math.max(MIN_WAIT_S, wait)) : DEFAULT_WAIT_S) * 1_000,
   };
+}
+
+/** A chave local do hook (~/.habblaud/codex-hook.key), só se tiver exatamente 32 bytes; undefined = ausente ou ilegível. */
+export function readKey(env = process.env) {
+  try {
+    const key = readFileSync(join(env.HOME || homedir(), '.habblaud', KEY_FILE));
+    return key.length === KEY_BYTES ? key : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** HMAC-SHA256(chave, `${role}:${nonce}`) em hex, como o keyProof do servidor (server/codex/key.ts). */
+export function keyProof(key, role, nonce) {
+  return createHmac('sha256', key).update(`${role}:${nonce}`).digest('hex');
+}
+
+/** A resposta prova que veio do Habblaud desta máquina: `header` = a prova do servidor para o nonce desta chamada. */
+export function provesServer(key, nonce, header) {
+  if (typeof header !== 'string' || !/^[0-9a-f]{64}$/.test(header)) return false;
+  return timingSafeEqual(Buffer.from(header, 'hex'), Buffer.from(keyProof(key, 'server', nonce), 'hex'));
 }
 
 /**
@@ -173,12 +207,21 @@ function readStdin() {
   });
 }
 
-/** Requisição ao Habblaud local; null = fora do ar, tempo esgotado ou resposta ilegível. */
-async function call(base, method, path, body, timeoutMs) {
+/**
+ * Requisição ao Habblaud local; null = fora do ar, tempo esgotado ou resposta ilegível. Com a chave, leva um nonce novo
+ * e a prova do hook; `proven` = a resposta trouxe a prova do servidor para esse nonce (sem chave, nunca).
+ */
+async function call(base, method, path, body, timeoutMs, key) {
   try {
+    const headers = body === undefined ? {} : { 'Content-Type': 'application/json' };
+    const nonce = key ? `${Date.now()}.${randomBytes(16).toString('hex')}` : undefined;
+    if (nonce) {
+      headers[NONCE_HEADER] = nonce;
+      headers[PROOF_HEADER] = keyProof(key, 'hook', nonce);
+    }
     const res = await fetch(`${base}${path}`, {
       method,
-      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -189,7 +232,7 @@ async function call(base, method, path, body, timeoutMs) {
     } catch {
       json = undefined;
     }
-    return { status: res.status, json };
+    return { status: res.status, json, proven: !!nonce && provesServer(key, nonce, res.headers.get(PROOF_HEADER)) };
   } catch (err) {
     debug(`${method} ${path}: ${err?.name ?? 'erro'} ${err?.message ?? ''}`);
     return null;
@@ -213,20 +256,27 @@ export async function run(env = process.env, stdinText) {
     if (!OBSERVED.has(event)) return undefined;
 
     const cfg = readConfig(env);
+    const key = readKey(env);
     const codexHome = codexHomeOf(env, input);
     const account = accountOf(codexHome);
     const base = `http://127.0.0.1:${cfg.port}`;
-    const sent = await call(base, 'POST', '/api/codex/events', eventBody(input, account, codexHome), event === 'SessionEnd' ? SESSION_END_TIMEOUT_MS : EVENT_TIMEOUT_MS);
-    debug(`${event}: ${sent ? `${sent.status} ${JSON.stringify(sent.json ?? null)}` : 'Habblaud fora do ar'}`);
+    const sent = await call(base, 'POST', '/api/codex/events', eventBody(input, account, codexHome), event === 'SessionEnd' ? SESSION_END_TIMEOUT_MS : EVENT_TIMEOUT_MS, key);
+    debug(`${event}: ${sent ? `${sent.status} ${JSON.stringify(sent.json ?? null)}${sent.proven ? ' (provado)' : ''}` : 'Habblaud fora do ar'}`);
     if (event !== 'PermissionRequest' || typeof input.tool_name !== 'string' || !input.tool_name) return undefined;
     // Sem resposta nem ao evento: o Habblaud está fora do ar (ou travado); a aprovação segue no terminal.
     if (!sent) return undefined;
+    // Sem a chave, ou o evento respondido sem a prova do servidor: não dá para saber se é o Habblaud desta máquina
+    // (pode ser quem ocupou a porta). Nunca decide; nem registra (o cartão ficaria sem ninguém para ouvir a resposta).
+    if (!key || !sent.proven) {
+      debug(key ? 'resposta sem a prova do Habblaud: vale o terminal' : `sem a chave em ~/.habblaud/${KEY_FILE}: vale o terminal`);
+      return undefined;
+    }
 
     // A espera conta desde o início do hook (o Codex só mostra a aprovação no terminal quando ele termina).
     const deadline = startedAt + cfg.waitMs;
-    const reg = await call(base, 'POST', '/api/permissions', permissionBody(input, account, codexHome, Math.max(0, deadline - Date.now())), REGISTER_TIMEOUT_MS);
-    if (!reg || reg.status !== 201 || typeof reg.json?.id !== 'string') {
-      debug(`sem desvio (${reg ? `${reg.status} ${JSON.stringify(reg.json ?? null)}` : 'Habblaud fora do ar'})`);
+    const reg = await call(base, 'POST', '/api/permissions', permissionBody(input, account, codexHome, Math.max(0, deadline - Date.now())), REGISTER_TIMEOUT_MS, key);
+    if (!reg || reg.status !== 201 || !reg.proven || typeof reg.json?.id !== 'string') {
+      debug(`sem desvio (${reg ? `${reg.status} ${JSON.stringify(reg.json ?? null)}${reg.proven ? '' : ', sem prova'}` : 'Habblaud fora do ar'})`);
       return undefined;
     }
     const id = encodeURIComponent(reg.json.id);
@@ -237,8 +287,9 @@ export async function run(env = process.env, stdinText) {
         return undefined;
       }
       const waitS = Math.max(0.05, Math.min(POLL_S, left / 1_000));
-      const r = await call(base, 'GET', `/api/permissions/${id}/wait?timeout=${waitS}`, undefined, waitS * 1_000 + 5_000);
-      if (!r || r.status !== 200) return undefined;
+      const r = await call(base, 'GET', `/api/permissions/${id}/wait?timeout=${waitS}`, undefined, waitS * 1_000 + 5_000, key);
+      // Sem a prova do servidor, nem "pending" vale: quem respondeu não é o Habblaud desta máquina.
+      if (!r || r.status !== 200 || !r.proven) return undefined;
       if (r.json?.status === 'pending') continue;
       debug(`resposta: ${JSON.stringify(r.json)}`);
       return decisionOutput(r.json);

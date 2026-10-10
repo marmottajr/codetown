@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  codexApprovalReason,
   describeCommand,
   describePrompt,
   describeShellJob,
@@ -104,6 +105,41 @@ describe('segredos mascarados', () => {
     expect(describePrompt('usa a chave sk-proj-0123456789abcdef pra testar').detail).toBe('usa a chave sk-*** pra testar');
   });
 
+  it('mascara antes de cortar: um token partido no corte não vaza o começo', () => {
+    const tok = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+    const cases: Array<[ReturnType<typeof describeTool> | { label: string }, string]> = [
+      [describeTool('Grep', { pattern: `senha ${tok}` }), 'Buscando “senha gh*_***”'],
+      [describeTool('Glob', { pattern: `src/arquivos/${tok}` }), 'Procurando src/arquivos/gh*_***'],
+      [describeTool('WebSearch', { query: `erro com ${tok} no CI` }), 'Pesquisando “erro com gh*_*** no CI”'],
+      [describeTool('WebFetch', { url: `nao-e-url ${tok}` }), 'Lendo nao-e-url gh*_***'],
+      [describePrompt(`usa a chave ${tok} agora`), 'Nova tarefa: “usa a chave gh*_*** agora”'],
+      [describeCommand(`rg "senha ${tok}"`), 'Buscando “senha gh*_***”'],
+      [describeCommand(`curl http://localhost:3000/api/${tok}`), 'Testando a API local (:3000/api/gh*_***)'],
+      [describeShellJob('Monitor', { ws: { url: `sem-esquema ${tok}` } }), 'Escutando sem-esquema gh*_***'],
+    ];
+    for (const [d, text] of cases) {
+      expect('label' in d ? d.label : d.text).toBe(text);
+      expect(JSON.stringify(d)).not.toContain('ABCDEFG');
+    }
+  });
+
+  it('mascara antes de cortar mesmo com brancos de sobra antes do segredo (o recorte prévio não parte o token)', () => {
+    const tok = `ghp_${'A'.repeat(36)}`;
+    const results = [
+      describePrompt(`Chave:${' '.repeat(220)}${tok}`),
+      describePrompt(`${' '.repeat(215)}DB_PASSWORD="hunter2hunter2hunter2"`),
+      describeCommand(`echo inicio${' '.repeat(1180)}${tok}`),
+      describeShellJob('Bash', { command: `echo${' '.repeat(1190)} ${tok}`, description: `${' '.repeat(370)}${tok}` }),
+      describeTool('AskUserQuestion', { questions: [{ question: `${' '.repeat(1190)}${tok}`, options: [{ label: 'Sim' }] }] }),
+      // A heurística do comando lê só os primeiros 8000 caracteres: o token que cruza esse ponto não pode aparecer partido.
+      describeCommand(`# ${'x'.repeat(7977)}\ngrep -r ${tok}`),
+    ];
+    for (const d of results) {
+      expect(JSON.stringify(d)).not.toContain('ghp_A');
+      expect(JSON.stringify(d)).not.toContain('hunter2');
+    }
+  });
+
   it('shell: palavras e segmentos', () => {
     expect(shellWords(`a 'b c' "d \\"e\\"" f\\ g ''`)).toEqual(['a', 'b c', 'd "e"', 'f g', '']);
     expect(splitShell('a && b | c; d & e 2>&1 || f "x|y" $(g; h)')).toEqual(['a', 'b', 'c', 'd', 'e 2>&1', 'f "x|y" $(g; h)']);
@@ -118,6 +154,13 @@ describe('atividades', () => {
     expect(SPECIAL.cleared().kind).toBe('compact');
     expect(describeWaitingFor('worker request')).toBe('aprovar o pedido de um worker');
     expect(describeWaitingFor(undefined)).toBe('responder no terminal');
+  });
+
+  it('motivo da espera por um pedido do Codex, pelo tipo: comando, edição ou o genérico (rede e o resto)', () => {
+    expect(['Bash', 'exec_command', 'shell', 'local_shell'].map((t) => codexApprovalReason(t))).toEqual(Array(4).fill('aprovar um comando'));
+    expect(codexApprovalReason('apply_patch')).toBe('aprovar uma edição');
+    expect(codexApprovalReason('Bash', true)).toBe('aprovar uma permissão');
+    expect(['request_permissions', 'mcp__github__create_issue', 'write_stdin'].map((t) => codexApprovalReason(t))).toEqual(Array(3).fill('aprovar uma permissão'));
   });
 });
 
