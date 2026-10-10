@@ -4,9 +4,11 @@ import { NAME_MAX, parseAppearanceParts, parseCharacterName, parseSeed } from '.
 import type { AgentInfo, ModSummary, OfficeSnapshot, SourceInfo, UpdateStatus } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
 import { handleCodexEvent } from '../codex/http';
+import { handleOpencodeEvent } from '../opencode/http';
 import type { DayStatsService } from '../history/daystats';
 import type { Office } from '../model/office';
 import type { CodexLive } from '../sources/codex/live';
+import type { OpencodeLive } from '../sources/opencode/live';
 import type { SessionLookup } from '../sources/source';
 import { isJsonContentType, isLoopbackHost } from './guard';
 import { handleSessionsRoute } from './sessions';
@@ -49,6 +51,15 @@ export interface ApiDeps {
    * não dependem da trava do terminal).
    */
   codexLive?: CodexLive;
+  /**
+   * Eventos do plugin do OpenCode (POST /api/opencode/events, server/opencode/http.ts): a rota só existe com
+   * `opencodeEvents` (HABBLAUD_OPENCODE ligado; 404 sem ele). `opencodeLive` é a fonte do OpenCode, que pode faltar (sem
+   * opencode.db ou sem node:sqlite): o plugin continua mandando e a rota responde {ok: false}. Mesma trava do Codex.
+   */
+  opencodeEvents?: boolean;
+  opencodeLive?: OpencodeLive;
+  /** Libera as perguntas do OpenCode ainda abertas no escritório (cartão) de uma sessão: chamada em question.replied/rejected. */
+  releaseOpencodeQuestions?: (sessionId: string) => void;
   /** Renomeia a sala (POST /api/rooms/rename {id, name}; vazio volta ao padrão). Devolve o nome em uso, ou undefined se a sala não existe. */
   renameRoom?: (id: string, name: string) => string | undefined;
   /** Estatísticas do "Meu dia" (GET /api/stats, http/stats.ts). */
@@ -82,7 +93,9 @@ function isMessagesPath(path: string): boolean {
     path === '/api/mod/inbox' ||
     path === '/api/mod/inbox/ack' ||
     path === '/api/codex/bridge/poll' ||
-    path === '/api/codex/bridge/ack'
+    path === '/api/codex/bridge/ack' ||
+    path === '/api/opencode/bridge/poll' ||
+    path === '/api/opencode/bridge/ack'
   );
 }
 
@@ -257,6 +270,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           permissions: !!deps.permissions,
           messages: !!deps.messages,
           codexEvents: !!deps.codexLive,
+          ...(deps.opencodeEvents ? { opencodeEvents: true, opencodeSource: !!deps.opencodeLive } : {}),
           updates: updatesSummary(deps.updates?.status()),
           sources: deps.sources(),
           accounts: accounts.allEntries().map((a) =>
@@ -339,6 +353,14 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       else if (!isLoopbackHost(req.headers.host) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
         sendJson(res, 403, { error: 'eventos do Codex só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)' });
       } else handleCodexEvent(req, res, { live: deps.codexLive, entries: () => accounts.entriesOf('codex') }).catch((err) => fail(res, err));
+      return true;
+    }
+    if (path === '/api/opencode/events' && deps.opencodeEvents) {
+      // Eventos do plugin do OpenCode: só observam, mas só valem vindos do próprio computador (mesma trava do Codex).
+      if (method !== 'POST') methodNotAllowed(res, 'POST');
+      else if (!isLoopbackHost(req.headers.host) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
+        sendJson(res, 403, { error: 'eventos do OpenCode só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)' });
+      } else handleOpencodeEvent(req, res, { live: deps.opencodeLive, releaseQuestions: deps.releaseOpencodeQuestions }).catch((err) => fail(res, err));
       return true;
     }
     if (isMessagesPath(path)) {

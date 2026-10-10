@@ -12,7 +12,8 @@ import type { AccountsService } from '../../accounts/service';
 import { errMsg, log } from '../../log';
 import type { Office } from '../../model/office';
 import type { AgentSource } from '../source';
-import { describeOpencodePart } from './activity';
+import { SESSION_ID_RE, type OpencodeEvent, type OpencodeLive } from './live';
+import { describeOpencodePart, describeOpencodeTool } from './activity';
 import { DB_FILE, inSnapshot, lastMessage, lastPart, listSessions, openDb, todos, type OcDb, type OcSession, type OpenOptions } from './files';
 
 /** Sessão sem escrita há mais que isto (ou arquivada) sai do escritório. */
@@ -22,7 +23,9 @@ const ACCOUNT_COLOR = '#35b7a5';
 const MAIN_ROLE = 'Agente principal (OpenCode)';
 const SUB_ROLE = 'Subagente (OpenCode)';
 const MAX_DEPTH = 8;
-
+/** Depois de um evento ao vivo, o ciclo de leitura não o desfaz por este tempo (o banco costuma chegar um pouco depois); passado isso, o banco manda. */
+export const LIVE_HOLD_MS = 3_000;
+const TITLE_MAX = 200;
 export interface OpencodeSourceOptions {
   accounts: AccountsService;
   office: Office;
@@ -48,6 +51,12 @@ interface Tracker {
   subDone: boolean;
   status: AgentStatus;
   lastActivityId?: string;
+  /** Até quando o status vindo de um evento vale sobre o banco (OC-22). */
+  liveUntil?: number;
+  /** Título e tarefas do último ciclo / do último todo.updated (este vale até `tasksUntil`). */
+  title?: string;
+  liveTasks?: TaskItem[];
+  tasksUntil?: number;
 }
 
 const depthOf = (row: OcSession, byId: Map<string, OcSession>): number => {
@@ -62,7 +71,7 @@ function freeShort(taken: readonly string[]): string {
   return ['O', 'P', 'Q', 'U', 'V', 'W'].find((c) => !used.has(c)) ?? 'O';
 }
 
-export class OpencodeSource implements AgentSource {
+export class OpencodeSource implements AgentSource, OpencodeLive {
   readonly provider = 'opencode' as const;
   private db: OcDb | undefined;
   private accountId = ACCOUNT_ID;
@@ -257,9 +266,11 @@ export class OpencodeSource implements AgentSource {
     const office = this.opts.office;
     const msg = lastMessage(db, row.id, 'assistant');
     const diskStatus: AgentStatus = msg && msg.completed === undefined ? 'working' : 'idle';
-    const status: AgentStatus = diskStatus;
+    let status: AgentStatus = diskStatus;
 
     let t = this.trackers.get(key);
+    // Um evento ao vivo recente vale sobre o banco, que ainda pode não ter alcançado (depois da janela, o banco manda).
+    if (t && t.inOffice && t.liveUntil !== undefined && now < t.liveUntil) status = t.status;
     if (t && t.inOffice && !office.has(key)) t.inOffice = false; // saiu do escritório (período de graça encerrado)
     if (!t) {
       const parentKey = row.parentId ? `opencode:${row.parentId}` : undefined;
@@ -272,6 +283,7 @@ export class OpencodeSource implements AgentSource {
     if (!t.inOffice) this.enter(t, row, cwd, status, now);
     else if (status !== t.status) this.setStatus(t, status);
     t.status = status;
+    t.title = row.title || undefined;
     if (!t.inOffice) return true;
 
     if (status === 'working') this.pushActivity(db, t, now);
@@ -349,17 +361,94 @@ export class OpencodeSource implements AgentSource {
 
   /** Título, tarefas e último sinal de vida do agente. */
   private applySummary(db: OcDb, t: Tracker, row: OcSession): void {
-    const tasks: TaskItem[] = todos(db, t.sessionId).map((x, i) => ({
+    const tasks: TaskItem[] = (t.liveTasks && t.tasksUntil !== undefined && this.now() < t.tasksUntil ? t.liveTasks : todos(db, t.sessionId).map((x, i) => ({
       id: String(i + 1),
       title: x.content,
       status: x.status === 'completed' ? 'completed' : x.status === 'in_progress' ? 'in_progress' : 'pending',
-    }));
+    })));
     this.opts.office.applyTranscript(t.key, {
       title: row.title || undefined,
       tasks,
       stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 },
       lastAt: row.timeUpdated,
     });
+  }
+
+  // ---------------------------------------------------------------- eventos do plugin (OpencodeLive)
+
+  applyHookEvent(event: OpencodeEvent): boolean {
+    try {
+      return this.liveEvent(event);
+    } catch (err) {
+      log.warnOnce(`opencode-hook:${errMsg(err)}`, `OpenCode: evento ignorado (${errMsg(err)}).`);
+      return false;
+    }
+  }
+
+  private liveEvent(event: OpencodeEvent): boolean {
+    const props = event?.properties;
+    const sid = props?.sessionID;
+    if (!this.db || typeof sid !== 'string' || !SESSION_ID_RE.test(sid)) return false;
+    const t = this.trackers.get(`opencode:${sid}`);
+    if (!t || !t.inOffice) return false; // sessão que o ciclo de leitura ainda não conhece (ele a traz em até 1 s)
+    switch (event.type) {
+      case 'session.idle':
+        this.liveStatus(t, 'idle');
+        return true;
+      case 'session.status': {
+        const type = (props.status as { type?: unknown } | undefined)?.type;
+        if (type === 'idle') {
+          this.liveStatus(t, 'idle');
+        } else if (type === 'busy' || type === 'retry') this.liveStatus(t, 'working');
+        else return false;
+        return true;
+      }
+      case 'tool.execute.before': {
+        const tool = typeof props.tool === 'string' ? props.tool.trim() : '';
+        if (!tool) return false;
+        this.liveStatus(t, 'working');
+        const title = typeof props.title === 'string' ? props.title.slice(0, TITLE_MAX) : undefined;
+        const callID = typeof props.callID === 'string' ? props.callID.slice(0, 80) : '';
+        const { desc, tool: name } = describeOpencodeTool(tool, title);
+        const id = `${t.key}#live:${callID || tool}`;
+        if (id !== t.lastActivityId) {
+          t.lastActivityId = id;
+          this.opts.office.addActivity(t.key, { id, at: this.now(), ...desc, tool: name }, true);
+        }
+        return true;
+      }
+      case 'tool.execute.after':
+        return true; // a ferramenta acabou; o próximo evento ou o ciclo de leitura diz o que vem depois
+      case 'todo.updated': {
+        if (!Array.isArray(props.todos)) return false;
+        t.liveTasks = props.todos.slice(0, 100).flatMap((x, i): TaskItem[] => {
+          const r = x as { content?: unknown; status?: unknown } | null;
+          if (!r || typeof r.content !== 'string' || !r.content.trim()) return [];
+          const status = r.status === 'completed' ? 'completed' : r.status === 'in_progress' ? 'in_progress' : 'pending';
+          return [{ id: String(i + 1), title: r.content.slice(0, TITLE_MAX), status }];
+        });
+        t.tasksUntil = this.now() + LIVE_HOLD_MS;
+        this.opts.office.applyTranscript(t.key, {
+          title: t.title,
+          tasks: t.liveTasks,
+          stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 },
+          lastAt: this.now(),
+        });
+        return true;
+      }
+      case 'permission.asked':
+      case 'permission.updated':
+        return true; // o cartão vem de POST /api/permissions (registro de permissões); aqui só confirma a sessão
+      default:
+        return false;
+    }
+  }
+
+  /** Status de um evento: vale sobre o banco por LIVE_HOLD_MS e mantém o rastreador coerente (o ciclo não o desfaz na hora). */
+  private liveStatus(t: Tracker, status: AgentStatus): void {
+    t.liveUntil = this.now() + LIVE_HOLD_MS;
+    if (t.status !== status) this.setStatus(t, status);
+    t.status = status;
   }
 
   /** Sai do escritório: principal encerra; subagente entrega (se ainda não tinha entregado). */

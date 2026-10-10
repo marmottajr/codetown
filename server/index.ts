@@ -197,6 +197,8 @@ const api = createApiHandler({
   permissions: permissions ? createPermissionRoutes(permissions) : undefined,
   messages: messages ? createMessageRoutes(messages) : undefined,
   codexLive,
+  opencodeEvents: config.opencode,
+  opencodeLive: opencode,
   stats,
   updates,
 });

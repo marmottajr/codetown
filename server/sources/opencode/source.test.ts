@@ -8,7 +8,7 @@ import { NameStore } from '../../model/names';
 import { Office, OFFLINE_GRACE_MS } from '../../model/office';
 import { tempDir } from '../../test/fixtures';
 import { buildOpencodeDb, HAS_SQLITE, ocId, toolPart, type OcFixture } from '../../test/opencode-fixtures';
-import { OpencodeSource, PRESENCE_MS } from './source';
+import { LIVE_HOLD_MS, OpencodeSource, PRESENCE_MS } from './source';
 
 setQuiet(true);
 
@@ -273,5 +273,138 @@ describe.skipIf(!HAS_SQLITE)('fonte do OpenCode: banco ausente ou sem node:sqlit
     expect(String(warn.mock.calls[0][0])).toContain('22.13');
     expect(ctx.source.sources()).toEqual([]);
     expect(ctx.agents()).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!HAS_SQLITE)('fonte do OpenCode: eventos ao vivo (applyHookEvent)', () => {
+  const status = (sessionID: string, type: string) => ({ type: 'session.status', properties: { sessionID, status: { type } } });
+  const statusOf = (ctx: ReturnType<typeof setup>, id: string) => ctx.agent(id)?.status;
+
+  async function idleSession() {
+    const ctx = setup();
+    const t = ctx.now();
+    ctx.fx.addSession({ id: S1, directory: '/p/a', updated: t });
+    ctx.fx.addMessage({ session: S1, role: 'assistant', created: t - 2000, completed: t - 1000 });
+    await ctx.source.start();
+    expect(statusOf(ctx, S1)).toBe('idle');
+    return ctx;
+  }
+
+  it('OC-15: session.status busy marca working e session.idle marca idle, antes do próximo ciclo', async () => {
+    const ctx = await idleSession();
+    expect(ctx.source.applyHookEvent(status(S1, 'busy'))).toBe(true);
+    expect(statusOf(ctx, S1)).toBe('working');
+    expect(ctx.source.applyHookEvent({ type: 'session.idle', properties: { sessionID: S1 } })).toBe(true);
+    expect(statusOf(ctx, S1)).toBe('idle');
+    expect(ctx.source.applyHookEvent(status(S1, 'retry'))).toBe(true);
+    expect(statusOf(ctx, S1)).toBe('working');
+    expect(ctx.source.applyHookEvent(status(S1, 'idle'))).toBe(true);
+    expect(statusOf(ctx, S1)).toBe('idle');
+  });
+
+  it('o ciclo que roda logo depois não desfaz o evento enquanto o banco ainda não alcançou', async () => {
+    const ctx = await idleSession();
+    ctx.source.applyHookEvent(status(S1, 'busy'));
+    expect(ctx.poll().agents.find((a) => a.id === key(S1))?.status).toBe('working');
+    ctx.advance(500);
+    expect(ctx.poll().agents.find((a) => a.id === key(S1))?.status).toBe('working');
+  });
+
+  it('OC-22: evento perdido ou falso é corrigido pelo ciclo seguinte (o banco manda depois da janela do evento)', async () => {
+    const ctx = await idleSession();
+    ctx.source.applyHookEvent(status(S1, 'busy')); // o banco continua dizendo idle
+    ctx.advance(10_000);
+    expect(ctx.poll().agents.find((a) => a.id === key(S1))?.status).toBe('idle');
+    // e o contrário: o banco passa a working sem evento (evento perdido)
+    ctx.fx.addMessage({ session: S1, role: 'assistant', created: ctx.now() });
+    expect(ctx.poll().agents.find((a) => a.id === key(S1))?.status).toBe('working');
+  });
+
+  it('o status do evento fica coerente com o rastreador: um working do banco depois de um idle ao vivo não é desfeito de novo', async () => {
+    const ctx = setup();
+    const t = ctx.now();
+    ctx.fx.addSession({ id: S1, directory: '/p/a', updated: t });
+    ctx.fx.addMessage({ session: S1, role: 'assistant', created: t - 100 });
+    await ctx.source.start();
+    expect(statusOf(ctx, S1)).toBe('working');
+    ctx.source.applyHookEvent({ type: 'session.idle', properties: { sessionID: S1 } });
+    expect(statusOf(ctx, S1)).toBe('idle');
+    ctx.advance(10_000);
+    expect(ctx.poll().agents.find((a) => a.id === key(S1))?.status).toBe('working');
+    expect(ctx.poll().agents.find((a) => a.id === key(S1))?.status).toBe('working');
+  });
+
+  it('OC-22: o mesmo evento duas vezes deixa o mesmo estado', async () => {
+    const ctx = await idleSession();
+    const evs = [status(S1, 'busy'), { type: 'tool.execute.before', properties: { sessionID: S1, tool: 'bash', callID: 'call_1', title: 'npm test' } }];
+    for (const e of evs) ctx.source.applyHookEvent(e);
+    const once = JSON.stringify(ctx.office.get(key(S1)));
+    for (const e of evs) ctx.source.applyHookEvent(e);
+    expect(JSON.stringify(ctx.office.get(key(S1)))).toBe(once);
+  });
+
+  it('subagente: idle entrega, busy reativa', async () => {
+    const ctx = setup();
+    const t = ctx.now();
+    ctx.fx.addSession({ id: S1, directory: '/p/a', updated: t });
+    ctx.fx.addSession({ id: S2, parent: S1, directory: '/p/a', updated: t });
+    ctx.fx.addMessage({ session: S2, role: 'assistant', created: t - 100 });
+    await ctx.source.start();
+    expect(statusOf(ctx, S2)).toBe('working');
+    ctx.source.applyHookEvent({ type: 'session.idle', properties: { sessionID: S2 } });
+    expect(ctx.office.isSubDone(key(S2))).toBe(true);
+    ctx.source.applyHookEvent(status(S2, 'busy'));
+    expect(ctx.office.isSubDone(key(S2))).toBe(false);
+    expect(statusOf(ctx, S2)).toBe('working');
+  });
+
+  it('tool.execute.before mostra a atividade com o rótulo do Claude Code e marca working; a mesma chamada não duplica', async () => {
+    const ctx = await idleSession();
+    expect(ctx.source.applyHookEvent({ type: 'tool.execute.before', properties: { sessionID: S1, tool: 'read', callID: 'call_1', title: 'src/app.ts' } })).toBe(true);
+    const a = ctx.agent(S1)!;
+    expect(a.status).toBe('working');
+    expect(a.activity).toMatchObject({ kind: 'read', tool: 'Read', text: describeTool('Read', { file_path: 'src/app.ts' }).text });
+    ctx.source.applyHookEvent({ type: 'tool.execute.before', properties: { sessionID: S1, tool: 'read', callID: 'call_1', title: 'src/app.ts' } });
+    expect(ctx.agent(S1)!.recent.filter((x) => x.tool === 'Read')).toHaveLength(1);
+    expect(ctx.source.applyHookEvent({ type: 'tool.execute.after', properties: { sessionID: S1, tool: 'read', callID: 'call_1' } })).toBe(true);
+  });
+
+  it('todo.updated leva a lista de tarefas na hora', async () => {
+    const ctx = await idleSession();
+    const todos = [
+      { id: '1', content: 'Escrever teste', status: 'completed', priority: 'high' },
+      { id: '2', content: 'Implementar', status: 'in_progress', priority: 'high' },
+      { id: '3', content: 'Documentar', status: 'pending', priority: 'low' },
+    ];
+    expect(ctx.source.applyHookEvent({ type: 'todo.updated', properties: { sessionID: S1, todos } })).toBe(true);
+    expect(ctx.agent(S1)?.tasks).toEqual([
+      { id: '1', title: 'Escrever teste', status: 'completed' },
+      { id: '2', title: 'Implementar', status: 'in_progress' },
+      { id: '3', title: 'Documentar', status: 'pending' },
+    ]);
+  });
+
+  it('evento de permissão de sessão conhecida: aceito, sem mudar o status', async () => {
+    const ctx = await idleSession();
+    expect(ctx.source.applyHookEvent({ type: 'permission.asked', properties: { sessionID: S1, id: 'per_x', permission: 'bash', patterns: ['ls'] } })).toBe(true);
+    expect(ctx.source.applyHookEvent({ type: 'permission.updated', properties: { sessionID: S1, id: 'per_x', type: 'bash' } })).toBe(true);
+    expect(statusOf(ctx, S1)).toBe('idle');
+  });
+
+  it('sessão desconhecida, id inválido, tipo desconhecido ou status ilegível: false, sem mudar nada', async () => {
+    const ctx = await idleSession();
+    const before = JSON.stringify(ctx.office.get(key(S1)));
+    expect(ctx.source.applyHookEvent(status(ocId('ses', 99), 'busy'))).toBe(false);
+    expect(ctx.source.applyHookEvent(status('ses_curto', 'busy'))).toBe(false);
+    expect(ctx.source.applyHookEvent({ type: 'session.created', properties: { sessionID: S1 } })).toBe(false);
+    expect(ctx.source.applyHookEvent({ type: 'session.status', properties: { sessionID: S1 } })).toBe(false);
+    expect(ctx.source.applyHookEvent(status(S1, 'rodando'))).toBe(false);
+    expect(JSON.stringify(ctx.office.get(key(S1)))).toBe(before);
+  });
+
+  it('sem banco (fonte desligada): false', async () => {
+    const ctx = setup({ noDb: true });
+    await ctx.source.start();
+    expect(ctx.source.applyHookEvent(status(S1, 'busy'))).toBe(false);
   });
 });
