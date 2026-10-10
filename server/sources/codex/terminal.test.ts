@@ -333,7 +333,7 @@ describe('terminal do Codex — response_item no paginated', () => {
       item({ type: 'CollabAgentToolCall', id: 'ca2', tool: 'spawn_agent', prompt: 'Liste os arquivos do módulo' }),
     ]);
     const [cifrado, legivel] = tools(out);
-    expect(cifrado.title).toBe('spawn_agent((mensagem cifrada))');
+    expect(cifrado.title).toBe('spawn_agent(mensagem cifrada)');
     expect(legivel.title).toBe('spawn_agent(Liste os arquivos do módulo)');
     expect(JSON.stringify(out)).not.toContain('gAAAAA');
   });

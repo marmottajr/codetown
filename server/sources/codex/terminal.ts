@@ -360,7 +360,9 @@ class CodexTerminalParser implements TerminalParser {
         return this.sys(id, at, 'Conversa compactada');
       case 'CollabAgentToolCall': {
         const tool = str(item.tool) ?? 'spawn_agent';
-        return this.tool(id, at, tool, toolView(tool, str(item.prompt) ? { prompt: readable(item.prompt) } : {}, this.cwd));
+        // Prompt cifrado (0.160.1): o título leva o aviso, sem os parênteses dobrados do toolView; o texto cifrado nunca aparece.
+        if (isEncryptedText(str(item.prompt) ?? '')) return this.tool(id, at, tool, { title: titled(tool, 'mensagem cifrada') });
+        return this.tool(id, at, tool, toolView(tool, str(item.prompt) ? { prompt: item.prompt } : {}, this.cwd));
       }
       case 'Plan':
         return this.assistant(id, at, str(item.text) ?? '');
