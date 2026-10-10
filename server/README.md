@@ -407,7 +407,7 @@ nenhum arquivo do `agy`:
 
 - **Hook** (`mod/habblaud-antigravity/hook.mjs`, copiado por `npm run antigravity:install` para
   `~/.habblaud/antigravity-hook.mjs` e registrado em `~/.gemini/config/hooks.json` como o hook `habblaud`): recebe o JSON
-  do `agy` no stdin, manda `{event, conversationId, workspacePaths, stepIdx?, fullyIdle?, tool?: {name, head?}}` e sai
+  do `agy` no stdin, manda `{event, conversationId, workspacePaths, stepIdx?, fullyIdle?, tool?: {name, head?}}` (desiste em 1,5 s) e sai
   com 0 sem imprimir nada (o `agy` bloqueia o agente enquanto o hook roda). Contrato: `docs/hooks.md` embutido no `agy`
   1.3.3.
 - **Rota** `POST /api/antigravity/events` (`antigravity/http.ts`; só com `Host` local e conexão pelo loopback;

@@ -176,13 +176,14 @@ describe('antigravity-install: uninstall (AG-12)', () => {
     expect(out.join('\n')).toContain('não estava registrado');
   });
 
-  it('hooks.json inválido: não mexe e devolve 1, mas ainda remove a cópia e a configuração', async () => {
+  it('hooks.json inválido: não mexe, devolve 1 e MANTÉM a cópia e a configuração (o hook pode seguir registrado)', async () => {
     await exec('install');
     writeFileSync(HOOKS(), '{ quebrado');
     expect(await exec('uninstall')).toBe(1);
     expect(readFileSync(HOOKS(), 'utf8')).toBe('{ quebrado');
-    expect(existsSync(COPY())).toBe(false);
-    expect(existsSync(CONFIG())).toBe(false);
+    expect(existsSync(COPY())).toBe(true);
+    expect(existsSync(CONFIG())).toBe(true);
+    expect(out.join('\n')).toContain('mantidos');
   });
 
   it('um hooks.json só com o hook do Habblaud vira {} (o arquivo fica)', async () => {

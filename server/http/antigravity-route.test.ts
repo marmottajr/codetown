@@ -118,6 +118,13 @@ describe('POST /api/antigravity/events', () => {
     expect(calls).toEqual([BODY]);
   });
 
+  it('o texto curto e o nome da ferramenta têm teto (200 e 80 caracteres)', async () => {
+    const calls: AntigravityEvent[] = [];
+    const base = await serve({ antigravityEvents: true, antigravityLive: live(calls) });
+    await request(base, '/api/antigravity/events', { method: 'POST', body: { ...BODY, tool: { name: 'n'.repeat(500), head: 'h'.repeat(500) } } });
+    expect(calls[0].tool).toEqual({ name: 'n'.repeat(80), head: 'h'.repeat(200) });
+  });
+
   it('o /api/health informa a rota de eventos do Antigravity (e não aparece sem a integração)', async () => {
     let base = await serve({ antigravityEvents: true, antigravityLive: { applyHookEvent: () => true } });
     expect((await request(base, '/api/health')).json).toMatchObject({ antigravityEvents: true, antigravitySource: true });

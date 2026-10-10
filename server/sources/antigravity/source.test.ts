@@ -147,6 +147,20 @@ describe('fonte do Antigravity', () => {
     expect(c.agent()).toBeUndefined();
   });
 
+  it('AG-04: a janela é de 30 minutos exatos (valor fixo, não só a constante)', () => {
+    expect(PRESENCE_MS).toBe(30 * 60_000);
+    const c = setup();
+    c.source.applyHookEvent(c.ev('PreInvocation'));
+    c.advance(29 * 60_000 + 30_000);
+    c.sweep();
+    expect(c.agent()).toBeDefined();
+    c.advance(60_000);
+    c.sweep();
+    c.advance(OFFLINE_GRACE_MS + 1_000);
+    c.office.tick();
+    expect(c.agent()).toBeUndefined();
+  });
+
   it('AG-04: depois de sair, um novo evento traz o agente de volta', () => {
     const c = setup();
     c.source.applyHookEvent(c.ev('PreInvocation'));
@@ -157,6 +171,12 @@ describe('fonte do Antigravity', () => {
     expect(c.agent()).toBeUndefined();
     c.source.applyHookEvent(c.ev('PreInvocation'));
     expect(c.agent()?.status).toBe('working');
+  });
+
+  it('o texto curto vira atividade cortado em 200 caracteres', () => {
+    const c = setup();
+    c.source.applyHookEvent(c.ev('PreToolUse', { stepIdx: 1, tool: { name: 'run_command', head: 'x'.repeat(500) } }));
+    expect(c.agent()?.activity?.text).not.toContain('x'.repeat(201));
   });
 
   it('AG-08: o mesmo evento duas vezes dá o mesmo estado', () => {

@@ -16,7 +16,7 @@ do meio (0.**3**.0).
   OpenCode: cada pasta de trabalho é uma sala, cada conversa um personagem com o selo **Antigravity**, com status e a
   atividade da ferramenta. Só por hook: `npm run antigravity:install` (`antigravity:status` e `antigravity:uninstall`)
   registra o hook `habblaud` no `~/.gemini/config/hooks.json` (backup antes; os outros hooks ficam; `--dry-run` só mostra
-  o plano). O hook só observa, não imprime nada e nunca atrasa o `agy` (1,5 s no máximo). Nenhum arquivo do `agy` é lido.
+  o plano). O hook só observa, não imprime nada e sai sempre com 0: desiste de falar com o Habblaud em 1,5 s e nunca passa de 3 s. Nenhum arquivo do `agy` é lido.
   `HABBLAUD_ANTIGRAVITY=0` desliga. Implementado e coberto por testes automáticos, e conferido de ponta a ponta no `agy`
   1.3.3, no Linux. Sem aprovar pelo escritório (o `agy` não aceita aprovação por hook), sem mensagens, sem uso, terminal
   nem histórico. Uma rodada abortada pelo `agy` sem `Stop` deixa o agente como trabalhando por até 30 minutos.

@@ -139,7 +139,7 @@ describe('hook do Antigravity: nunca atrapalha o agy (AG-16)', () => {
     const r = await runHook(['PreToolUse'], JSON.stringify(PRE_TOOL), port);
     expect(r).toMatchObject({ code: 0, stdout: '' });
     expect(r.ms).toBeGreaterThanOrEqual(1_400);
-    expect(r.ms).toBeLessThan(3_500);
+    expect(r.ms).toBeLessThan(2_500); // o envio desiste em 1,5 s (e o processo sai logo depois), bem antes da rede de segurança de 3 s
   });
 
   it('stdin vazio, quebrado ou sem JSON de objeto, e evento ausente ou desconhecido: 0, nada impresso, nada mandado', async () => {

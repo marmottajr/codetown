@@ -579,8 +579,8 @@ aparecendo com a atividade da ferramenta, ocioso no fim da rodada, e o `agy` nor
   (`PreInvocation`, `PostInvocation`, `PreToolUse`, `PostToolUse` e `Stop`) e copia o script para
   `~/.habblaud/antigravity-hook.mjs` (e a porta para `~/.habblaud/antigravity-hook.json`). Os outros hooks do
   `hooks.json` ficam como estão; `--dry-run` só mostra o plano.
-- **O hook só observa.** Ele manda o evento ao Habblaud em até 1,5 s, não imprime nada e sai sempre com 0, porque o
-  `agy` para o agente enquanto o hook roda. Com o Habblaud parado, o `agy` segue normal.
+- **O hook só observa.** Ele desiste de falar com o Habblaud em 1,5 s (nunca passa de 3 s), não imprime nada e sai
+  sempre com 0, porque o `agy` para o agente enquanto o hook roda. Com o Habblaud parado, o `agy` segue normal.
 - **Status:** trabalhando a cada passada do modelo e a cada ferramenta; ocioso quando a rodada termina (`Stop`).
   Entre uma passada e outra o `agy` dispara `PostInvocation` e logo `PreInvocation`, por isso só o `Stop` vale como ocioso.
 - **Presença:** não há evento de fim de sessão, então a conversa sai depois de 30 minutos sem eventos. Uma rodada que o

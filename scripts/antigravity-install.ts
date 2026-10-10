@@ -245,7 +245,8 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
         failures++;
       }
     }
-    for (const [file, label] of [[copy, copyLabel], [cfgFile, cfgLabel]] as const) {
+    // Com o hooks.json sem mexer (inválido ou sem poder gravar), o hook pode seguir registrado: a cópia fica, para o comando não apontar para um arquivo que sumiu.
+    for (const [file, label] of failures ? [] : ([[copy, copyLabel], [cfgFile, cfgLabel]] as const)) {
       if (!existsSync(file)) out(`= ${label}: não existia`);
       else if (opts.dryRun) out(`~ ${label}: seria removido (simulação: nada removido)`);
       else {
@@ -254,6 +255,7 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
         removed++;
       }
     }
+    if (failures) out('Arquivos de ~/.habblaud mantidos: corrija o hooks.json e rode o uninstall de novo.');
     if (removed) out('Os backups (*.habblaud-backup-*) ficam onde estão. Abra uma nova sessão do agy.');
     return failures ? 1 : 0;
   }
