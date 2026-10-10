@@ -12,6 +12,12 @@ do meio (0.**3**.0).
 
 ### Adicionado
 
+- **Cota do Antigravity no cartão de uso (opcional).** `npm run antigravity:install -- --uso` mostra a cota semanal, a mesma
+  do `/usage` do `agy`: acrescenta um `statusLine` (com `stack_with_default`) ao `~/.gemini/antigravity-cli/settings.json`,
+  com backup, e nunca troca o `statusLine` de outra pessoa (avisa e sai com 1). Só as cotas são guardadas, em
+  `~/.habblaud/usage/antigravity-quota.json`: nada de e-mail, pasta, transcript nem token. A barra principal é a cota
+  semanal do Gemini, as outras cotas ficam na dica do cartão, e o cartão não tem a barra de 5 h. No Docker, o arquivo
+  é lido pela pasta de uso que o `docker:up` já monta somente leitura. O `antigravity:uninstall` remove só o que é do Habblaud.
 - **Antigravity no escritório.** As conversas do Antigravity CLI (`agy`) entram como as do Claude Code, do Codex e do
   OpenCode: cada pasta de trabalho é uma sala, cada conversa um personagem com o selo **Antigravity**, com status e a
   atividade da ferramenta. Só por hook: `npm run antigravity:install` (`antigravity:status` e `antigravity:uninstall`)
@@ -22,7 +28,7 @@ do meio (0.**3**.0).
   do `agy`, que a documentação dele não descreve (conferido no `agy` 1.3.3, no modo interativo e no `-p`); só o
   `run_command` é segurado e não há "sempre permitir".
   `HABBLAUD_ANTIGRAVITY=0` desliga. Implementado e coberto por testes automáticos, e conferido de ponta a ponta no `agy`
-  1.3.3, no Linux. Sem mensagens, sem uso, terminal nem histórico. Uma rodada abortada pelo `agy` sem `Stop` deixa o agente como trabalhando por até 30 minutos.
+  1.3.3, no Linux. Sem mensagens, terminal nem histórico. Uma rodada abortada pelo `agy` sem `Stop` deixa o agente como trabalhando por até 30 minutos.
 - **OpenCode no escritório.** As sessões do OpenCode entram como as do Claude Code e do Codex: cada projeto é uma sala,
   cada sessão um personagem com o selo **OpenCode**, com atividade, subagentes e status. Sem instalar nada, o Habblaud
   lê o banco do OpenCode (`opencode.db`) só para leitura, e apenas as tabelas `project`, `session`, `message`, `part` e

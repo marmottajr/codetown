@@ -425,7 +425,18 @@ nenhum arquivo do `agy`:
   imprime `{}` (comportamento do `agy` 1.3.3 não documentado: `allow`, `ask` e `permissionOverrides` não aprovam) e deny
   imprime `{"decision":"deny","reason":...}`; sem página, pulo, tempo esgotado ou Habblaud parado não imprime nada e o
   `agy` mostra o prompt dele.
-- **Sem** mensagens, uso, terminal nem histórico.
+- **Uso** (opt-in: `npm run antigravity:install -- --uso`): copia `mod/habblaud-antigravity/statusline.mjs` para
+  `~/.habblaud/antigravity-statusline.mjs` e acrescenta ao `~/.gemini/antigravity-cli/settings.json` o `statusLine`
+  `{type: 'command', command: 'node <cópia>', stack_with_default: true}` (backup antes; um `statusLine` que não seja do
+  Habblaud não é trocado: aviso e saída 1; sem `--uso` o arquivo nunca é tocado; o `uninstall` remove só o do Habblaud, a
+  cópia e a cota). O `agy` manda o JSON do statusline a cada renderização; o script grava só
+  `{fetchedAt, planTier?, quota: {<cota>: {remaining_fraction, reset_time}}}` em `<HABBLAUD_USAGE_DIR>/antigravity-quota.json`
+  (padrão `~/.habblaud/usage`), sem imprimir nada e saindo com 0 (e-mail, pastas e transcript não são gravados). O servidor
+  relê o arquivo e mostra o uso: `(1 - remaining_fraction) * 100`, reinício por `reset_time`, barra principal =
+  `gemini-weekly` (senão a primeira cota), as demais nas linhas da dica; janelas já reiniciadas são omitidas e números com
+  mais de 30 min ficam como antigos. O cartão não tem a barra de 5 h. No Docker a pasta é a `/usage` que o `docker:up` já
+  monta somente leitura.
+- **Sem** mensagens, terminal nem histórico.
 
 ## Variáveis de ambiente
 

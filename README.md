@@ -257,6 +257,11 @@ Depois, abra uma **nova sessão do `agy`** (nele, `/hooks` lista o hook carregad
 primeiro pedido e some depois de 30 minutos sem eventos. Depois de atualizar o Habblaud, rode
 `npm run antigravity:install` de novo (o script é uma cópia; o `status` avisa quando ela ficou para trás).
 
+Para ver também a **cota semanal** no cartão de uso (a mesma do `/usage` do `agy`), rode
+`npm run antigravity:install -- --uso`. Isso acrescenta um `statusLine` (com `stack_with_default`: a linha padrão do `agy`
+continua) ao `~/.gemini/antigravity-cli/settings.json`, com backup antes. Um `statusLine` de outra pessoa nunca é
+trocado: o instalador avisa e sai com 1. Sem `--uso`, esse arquivo não é tocado. Abra o `agy` para a primeira leitura.
+
 ### Abrir no celular (opcional)
 
 Por padrão o Habblaud só aceita conexões do próprio computador. Para abrir no celular (no mesmo Wi-Fi), com Docker:
@@ -597,7 +602,17 @@ aparecendo com a atividade da ferramenta, ocioso no fim da rodada, e o `agy` nor
   pode mudar numa versão futura (se `{}` passar a recusar, o comando é bloqueado e você vê o aviso no `agy`). A
   aprovação vale por cima das suas regras `ask` do `agy` para esse comando: o cartão é o seu consentimento. Rodar o
   `install` de novo sem `--aprovar` desliga.
-- **Limites:** sem mandar mensagem, uso (cotas), terminal ou histórico. Sessões com `--dangerously-skip-permissions`
+- **Uso (cota, opcional):** `npm run antigravity:install -- --uso` copia o script para
+  `~/.habblaud/antigravity-statusline.mjs` e acrescenta ao `~/.gemini/antigravity-cli/settings.json` um `statusLine`
+  `{type: 'command', command: 'node <cópia>', stack_with_default: true}` (backup antes; nunca troca o `statusLine` de
+  outra pessoa; `--dry-run` só mostra o plano). A cada tela do `agy`, o script grava só as cotas em
+  `~/.habblaud/usage/antigravity-quota.json`: nada de e-mail, pasta, transcript nem token, e ele não imprime nada. A barra
+  principal do cartão é a cota semanal do Gemini (`gemini-weekly`, ou a primeira que houver); as outras cotas aparecem na
+  dica do cartão. O cartão do Antigravity não tem a barra de 5 h. Números com mais de 30 minutos aparecem como antigos, e
+  janelas que já reiniciaram somem. Sem números, o cartão manda rodar o comando acima. No Docker, o arquivo é lido pela
+  pasta de uso que o `docker:up` já monta somente leitura (`~/.habblaud/usage`), sem configurar nada. O
+  `antigravity:uninstall` remove o `statusLine` só se for do Habblaud, a cópia do script e o arquivo de cota.
+- **Limites:** sem mandar mensagem, terminal ou histórico (o uso só com `--uso`). Sessões com `--dangerously-skip-permissions`
   são relatadas como sem hooks e não aparecem (não testado aqui).
 - `HABBLAUD_ANTIGRAVITY=0` desliga. O contrato dos hooks foi conferido no `agy` 1.3.3; outra versão pode mudar o formato.
 
@@ -883,13 +898,16 @@ das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e 
   só `~/.config/opencode/plugins/habblaud.js` e `~/.habblaud/opencode-hook.json` (com backup antes de trocar um arquivo)
   e o plugin só fala com `127.0.0.1`. As mensagens ao OpenCode têm o mesmo aviso das outras: qualquer programa desta
   máquina que fale com o Habblaud consegue deixar uma mensagem na fila de uma sessão que tenha o plugin.
-- **Antigravity:** o Habblaud não abre nenhum arquivo do `agy` (conversas, `brain/`, token de login, `settings.json`).
+- **Antigravity:** o Habblaud não abre nenhum arquivo do `agy` (conversas, `brain/`, token de login, `settings.json`; este
+  último só é editado pelo instalador, e só com `--uso`).
   O hook só manda o evento, o id da conversa, a pasta de trabalho, o número do passo e, na ferramenta, o nome e um texto
   curto (o comando, o arquivo ou o resumo dela): o texto dos pedidos, a saída das ferramentas e o transcript nunca saem
   do `agy`. Com `--aprovar`, o comando completo de cada `run_command` (mascarando segredos) também vai ao cartão de
   aprovação. O `npm run antigravity:install` grava só `~/.gemini/config/hooks.json` (uma chave, "habblaud", com backup
   antes de mudar), `~/.habblaud/antigravity-hook.mjs` e `~/.habblaud/antigravity-hook.json`; o hook só fala com
-  `127.0.0.1`.
+  `127.0.0.1`. Com `--uso`, ele também edita o `~/.gemini/antigravity-cli/settings.json` (só a chave `statusLine`, com
+  backup) e grava `~/.habblaud/antigravity-statusline.mjs`; o script do statusline guarda apenas
+  `{fetchedAt, planTier?, quota}` em `~/.habblaud/usage/antigravity-quota.json`, sem e-mail, pasta, transcript nem token.
 - **O que aparece na tela:** resumos das atividades (ferramenta, arquivo, comando ou consulta), títulos das sessões,
   tarefas e estatísticas (e, no terminal, a conversa). Não exponha a porta em redes em que você não
   confia.
