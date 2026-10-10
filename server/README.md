@@ -357,7 +357,7 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
 ## OpenCode
 
 Terceira fonte, ao lado das do Claude Code e do Codex (`sources/opencode/`); agentes do OpenCode levam
-`provider: 'opencode'`. Ids: `opencode:<sessionId>` (`ses_` + 26 caracteres), conta fixa `opencode`. Só lê o disco:
+`provider: 'opencode'`. Ids: `opencode:<sessionId>` (`ses_` + 26 caracteres), conta fixa `opencode`. Duas camadas:
 
 - **Disco** (`sources/opencode/files.ts`, `source.ts`, `activity.ts`): lê `<dados>/opencode.db` (`HABBLAUD_OPENCODE_DIR`,
   `$XDG_DATA_HOME/opencode` ou `~/.local/share/opencode`) com `node:sqlite` em modo somente leitura, carregado por
@@ -365,13 +365,39 @@ Terceira fonte, ao lado das do Claude Code e do Codex (`sources/opencode/`); age
   Habblaud que abre SQLite: só as tabelas `project`, `session`, `message`, `part` e `todo`, com colunas nomeadas e
   `json_extract` do que a fonte usa; nunca `auth.json`, `opencode.jsonc`, logs, `tool-output/` nem as tabelas `event` e
   `account`, e o texto das mensagens e o `output` das ferramentas nunca chegam ao processo. Consulta a cada 1 s (o
-  `fs.watch` do `-wal` só adianta), todas as leituras de um ciclo numa única transação. Uma sessão aparece com
-  `time_updated` nos últimos 30 min e sem `time_archived`; `parent_id` vira subagente; a sala é `session.directory` (ou
-  `project.worktree`); trabalhando = a última mensagem do assistente sem `time.completed`; a atividade vem da última
-  parte `tool` (`tool` e `state.title`). Falha de leitura (SQLITE_BUSY, JSON ruim) mantém o último resultado. Sem o
-  `opencode.db` a fonte fica dormente e confere a cada 5 s se ele já apareceu (sem log).
-- **Docker:** `scripts/docker-up.ts` não monta nenhum SQLite, então a leitura
-  do OpenCode só funciona no modo Node.
+  `fs.watch` do `-wal` só adianta). Uma sessão aparece com `time_updated` nos últimos 30 min e sem `time_archived`;
+  `parent_id` vira subagente; a sala é `session.directory` (ou `project.worktree`); trabalhando = a última mensagem do
+  assistente sem `time.completed`; a atividade vem da última parte `tool` (`tool` e `state.title`). Falha de leitura
+  (SQLITE_BUSY, JSON ruim) mantém o último resultado.
+- **Plugin** (`mod/habblaud-opencode/plugin.js`, copiado por `npm run opencode:install`): `POST /api/opencode/events`
+  (`opencode/http.ts`; só com `Host` local e conexão pelo loopback; `sessionID` fora de `^ses_[A-Za-z0-9]{26}$` = 400;
+  404 com `HABBLAUD_OPENCODE=0`) aplica `session.status`, `session.idle`, `todo.updated`, `permission.asked/updated` e
+  `tool.execute.before/after` na fonte na hora.
+- **Aprovar pelo escritório** (`permissions/*`): o mesmo `POST /api/permissions` com `provider: 'opencode'` e
+  `session_id`; só `allow` e `deny` (`interrupt` ou `suggestion` = 400). O plugin espera até `permissionTimeoutS` de
+  `~/.habblaud/opencode-hook.json` (padrão 25 s) e responde ao OpenCode `once` ou `reject` (+ o motivo), nunca
+  `always`; tempo esgotado ou sem página aberta não faz nada (o pedido já está na tela do OpenCode).
+- **Perguntas** (`question.asked/replied/rejected`): `POST /api/opencode/events` as aceita e a fonte mostra o agente
+  `waiting` com uma atividade `ask` (até 4 perguntas e 6 opções, segredos mascarados), até `replied`, `rejected`,
+  `session.idle` ou 30 min; sem o plugin, `files.ts` lê só `$.state.input.questions` da última parte `question` em
+  `running`. Para responder pelo escritório o plugin registra em `POST /api/permissions` com `provider: 'opencode'`,
+  `tool_name: 'AskUserQuestion'` e `tool_input.questions` (`question`, `header`, `options`, `multiSelect`), espera até
+  600 s numa tarefa própria e, com `answer`, chama `POST /question/{id}/reply` do OpenCode com `{answers: string[][]}`
+  (os rótulos das opções escolhidas, mais o texto livre como digitado); com `deny`, `POST /question/{id}/reject` sem
+  corpo; `terminal`, tempo esgotado ou 404 não fazem nada. `question.replied/rejected` chamam
+  `PermissionRegistry.releaseOpencodeQuestions(sessionId)` e o cartão some. O id da pergunta segue
+  `^[A-Za-z0-9_-]{1,64}$` antes de ir para a URL.
+- **Mensagens** (`messages/registry.ts`, `messages/http.ts`): só para agentes principais, com os mesmos limites do
+  Codex (20.000 caracteres, 5 em aberto). O plugin busca em `POST /api/opencode/bridge/poll` (`{session}`; só as
+  mensagens do agente daquela sessão) e confirma em `/api/opencode/bridge/ack` (`{session, results}`), com a mesma
+  trava das mensagens. `canMessage` = o plugin buscou aquela sessão há até 15 s. O plugin entrega com
+  `client.session.promptAsync({path: {id}, body: {parts: [{type: 'text', text}]}})`. `queued` sem busca em 60 s ou
+  `sent` sem confirmação em 20 s = `failed`.
+- **Docker:** `scripts/docker-up.ts` não monta nenhum SQLite (`server/test/docker-up.test.ts` confere), então a camada
+  de disco do OpenCode só funciona no modo Node; o plugin, que fala por HTTP, não depende disso.
+- **Depuração:** `HABBLAUD_HOOK_DEBUG=1` no OpenCode faz o plugin escrever no stderr linhas `[habblaud-opencode]`, entre
+  elas a resposta do registro de permissão (`skip`: `no-viewers`, `unknown-session`, `unsupported-tool`, `too-many`).
+  A ajuda do app (`client/src/ui/help.ts`, seção `opencode`) e o README (solução de problemas) descrevem o mesmo.
 
 ## Variáveis de ambiente
 
@@ -384,7 +410,7 @@ Terceira fonte, ao lado das do Claude Code e do Codex (`sources/opencode/`); age
 | `HABBLAUD_CODEX` | ligado | `0` desliga a fonte do Codex |
 | `HABBLAUD_CODEX_DIRS` | — | pastas do Codex separadas por vírgula; substitui a detecção (`CODEX_HOME` e `~/.codex*`) |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH | binário do Codex para o `codex queue` (modo Node e `npm run codex:bridge`) |
-| `HABBLAUD_OPENCODE` | ligado | `0` desliga a fonte do OpenCode (leitura do banco) |
+| `HABBLAUD_OPENCODE` | ligado | `0` desliga a fonte do OpenCode (leitura do banco) e a rota de eventos do plugin |
 | `HABBLAUD_OPENCODE_DIR` | `$XDG_DATA_HOME/opencode` ou `~/.local/share/opencode` | pasta de dados do OpenCode (onde fica o `opencode.db`) |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0`, `false`, `off` ou `no` desligam só as mensagens pelo escritório |
 | `HABBLAUD_CLAUDE_DIRS` | — | config dirs separados por vírgula; substitui a detecção (`~/.claude*` com `projects/` ou `sessions/` + `CLAUDE_CONFIG_DIR`) |
