@@ -54,6 +54,8 @@ export interface ServerConfig {
   opencode: boolean;
   /** Pasta de dados do OpenCode (onde fica o opencode.db): HABBLAUD_OPENCODE_DIR, $XDG_DATA_HOME/opencode ou ~/.local/share/opencode. */
   opencodeDir: string;
+  /** Aceita os eventos dos hooks do Antigravity CLI (sources/antigravity/); HABBLAUD_ANTIGRAVITY=0 desliga. */
+  antigravity: boolean;
 }
 
 export function isTruthy(v: string | undefined): boolean {
@@ -184,5 +186,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
     codex: !env.HABBLAUD_CODEX?.trim() || isTruthy(env.HABBLAUD_CODEX),
     opencode: !env.HABBLAUD_OPENCODE?.trim() || isTruthy(env.HABBLAUD_OPENCODE),
     opencodeDir: opencodeDataDir(env, home),
+    antigravity: !env.HABBLAUD_ANTIGRAVITY?.trim() || isTruthy(env.HABBLAUD_ANTIGRAVITY),
   };
 }
