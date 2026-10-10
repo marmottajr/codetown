@@ -112,6 +112,13 @@ describe('segredos mascarados', () => {
 });
 
 describe('atividades', () => {
+  it('TodoWrite ignora itens que não são objetos e tolera tarefas sem status', () => {
+    expect(describeTool('TodoWrite', { todos: [null] })).toEqual({ kind: 'plan', icon: '🗒️', text: 'Atualizando a lista de tarefas' });
+    expect(describeTool('TodoWrite', {
+      todos: [null, undefined, 'inválido', 42, false, { content: 'Sem status' }, { content: 'Pronta', status: 'completed' }, { content: 'Pendente', status: 'pending' }],
+    }).detail).toBe('1/3 concluídas');
+  });
+
   it('ferramentas e especiais em PT-BR', () => {
     expect(describeTool('Agent', { description: 'Revisar código', subagent_type: 'Explore' })).toMatchObject({ kind: 'delegate', text: 'Delegando: Revisar código' });
     expect(SPECIAL.rejected('Write').text).toBe('Você recusou: Write');

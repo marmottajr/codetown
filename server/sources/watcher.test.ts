@@ -1,7 +1,7 @@
 // Integração: registro + transcript + subagentes em um config dir temporário.
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentInfo, Notice } from '../../shared/types';
 import { AccountsService } from '../accounts/service';
 import { setQuiet } from '../log';
@@ -145,6 +145,70 @@ describe('ClaudeWatcher', () => {
     expect(a.status).toBe('idle');
     expect(a.activity?.kind).toBe('done');
     expect(c.notices.at(-1)).toMatchObject({ level: 'success', text: `✅ ${a.name} concluiu em loja` });
+  });
+
+  it('publica os prompts antes e depois de um TodoWrite malformado no mesmo lote', () => {
+    const id = bootWithSession();
+    appendLines(c.transcript('sess-a'), [
+      L.prompt('Prompt anterior'),
+      L.assistant([L.tool('todo-malformado', 'TodoWrite', { todos: [null] })]),
+      L.prompt('Prompt posterior'),
+    ]);
+    c.poll();
+    expect(c.office.recentFeed(10).filter((f) => f.activity.kind === 'prompt').map((f) => f.activity.detail)).toEqual([
+      'Arruma o total do carrinho', 'Prompt anterior', 'Prompt posterior',
+    ]);
+    expect(c.agent(id)!.activity?.detail).toBe('Prompt posterior');
+    c.poll();
+    expect(c.office.recentFeed(10).filter((f) => f.activity.detail === 'Prompt posterior')).toHaveLength(1);
+  });
+
+  it.each(['abertura', 'append'])('preserva as linhas válidas do subagente com TodoWrite malformado (%s)', (mode) => {
+    bootWithSession();
+    const path = c.subFile('sess-a', 'malformado', { agentType: 'Explore', description: 'Revisar tarefas' }, [L.prompt('Início', { agentId: 'malformado' })]);
+    if (mode === 'append') c.poll();
+    appendLines(path, [
+      L.prompt('Prompt anterior', { agentId: 'malformado' }),
+      L.assistant([L.tool('todo-malformado', 'TodoWrite', { todos: [null] })], { agentId: 'malformado' }),
+      L.prompt('Prompt posterior', { agentId: 'malformado' }),
+    ]);
+    c.poll();
+    expect(c.agent('sess-a:malformado')?.activity?.detail).toBe('Prompt posterior');
+    expect(c.office.recentFeed(10).filter((f) => f.activity.kind === 'prompt' && f.agentId === 'sess-a:malformado').map((f) => f.activity.detail)).toEqual([
+      'Início', 'Prompt anterior', 'Prompt posterior',
+    ]);
+  });
+
+  it.each(['principal', 'abertura', 'append'])('registra erros de parse e publica as demais linhas do lote (%s)', (mode) => {
+    const mainId = bootWithSession();
+    const agentId = `erro-${mode}`;
+    const id = mode === 'principal' ? mainId : `sess-a:${agentId}`;
+    const path = mode === 'principal'
+      ? c.transcript('sess-a')
+      : c.subFile('sess-a', agentId, { agentType: 'Explore', description: 'Revisar CI' }, [L.prompt('Início', { agentId })]);
+    if (mode === 'append') c.poll();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setQuiet(false);
+    try {
+      appendLines(path, [
+        L.prompt('Prompt anterior'),
+        L.assistant([L.tool('checks-malformado', 'Bash', { command: 'gh pr checks --json name,bucket' })]),
+        L.result('checks-malformado', '[{"bucket":{"toString":null}}]'),
+        L.assistant([L.tool('checks-outro', 'Bash', { command: 'gh pr checks --json name,bucket' })]),
+        L.result('checks-outro', '[{"bucket":{"toString":null}}]'),
+        L.prompt('Prompt posterior'),
+      ]);
+      c.poll();
+      expect(c.office.recentFeed(10).filter((f) => f.agentId === id && f.activity.kind === 'prompt').map((f) => f.activity.detail).slice(-2)).toEqual([
+        'Prompt anterior', 'Prompt posterior',
+      ]);
+      expect(c.agent(id)!.activity?.detail).toBe('Prompt posterior');
+      expect(warn).toHaveBeenCalledWith(`[habblaud] Linha do transcript de ${id} ignorada: Cannot convert object to primitive value`);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      setQuiet(true);
+      warn.mockRestore();
+    }
   });
 
   it('subagente em primeiro plano: entra, trabalha e entrega ao concluir', () => {
