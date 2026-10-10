@@ -45,6 +45,8 @@ function num(v: unknown): number | undefined {
  */
 const MASK_CEILING = 16 * 1024;
 const BLANK = /\s/;
+/** Tamanho visível do texto de uma atividade (o mesmo corte do shared/activity.ts), para um texto montado aqui. */
+const ACTIVITY_TEXT_MAX = 46;
 
 /**
  * O único caminho do texto livre do rollout até a tela: mascara os segredos ANTES de qualquer corte (um token cortado
@@ -74,6 +76,20 @@ function maskedText(v: unknown): string | undefined {
 }
 
 const maskedValue = (v: unknown): unknown => (typeof v === 'string' ? maskedCut(v) : v);
+
+/** Texto cifrado pelo Codex (0.160.1: a mensagem do multiagente vem como token Fernet, `gAAAAA` + base64 url-safe). */
+const ENCRYPTED = /^gAAAAA[A-Za-z0-9_-]{20,}={0,2}$/;
+
+/** O texto é cifrado (ilegível): nunca vai à tela, nem como título, atividade ou entrada do terminal. */
+export function isEncryptedText(text: string): boolean {
+  return ENCRYPTED.test(text.trim());
+}
+
+/** O texto, se for legível: nem vazio, nem cifrado. */
+function plainText(v: unknown): string | undefined {
+  const s = str(v);
+  return s && !isEncryptedText(s) ? s : undefined;
+}
 
 /** `questions` de um AskUserQuestion com pergunta, cabeçalho e opções (rótulo e descrição) mascarados; as posições ficam. */
 function maskedQuestions(raw: unknown): unknown {
@@ -555,9 +571,12 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
       return { desc: describeTool('WebSearch', { query: maskedText(input.query) }), tool: 'WebSearch' };
     case 'spawn_agent':
     case 'Agent': {
-      const prompt = str(input.message) ?? str(input.prompt) ?? str(input.task);
-      const description = prompt ? maskedCut(prompt, 60) : undefined;
-      return { desc: describeTool('Agent', { description, subagent_type: maskedText(input.agent_type) }), tool: 'Agent' };
+      const prompt = plainText(input.message) ?? plainText(input.prompt) ?? plainText(input.task);
+      if (prompt) return { desc: describeTool('Agent', { description: maskedCut(prompt, 60), subagent_type: maskedText(input.agent_type) }), tool: 'Agent' };
+      // Mensagem cifrada (0.160.1) ou ausente: rótulo neutro com o nome da tarefa, nunca o texto cifrado.
+      const base = describeTool('Agent', { subagent_type: maskedText(input.agent_type) });
+      const task = plainText(input.task_name);
+      return { desc: task ? { ...base, text: maskedCut(`Delegando ao subagente ${task}`, ACTIVITY_TEXT_MAX) } : base, tool: 'Agent' };
     }
     case 'wait':
     case 'wait_agent':
@@ -689,10 +708,28 @@ function agentTask(path: string | undefined): string | undefined {
   return last && last !== 'root' ? last : undefined;
 }
 
-/** Título do filho pelo spawn_agent: o 1º texto da mensagem (`message`; `prompt`/`task` em formatos antigos), senão o task_name. */
+/**
+ * Título do filho pelo spawn_agent: o 1º texto da mensagem (`message`; `prompt`/`task` em formatos antigos), senão o
+ * task_name. A mensagem cifrada (0.160.1) não conta.
+ */
 function spawnTitle(input: Rec): string {
-  const text = firstText(input.message) ?? str(input.prompt) ?? str(input.task) ?? str(input.task_name);
+  const text = plainText(firstText(input.message)) ?? plainText(input.prompt) ?? plainText(input.task) ?? plainText(input.task_name);
   return text ? titleText(text) : '';
+}
+
+/** Envelope do multiagente no 0.160.1: "Message Type: NEW_TASK\nTask name: /root/…\nSender: …\nPayload:\n<conteúdo>". */
+const ENVELOPE = /^Message Type:[^\n]*\n/;
+
+/**
+ * A tarefa numa mensagem endereçada a um filho. No envelope, o conteúdo depois de "Payload:" (se vier legível; no
+ * 0.160.1 ele vem num bloco cifrado à parte), senão o nome da tarefa do "Task name"; o cabeçalho nunca. Fora do
+ * envelope, o próprio texto, se legível.
+ */
+function messageTask(text: string): string | undefined {
+  if (!ENVELOPE.test(text)) return plainText(text);
+  const at = text.search(/^Payload:/m);
+  const payload = at >= 0 ? plainText(text.slice(at + 'Payload:'.length).trim()) : undefined;
+  return payload ?? agentTask(/^Task name:[ \t]*(\S+)/m.exec(text)?.[1]);
 }
 /** Texto injetado pelo Codex que não é instrução sua. */
 const INJECTED = /^<(environment_context|user_instructions|turn_aborted|subagent_notification|user_shell_command_output|collaboration_mode)\b/;
@@ -1035,7 +1072,7 @@ class RolloutLineParser {
         this.sawPaginated();
         const tool = str(item.tool) ?? 'spawn_agent';
         if (tool === 'spawn_agent') {
-          const prompt = str(item.prompt);
+          const prompt = plainText(item.prompt);
           this.spawned(id, Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids[0] : undefined, prompt ? titleText(prompt) : '');
         }
         this.done(id);
@@ -1271,7 +1308,9 @@ class RolloutLineParser {
         const recipient = str(p.recipient);
         const text = firstText(p.content);
         if (this.s.title !== undefined || !text || !recipient || !/^\/root\/./.test(recipient)) return;
-        this.s.title = titleText(text);
+        const task = messageTask(text);
+        if (!task) return;
+        this.s.title = titleText(task);
         this.changed();
         return;
       }

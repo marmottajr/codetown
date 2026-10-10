@@ -17,6 +17,7 @@ import {
   contentText,
   deliveredMessage,
   fileChanges,
+  isEncryptedText,
   mcpName,
   parseArguments,
   parseSessionMeta,
@@ -87,6 +88,11 @@ function resultText(raw: unknown): string {
 function titled(label: string, arg: string | undefined): string {
   const shown = arg ? oneLine(arg, TITLE_ARG_MAX, false) : '';
   return shown ? `${label}(${shown})` : label;
+}
+
+/** Mensagem do multiagente: a cifrada (0.160.1) vira um aviso; o texto cifrado nunca aparece. */
+function readable<T>(v: T): T | string {
+  return typeof v === 'string' && isEncryptedText(v) ? '(mensagem cifrada)' : v;
 }
 
 /** Texto livre como entrada da ferramenta, mascarado antes do corte. */
@@ -469,11 +475,11 @@ class CodexTerminalParser implements TerminalParser {
       case 'request_user_input_async':
         return { tool: name, ...questionsView(name, args) };
       case 'spawn_agent':
-        return { tool: 'Agent', ...toolView('Agent', { subagent_type: args.agent_type, description: args.task_name, prompt: args.message ?? args.prompt }, this.cwd) };
+        return { tool: 'Agent', ...toolView('Agent', { subagent_type: args.agent_type, description: args.task_name, prompt: readable(args.message ?? args.prompt) }, this.cwd) };
       case 'send_message':
       case 'send_input':
       case 'followup_task':
-        return { tool: name, title: titled(name, str(args.target)), ...textInput(str(args.message)) };
+        return { tool: name, title: titled(name, str(args.target)), ...textInput(readable(str(args.message))) };
       case 'write_stdin':
         return { tool: name, ...stdinView(args) };
       case 'view_image':

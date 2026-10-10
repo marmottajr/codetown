@@ -1,11 +1,13 @@
 // Interpretação dos rollouts do Codex (linhas sintéticas nos formatos paginated e legacy).
 import { describe, expect, it } from 'vitest';
 import { R, SOURCES, threadId } from '../../test/codex-fixtures';
+import { envelope, fernet, spawnEncrypted } from '../../test/codex-fixtures-live';
 import {
   commandText,
   createCodexState,
   describeCodexTool,
   fileChanges,
+  isEncryptedText,
   metaFromLine,
   parseRolloutLine,
   parseSessionMeta,
@@ -734,6 +736,40 @@ describe('multiagente v2: SubAgentActivity, spawn_agent e agent_message (P11)', 
     const quiet = createCodexState(childMeta());
     parseRolloutLine(quiet, agentMessage('/root', '/root/revisar_testes', 'Liste os arquivos de src'), { idPrefix: '', now: 0, activities: false });
     expect(quiet.title).toBe('Liste os arquivos de src');
+  });
+
+  it('0.160.1, pai: spawn_agent com a mensagem cifrada: título pelo task_name, atividade neutra com o nome da tarefa e nada cifrado em lugar nenhum', () => {
+    const { results } = feed([R.meta(T, { at: AT }), R.taskStarted('t', AT), spawnEncrypted('call_sp', 'listar_arquivos', AT), sub('call_sp', 'started', CHILD, '/root/listar_arquivos')]);
+    expect(acts(results).map((a) => [a.id, a.kind, a.text, a.tool])).toEqual([['acc:t#call_sp', 'delegate', 'Delegando ao subagente listar_arquivos', 'Agent']]);
+    expect(spawnsOf(results)).toStrictEqual([{ type: 'spawn', childThreadId: CHILD, title: 'listar_arquivos' }]);
+    expect(JSON.stringify(results)).not.toContain('gAAAAA');
+    // CollabAgentToolCall com o prompt cifrado: sem título (o filho dá o dele) e a atividade genérica.
+    const collab = itemLine(T, 't', { type: 'CollabAgentToolCall', id: 'call_v1', tool: 'spawn_agent', status: 'completed', receiver_thread_ids: [CHILD2], prompt: fernet('v1') }, AT);
+    const v1 = feed([R.meta(T), collab]);
+    expect(acts(v1.results).map((a) => a.text)).toEqual(['Chamando um subagente']);
+    expect(spawnsOf(v1.results)).toEqual([]);
+    expect(JSON.stringify(v1.results)).not.toContain('gAAAAA');
+  });
+
+  it('0.160.1, filho: o envelope "Message Type: NEW_TASK…" (conteúdo cifrado à parte) dá a tarefa do "Task name", nunca o cabeçalho; payload em claro vale', () => {
+    const { state } = feed([R.taskStarted('tc', AT), envelope({ recipient: '/root/explorar/listar_arquivos', sender: '/root/explorar', at: AT })], createCodexState(childMeta()));
+    expect(state.title).toBe('listar_arquivos');
+    const clear = createCodexState(childMeta());
+    parseRolloutLine(clear, envelope({ recipient: '/root/listar', sender: '/root', payload: `Liste os arquivos de src ${GHP}`, at: AT }), { idPrefix: '', now: 0, activities: false });
+    expect(clear.title).toBe('Liste os arquivos de src gh*_***');
+    // Payload cifrado em linha: cai no nome da tarefa.
+    const sealed = createCodexState(childMeta());
+    parseRolloutLine(sealed, envelope({ recipient: '/root/revisar', sender: '/root', payload: fernet('p'), at: AT }), { idPrefix: '', now: 0, activities: false });
+    expect(sealed.title).toBe('revisar');
+    for (const s of [state, clear, sealed]) expect(s.title).not.toMatch(/Message Type|Task name|gAAAAA/);
+  });
+
+  it('isEncryptedText: token no formato Fernet (com ou sem "=" e brancos em volta) é cifrado; texto comum, curto ou com espaço no meio não', () => {
+    expect(isEncryptedText(fernet())).toBe(true);
+    expect(isEncryptedText(`  ${fernet('x')}==\n`)).toBe(true);
+    expect(isEncryptedText('gAAAAA123')).toBe(false);
+    expect(isEncryptedText(`gAAAAAB${'a'.repeat(30)} texto`)).toBe(false);
+    expect(isEncryptedText('Revise os testes de soma')).toBe(false);
   });
 
   it('raiz: a mensagem de um filho não vira título; herança do fork (ordinal < historyStart) não conta, não emite spawn nem dá título', () => {

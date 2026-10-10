@@ -11,6 +11,7 @@ import { DONE_GRACE_MS, Office } from '../../model/office';
 import { PermissionRegistry } from '../../permissions/registry';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { appendRaw, bigTurn, fakeLockProber } from '../../test/codex-fixtures-source';
+import { envelope, spawnEncrypted } from '../../test/codex-fixtures-live';
 import { B, commandParsed, forkRollout, grandchildSource, Q, S } from '../../test/codex-fixtures-source-ii';
 import { writeLines } from '../../test/fixtures';
 import { readLocks, RolloutIndex } from './files';
@@ -1103,6 +1104,26 @@ describe('fonte do Codex: título do filho pelo spawn_agent (P11)', () => {
     ctx.source.boot();
     expect(ctx.agent(SUB)?.title).toBe('Documente o módulo de soma');
     expect(ctx.agent(`.codex:${C3}`)?.title).toBe('Liste os arquivos de src');
+  });
+
+  it('0.160.1: mensagem cifrada no spawn_agent e envelope no filho: o filho entra com o task_name como título e nada cifrado nem cabeçalho chega ao escritório', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const C3 = threadId(3);
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), spawnEncrypted('call_sp', 'listar_arquivos', at + 1_000), S.started(T, 'p1', 'call_sp', C, at + 1_100, 'listar_arquivos')]);
+    ctx.home.rollout(C, [R.meta(C, { at: at + 1_200, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s1', at + 1_200), envelope({ recipient: '/root/listar_arquivos', sender: '/root', at: at + 1_300 })]);
+    // Filho sem o spawn visto: o título vem do envelope dele.
+    ctx.home.rollout(C3, [R.meta(C3, { at: at + 1_200, sessionId: T, source: SOURCES.sub(T) }), R.taskStarted('s3', at + 1_200), envelope({ recipient: '/root/revisar_readme', sender: '/root', at: at + 1_300 })]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.home.lock(C3, at);
+    ctx.source.boot();
+    expect(ctx.agent(SUB)?.title).toBe('listar_arquivos');
+    expect(ctx.agent(`.codex:${C3}`)?.title).toBe('revisar_readme');
+    expect(ctx.agent()?.activity?.text).toBe('Delegando ao subagente listar_arquivos');
+    const all = JSON.stringify(ctx.office.commit());
+    expect(all).not.toContain('gAAAAA');
+    expect(all).not.toContain('Message Type');
   });
 });
 

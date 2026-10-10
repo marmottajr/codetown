@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TerminalEntry } from '../../../shared/types';
 import { R, threadId } from '../../test/codex-fixtures';
+import { sendEncrypted, spawnEncrypted } from '../../test/codex-fixtures-live';
 import { parseSessionMeta } from './rollout';
 import { createCodexTerminalParser } from './terminal';
 
@@ -314,6 +315,15 @@ describe('terminal do Codex — response_item no paginated', () => {
     const stdin = tools(out).find((t) => t.id === 'w1');
     expect(stdin).toMatchObject({ tool: 'write_stdin', title: 'write_stdin(sessão 3, 15 caracteres)' });
     expect(stdin).not.toHaveProperty('input');
+  });
+
+  it('0.160.1: spawn_agent e send_message com a mensagem cifrada mostram "(mensagem cifrada)", nunca o texto cifrado', () => {
+    const out = entries([R.meta(T), spawnEncrypted('s1', 'listar_arquivos', Date.now()), sendEncrypted('x1', '/root/listar_arquivos', Date.now())]);
+    expect(tools(out).map((t) => [t.id, t.tool, t.title, t.input])).toEqual([
+      ['s1', 'Agent', 'Agent(explorer: listar_arquivos)', '(mensagem cifrada)'],
+      ['x1', 'send_message', 'send_message(/root/listar_arquivos)', '(mensagem cifrada)'],
+    ]);
+    expect(JSON.stringify(out)).not.toContain('gAAAAA');
   });
 
   it('code mode: o exec (script em JavaScript) não vira entrada; os itens de dentro sim', () => {
