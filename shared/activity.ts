@@ -91,6 +91,10 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/g, '$1 ***'],
   // URL com usuário:senha.
   [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/'"]+:)[^\s@/'"]+@/gi, '$1***@'],
+  // Webhook: o host fica, o caminho com o segredo sai.
+  [/(\bhttps?:\/\/hooks\.slack\.com\/services\/)T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/gi, '$1***'],
+  [/(\bhttps?:\/\/(?:discordapp|discord)\.com\/api\/webhooks\/)\d+\/[A-Za-z0-9_-]+/gi, '$1***'],
+  [/(\bhttps?:\/\/api\.telegram\.org\/bot)\d+:[A-Za-z0-9_-]+/gi, '$1***'],
   // curl -u usuario:senha / --user usuario:senha.
   [/((?:^|\s)(?:-u|--user)\s+['"]?[^\s:'"]+:)[^\s'"]+/g, '$1***'],
   // --token X, --password=X, --api-key X...
@@ -109,6 +113,9 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, 'AKIA***'],
   [/\bAIza[0-9A-Za-z_-]{30,}/g, 'AIza***'],
   [/\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}/g, 'sk_***'],
+  // Token solto do npm e do Hugging Face (tamanho de token real; "npm test" e "hf" ficam).
+  [/\bnpm_[A-Za-z0-9]{30,}/g, 'npm_***'],
+  [/\bhf_[A-Za-z0-9]{30,}/g, 'hf_***'],
   // JWT.
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, 'eyJ***'],
 ];
