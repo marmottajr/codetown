@@ -425,10 +425,14 @@ export function shortcutHint(accounts: readonly Pick<AccountInfo, 'short'>[]): s
   return `atalhos ${keys.slice(0, -1).join(', ')} ou ${keys[keys.length - 1]}`;
 }
 
-/** Mescla histórico longo (servidor) com as atividades recentes, sem duplicar, do mais antigo ao mais recente. */
-export function mergeHistory<T extends { id: string; at: number }>(history: readonly T[], recent: readonly T[], limit = 200): T[] {
+/**
+ * Mescla histórico longo (servidor) com as atividades recentes, sem duplicar, do mais antigo ao mais recente.
+ * `until` (instante do replay) descarta o que aconteceu depois — ao retroceder, a gaveta não fica com o futuro.
+ */
+export function mergeHistory<T extends { id: string; at: number }>(history: readonly T[], recent: readonly T[], limit = 200, until?: number): T[] {
   const seen = new Map<string, T>();
-  for (const a of history) seen.set(a.id, a);
-  for (const a of recent) seen.set(a.id, a);
+  const keep = (a: T) => until === undefined || a.at <= until;
+  for (const a of history) if (keep(a)) seen.set(a.id, a);
+  for (const a of recent) if (keep(a)) seen.set(a.id, a);
   return [...seen.values()].sort((a, b) => a.at - b.at).slice(-limit);
 }
