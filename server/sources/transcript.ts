@@ -112,7 +112,6 @@ export interface TranscriptState {
   aiTitle?: string;
   lastPrompt?: string;
   tasks: TaskItem[];
-  taskSeq: number;
   /** TaskCreate aguardando o id real (tool_use id -> id provisório). */
   pendingTaskCreates: Map<string, string>;
   /** Operações de tarefas feitas desde o início da janela lida (até o prefixo do arquivo ser mesclado). */
@@ -158,7 +157,6 @@ export interface TranscriptState {
 export function createTranscriptState(opts: { trackPrefix?: boolean } = {}): TranscriptState {
   return {
     tasks: [],
-    taskSeq: 0,
     pendingTaskCreates: new Map(),
     taskOpsLog: opts.trackPrefix ? [] : null,
     sawTaskReplace: false,
@@ -485,7 +483,7 @@ class LineParser {
       case 'TaskCreate': {
         const title = str(input.subject) ?? str(input.description);
         if (!title) break;
-        const tid = String(++s.taskSeq);
+        const tid = `pending:${id}`;
         remember(s.pendingTaskCreates, id, tid, 64);
         const af = str(input.activeForm);
         this.taskOp(af ? { op: 'create', id: tid, title: truncate(title, 120), activeForm: truncate(af, 120) } : { op: 'create', id: tid, title: truncate(title, 120) });
@@ -831,7 +829,6 @@ export function mergePrefix(state: TranscriptState, prefix: TranscriptState): vo
   if (prefix.firstAt !== undefined && (state.firstAt === undefined || prefix.firstAt < state.firstAt)) state.firstAt = prefix.firstAt;
   if (!state.sawTaskReplace && state.taskOpsLog) state.tasks = state.taskOpsLog.reduce(applyTaskOp, prefix.tasks);
   state.taskOpsLog = null;
-  state.taskSeq = Math.max(state.taskSeq, prefix.taskSeq);
   state.stats.toolCalls += prefix.stats.toolCalls;
   state.stats.tokensIn += prefix.stats.tokensIn;
   state.stats.tokensOut += prefix.stats.tokensOut;
