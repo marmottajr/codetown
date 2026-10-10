@@ -71,9 +71,10 @@ export function usageFromCache(cached: unknown): AccountUsage | undefined {
 }
 
 /**
- * Janelas cujo reinício já passou desde a coleta ficam SEM DADOS (são omitidas): o percentual
- * antigo não vale mais e não dá para saber quanto já foi usado na janela nova — exibir 0% faria
- * a cota parecer cheia. Voltam a aparecer quando a fonte trouxer números novos.
+ * Janelas cujo reinício já passou desde a coleta ficam SEM DADOS (os campos fixos fiveHour/sevenDay... são
+ * omitidos): o percentual antigo não vale mais e não dá para saber quanto já foi usado na janela nova — exibir 0%
+ * faria a cota parecer cheia. Voltam a aparecer quando a fonte trouxer números novos. A lista `windows` (Codex) fica
+ * inteira: é ela que diz quais medidores o plano tem, e o cliente mostra "—" na janela cujo `resetsAt` já passou.
  */
 export function rollover(usage: AccountUsage, now: number): AccountUsage {
   const out: AccountUsage = { ...usage };
