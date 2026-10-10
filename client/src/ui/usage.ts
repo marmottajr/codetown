@@ -184,12 +184,12 @@ export function usageMessage(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'pro
   const state = cardState(a);
   if (state === 'noquota') return ['sem cota', 'sem cota'];
   if (isOpencode(a)) return ['o OpenCode não tem cota única', 'sem cota'];
-  if (isAntigravity(a)) return ['o Antigravity não tem cota única', 'sem cota'];
+  if (isAntigravity(a)) return ['o uso do Antigravity fica no /usage do agy; o Habblaud ainda não mostra esse número', 'veja /usage'];
   if (isCodex(a)) return ['sem dados ainda', 'sem dados'];
   return ['sem dados de uso', 'sem dados'];
 }
 
-/** O botão "Como ativar" aparece? Não no OpenCode nem no Antigravity (sem cota única, não há o que ativar) nem sem cota. */
+/** O botão "Como ativar" aparece? Não no OpenCode (sem cota única) nem no Antigravity (ainda sem leitura do uso) nem sem cota. */
 export function usageHowVisible(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>): boolean {
   return !isOpencode(a) && !isAntigravity(a) && cardState(a) !== 'noquota';
 }
@@ -396,9 +396,9 @@ export class UsageCards {
       return;
     }
 
-    // Antigravity: a conta é só um marcador dos eventos do hook, sem cota para mostrar; a dica não manda instalar nada.
+    // Antigravity: o uso existe (/usage do agy), mas o Habblaud ainda não o lê; a dica não manda instalar nada.
     if (isAntigravity(a)) {
-      setText(r.tipNote, 'O Antigravity não informa uma cota que o Habblaud possa mostrar aqui.');
+      setText(r.tipNote, 'O Antigravity mostra a cota por modelo no /usage do agy. O Habblaud ainda não lê esse número.');
       setHidden(r.tipNote, false);
       setHidden(r.tipSetup, !usageSetupVisible(a));
       return;
