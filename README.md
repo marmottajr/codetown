@@ -5,7 +5,7 @@
 <h1 align="center">Habblaud</h1>
 
 <p align="center">
-  <b>O escritório virtual dos seus agentes do Claude Code (e do Codex).</b><br />
+  <b>O escritório virtual dos seus agentes do Claude Code (e do Codex e do OpenCode).</b><br />
   Cada projeto vira uma sala, cada agente vira um personagem em pixel art que mostra, em tempo real, o que está fazendo.
 </p>
 
@@ -222,6 +222,16 @@ npm run codex:status       # confere
 Depois, **abra o Codex e aprove os hooks do Habblaud em `/hooks`**: o Codex só roda um hook novo depois que você o
 aprova (o Habblaud nunca grava essa aprovação). Com o Habblaud no Docker, para mandar mensagens às sessões do Codex
 deixe também `npm run codex:bridge` rodando no Mac (veja [Codex](#codex)).
+
+### 5. OpenCode no escritório (opcional)
+
+Se você também usa o **OpenCode**, as sessões dele entram no mesmo escritório: cada projeto é uma sala e cada sessão,
+um personagem com o selo **OpenCode**. O Habblaud acha o banco do OpenCode (`~/.local/share/opencode/opencode.db`) e o
+lê **só para leitura**, sem instalar nada. Isso pede o **Node 22.13 ou mais novo** (é quando o `node:sqlite` passa a
+funcionar sem opção extra): no Node 22.12 essa leitura fica desligada, o Habblaud avisa com uma linha no log e o resto
+segue normal. **No Docker essa leitura não existe:** o container não enxerga o banco do OpenCode (o `docker:up` de
+propósito não monta nenhum arquivo SQLite). Para ver o OpenCode, rode o Habblaud sem Docker (modo Node). Veja
+[OpenCode](#opencode).
 
 ### Abrir no celular (opcional)
 
@@ -494,6 +504,22 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
   pouco para ir embora depois que você fecha o terminal.
 - Conversas da nuvem do ChatGPT (sem arquivo no computador) não aparecem. `HABBLAUD_CODEX=0` desliga o Codex.
 
+### OpenCode
+
+As sessões do OpenCode aparecem como as do Claude Code e do Codex: personagem, sala do projeto (a pasta da sessão),
+atividade, tarefas e subagentes. O chip da conta é fixo ("OpenCode") e leva o selo **OpenCode**. Esta parte está
+implementada e coberta por testes automáticos, e foi conferida no OpenCode 1.18.35, no Linux, com uma pasta pessoal
+temporária e isolada.
+
+- O Habblaud lê o banco do OpenCode a cada segundo, só para leitura, sem instalar nada. Uma sessão aparece enquanto
+  foi mexida nos últimos 30 minutos e não está arquivada; uma sessão filha (`parent_id`) vira subagente da principal.
+  Trabalhando ou ociosa vem da última resposta do assistente, e a atividade vem da última ferramenta usada (bash, read,
+  edit, write, grep, glob, webfetch, task). Pede o Node 22.13 ou mais novo; sem o banco, ou no Node 22.12, a leitura
+  simplesmente não liga. O banco não é montado no Docker (o `docker:up` não monta nenhum SQLite), então essa leitura só
+  funciona com o Habblaud no modo Node.
+- `HABBLAUD_OPENCODE=0` desliga o OpenCode no escritório; `HABBLAUD_OPENCODE_DIR` aponta a pasta de dados do OpenCode.
+- O uso (cotas) do OpenCode não existe, e o terminal e o histórico de sessões ainda não cobrem o OpenCode.
+
 ### GitHub no escritório
 
 O que os agentes fazem no GitHub anima a sala do projeto, sem token e sem acessar a internet: o Habblaud lê nos
@@ -612,6 +638,8 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
+| `HABBLAUD_OPENCODE` | ligado | `0` desliga o OpenCode no escritório (a leitura do banco). |
+| `HABBLAUD_OPENCODE_DIR` | `$XDG_DATA_HOME/opencode` ou `~/.local/share/opencode` | Pasta de dados do OpenCode (onde fica o `opencode.db`). |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |
 | `HABBLAUD_ACCOUNTS` | — | JSON para personalizar nome, letra ou cor, casado pelo nome da pasta da conta. Ex.: `[{"id":".claude-conta2","name":"Trabalho","short":"T","color":"#5cc97b"}]`. |
 
@@ -762,6 +790,11 @@ das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e 
   outros apps ficam no mesmo lugar) e grava `~/.habblaud/codex-hook.json`; a aprovação dos hooks é sempre sua, em
   `/hooks`. Os hooks só falam com `127.0.0.1`. As mensagens ao Codex têm o mesmo aviso das do Claude Code: qualquer
   programa desta máquina que fale com o Habblaud consegue deixar uma mensagem na fila de uma sessão.
+- **OpenCode:** o OpenCode só guarda as sessões num banco SQLite, então este é o único caso em que o Habblaud abre um
+  SQLite, sempre em modo somente leitura e só as tabelas `project`, `session`, `message`, `part` e `todo`. Das colunas
+  de conteúdo ele pede apenas o papel, os tempos, o tipo da parte, o nome da ferramenta e o título curto dela: o texto
+  das mensagens, a entrada e a saída das ferramentas e o raciocínio nunca chegam ao Habblaud. Nunca abre o `auth.json`,
+  a configuração (`opencode.jsonc`), os logs nem o resto do banco (`account`, `event`).
 - **O que aparece na tela:** resumos das atividades (ferramenta, arquivo, comando ou consulta), títulos das sessões,
   tarefas e estatísticas (e, no terminal, a conversa). Não exponha a porta em redes em que você não
   confia.

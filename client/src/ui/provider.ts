@@ -7,7 +7,7 @@ import type { AccountInfo, OfficeSnapshot, Provider } from '../../../shared/type
 import { shortcutHint } from './model';
 
 /** Nome de cada ferramenta como aparece nos textos. */
-export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
+export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
 
 /** Ferramenta de um agente, conta, sessão ou pedido (ausente = Claude Code). */
 export function providerOf(x: { provider?: Provider } | null | undefined): Provider {
@@ -16,6 +16,15 @@ export function providerOf(x: { provider?: Provider } | null | undefined): Provi
 
 export function isCodex(x: { provider?: Provider } | null | undefined): boolean {
   return x?.provider === 'codex';
+}
+
+export function isOpencode(x: { provider?: Provider } | null | undefined): boolean {
+  return x?.provider === 'opencode';
+}
+
+/** O id de conta é o do OpenCode ("opencode", "opencode~2", "demo:opencode")? Mesma ideia de looksLikeCodexId. */
+export function looksLikeOpencodeId(id: string): boolean {
+  return /(?:^|[:/\\])\.?opencode(?:[-_.~]|$)/i.test(id);
 }
 
 /**
@@ -29,7 +38,7 @@ export function looksLikeCodexId(id: string): boolean {
 /** Ferramenta da conta: a do snapshot; sem ela, a dica de quem chamou ou o jeito do id. */
 export function accountProvider(account: Pick<AccountInfo, 'provider'> | undefined, fallbackId = '', hint?: Provider): Provider {
   if (account) return providerOf(account);
-  return hint ?? (looksLikeCodexId(fallbackId) ? 'codex' : 'claude');
+  return hint ?? (looksLikeCodexId(fallbackId) ? 'codex' : looksLikeOpencodeId(fallbackId) ? 'opencode' : 'claude');
 }
 
 /**
@@ -41,20 +50,23 @@ export function fallbackShort(id: string, provider: Provider = accountProvider(u
   const rest = id
     .replace(/^.*:/, '')
     .replace(/~\d+$/, '')
-    .replace(/^\.?(?:claude|codex)(?=[-_.]|$)[-_.]?/i, '');
+    .replace(/^\.?(?:claude|codex|opencode)(?=[-_.]|$)[-_.]?/i, '');
   const letter = /[\p{L}\p{N}]/u.exec(rest)?.[0];
   if (letter) return letter.toUpperCase();
+  if (provider === 'opencode') return 'O';
   return provider === 'codex' ? 'X' : '?';
 }
 
-/** O selo "Codex" ao lado do nome da conta (não repete quando o nome já diz "Codex"). */
+/** O selo "Codex"/"OpenCode" ao lado do nome da conta (não repete quando o nome já diz o nome da ferramenta). */
 export function showsProviderTag(provider: Provider, accountName = ''): boolean {
+  if (provider === 'opencode') return !/opencode/i.test(accountName);
   return provider === 'codex' && !/codex/i.test(accountName);
 }
 
 /** Rótulo do chip da conta (dica e leitores de tela): "Conta C (dev@x.com)", "Codex · plano Team". */
 export function accountChipLabel(account: Pick<AccountInfo, 'name' | 'email' | 'plan' | 'provider'> | undefined, fallbackId: string, provider: Provider): string {
-  if (!account) return fallbackId ? `${fallbackId}${provider === 'codex' ? ' · Codex' : ''}` : 'Conta desconhecida';
+  if (!account) return fallbackId ? `${fallbackId}${provider === 'codex' ? ' · Codex' : provider === 'opencode' ? ' · OpenCode' : ''}` : 'Conta desconhecida';
+  if (provider === 'opencode') return `${account.name}${showsProviderTag(provider, account.name) ? ` · ${PROVIDER_NAME.opencode}` : ''}`;
   if (provider !== 'codex') return `${account.name}${account.email ? ` (${account.email})` : ''}`;
   const tag = showsProviderTag(provider, account.name) ? ' · Codex' : '';
   return `${account.name}${tag}${account.plan ? ` · plano ${account.plan}` : ''}`;
@@ -62,10 +74,10 @@ export function accountChipLabel(account: Pick<AccountInfo, 'name' | 'email' | '
 
 /**
  * Texto do escritório vazio. Os atalhos ("atalhos c ou d") são só das contas do Claude Code, que vêm de aliases do
- * shell (a letra de uma conta do Codex não é um atalho); o Codex só entra quando há uma conta dele.
+ * shell (a letra de uma conta do Codex ou do OpenCode não é um atalho); o Codex só entra quando há uma conta dele.
  */
 export function emptyOfficeHint(accounts: readonly Pick<AccountInfo, 'short' | 'provider'>[]): string {
-  const keys = shortcutHint(accounts.filter((a) => !isCodex(a)));
+  const keys = shortcutHint(accounts.filter((a) => !isCodex(a) && !isOpencode(a)));
   if (!accounts.some(isCodex)) return `Abra o Claude Code em qualquer projeto${keys ? ` (${keys})` : ''} e veja seu agente chegar.`;
   return `Abra o Claude Code${keys ? ` (${keys})` : ''} ou o Codex em qualquer projeto e veja seu agente chegar.`;
 }
