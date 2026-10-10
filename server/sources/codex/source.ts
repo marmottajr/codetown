@@ -515,20 +515,19 @@ export class CodexSource implements AgentSource, CodexLive {
 
   /** Acha o rollout (sem pressa: no máximo a cada 3 s por thread) e lê o que for novo. */
   private pump(t: ThreadTracker, boot: boolean): void {
-    if (!t.tail) {
-      const now = this.now();
-      if (now < t.nextResolveAt) return;
+    const now = this.now();
+    if (now >= t.nextResolveAt) {
       t.nextResolveAt = now + (boot ? 0 : 3_000);
       const path = t.acc.index.find(t.threadId);
-      if (!path) {
-        if (t.acc.index.isCompressedOnly(t.threadId)) {
-          log.warnOnce('codex-zst', 'Codex: há conversas compactadas (.jsonl.zst) que o Habblaud ainda não lê; elas ficam sem detalhes.');
-        }
+      if (path && !samePath(path, t.tail?.path)) {
+        this.load(t, path);
         return;
       }
-      this.load(t, path);
-      return;
+      if (!path && !t.tail && t.acc.index.isCompressedOnly(t.threadId)) {
+        log.warnOnce('codex-zst', 'Codex: há conversas compactadas (.jsonl.zst) que o Habblaud ainda não lê; elas ficam sem detalhes.');
+      }
     }
+    if (!t.tail) return;
     for (let i = 0; i < 4; i++) {
       let r;
       try {
@@ -559,6 +558,7 @@ export class CodexSource implements AgentSource, CodexLive {
 
   /** Lê o começo (session_meta, título) e a janela do fim do rollout; o resto do começo vai em segundo plano. */
   private load(t: ThreadTracker, path: string): void {
+    this.unwatch(t);
     const head = readRolloutHead(path);
     if (head.meta) this.setMeta(t, head.meta);
     const tail = new FileTail(path);
@@ -895,13 +895,14 @@ export class CodexSource implements AgentSource, CodexLive {
   private hintTranscript(acc: CodexAccount, threadId: string, path: string | undefined): void {
     if (!path) return;
     const t = this.threads.get(`${acc.id}:${threadId}`);
-    if (t?.tail) return;
     try {
       const real = realpathSync(path);
       const root = realpathSync(acc.dir);
       if (!real.startsWith(root + sep) || parseRolloutName(basename(real))?.threadId !== threadId) return;
+      if (samePath(real, t?.tail?.path)) return;
       acc.index.hint(threadId, real);
-      if (t) t.nextResolveAt = 0;
+      if (t?.tail) this.load(t, real);
+      else if (t) t.nextResolveAt = 0;
     } catch {
       // não existe aqui (Docker) ou ainda não foi criado
     }
@@ -972,6 +973,17 @@ export class CodexSource implements AgentSource, CodexLive {
   private unwatch(t: ThreadTracker): void {
     t.watcher?.close();
     delete t.watcher;
+  }
+}
+
+/** O mesmo arquivo, mesmo que um caminho passe por symlink (o índice guarda o da pasta; o hook manda o realpath). */
+function samePath(a: string, b: string | undefined): boolean {
+  if (b === undefined) return false;
+  if (a === b) return true;
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
   }
 }
 

@@ -1,7 +1,7 @@
 // Integração da fonte do Codex: um CODEX_HOME temporário (rollouts e locks sintéticos), o AccountsService e o Office.
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentInfo, Notice } from '../../../shared/types';
 import { AccountsService } from '../../accounts/service';
 import { setQuiet } from '../../log';
@@ -123,6 +123,102 @@ describe('fonte do Codex: presença pelos locks', () => {
     ctx.poll();
     expect(ctx.agent()?.status).toBe('offline');
     expect(ctx.notices.some((n) => n.text.includes('encerrou'))).toBe(true);
+  });
+
+  it('hook de thread revertido troca o rollout aberto e o caminho do terminal na hora', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const old = ctx.home.rollout(T, [
+      R.meta(T, { at }),
+      R.taskStarted('t1', at),
+      R.user(T, 't1', 'u1', 'Turno antigo', at + 1),
+      R.command(T, 't1', 'c1', 'npm test', { at: at + 2 }),
+      R.taskComplete('t1', at + 3),
+    ], { mtime: at + 3 });
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.agent()).toMatchObject({ status: 'idle', title: 'Turno antigo', stats: { toolCalls: 1 } });
+    const path = old.replace('.jsonl', `_${C}.jsonl`);
+    writeFileSync(path, [
+      R.meta(T, { at }),
+      R.taskStarted('t2', ctx.now()),
+      R.user(T, 't2', 'u2', 'Turno revertido', ctx.now() + 1),
+    ].join('\n') + '\n');
+    ctx.home.touch(path, ctx.now());
+    expect(ctx.hook({ hook_event_name: 'SessionStart', session_id: T, transcript_path: path })).toBe(true);
+    expect(ctx.source.transcriptPathOf(KEY)).toBe(realpathSync(path));
+    expect(ctx.agent()).toMatchObject({ status: 'working', title: 'Turno revertido', stats: { toolCalls: 0 } });
+    // Continua lendo só o novo: a escrita no antigo não encerra o turno revertido.
+    ctx.home.append(old, [R.taskComplete('t1', ctx.now() + 2)]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('working');
+    ctx.home.append(path, [R.taskComplete('t2', ctx.now() + 3)]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+  });
+
+  it('rollout aberto pelo hook não é recarregado à toa (caminho com symlink, varredura e hook repetido)', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('t1', at), R.user(T, 't1', 'u1', 'Turno', at + 1)], { mtime: at + 1 });
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    // O tmpdir do macOS passa por symlink (/var -> /private/var): o índice guarda um caminho e o hook manda o outro.
+    const load = vi.spyOn(ctx.source as unknown as { load: (...a: unknown[]) => void }, 'load');
+    ctx.hook({ hook_event_name: 'UserPromptSubmit', session_id: T, transcript_path: path });
+    ctx.advance(3_000);
+    ctx.poll();
+    ctx.hook({ hook_event_name: 'UserPromptSubmit', session_id: T, transcript_path: path });
+    ctx.advance(30_000);
+    ctx.poll();
+    expect(load.mock.calls.length <= 1).toBe(true);
+    load.mockRestore();
+  });
+
+  it.each([
+    { date: '2026/10/09', wait: 3_000 },
+    { date: '2026/01/02', wait: 30_000 },
+  ])('sem hook, revalida o rollout de thread revertido em $date sem perder as leituras entre varreduras', ({ date, wait }) => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const old = ctx.home.rollout(T, [R.meta(T, { at }), R.user(T, 't1', 'u1', 'Turno antigo', at + 1), R.taskComplete('t1', at + 2)], { date, mtime: at + 2 });
+    // A pasta antiga fica fora da varredura dos dois dias mais recentes.
+    ctx.home.rollout(threadId(3), [], { date: '2026/10/10' });
+    ctx.home.rollout(threadId(4), [], { date: '2026/10/09' });
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    expect(ctx.source.transcriptPathOf(KEY)).toBe(old);
+    expect(ctx.agent()).toMatchObject({ status: 'idle', title: 'Turno antigo' });
+    const path = old.replace('.jsonl', `_${C}.jsonl`);
+    writeFileSync(path, [R.meta(T, { at }), R.taskStarted('t2', ctx.now()), R.user(T, 't2', 'u2', 'Turno revertido', ctx.now() + 1)].join('\n') + '\n');
+    ctx.home.touch(path, ctx.now());
+    // Antes da próxima varredura, o tail atual ainda recebe linhas normalmente.
+    ctx.home.append(old, [R.command(T, 't1', 'c1', 'npm test', { at: at + 3 })]);
+    ctx.home.touch(old, at + 3);
+    ctx.poll();
+    expect(ctx.agent()?.stats.toolCalls).toBe(1);
+    expect(ctx.source.transcriptPathOf(KEY)).toBe(old);
+    ctx.advance(wait);
+    ctx.poll();
+    expect(ctx.source.transcriptPathOf(KEY)).toBe(path);
+    expect(ctx.agent()).toMatchObject({ status: 'working', title: 'Turno revertido', stats: { toolCalls: 0 } });
+  });
+
+  it('mantém o rollout em leitura quando seu mtime atual é mais novo que o de outro arquivo do thread', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const path = ctx.home.rollout(T, [R.meta(T, { at }), R.user(T, 't1', 'u1', 'Turno atual', at + 1), R.taskComplete('t1', at + 2)], { mtime: at + 2 });
+    ctx.home.lock(T, at);
+    ctx.source.boot();
+    const other = path.replace('.jsonl', `_${C}.jsonl`);
+    writeFileSync(other, [R.meta(T, { at }), R.user(T, 't2', 'u2', 'Outro rollout', at + 3), R.taskComplete('t2', at + 4)].join('\n') + '\n');
+    ctx.home.touch(other, at + 4);
+    ctx.home.append(path, [R.taskStarted('t3', ctx.now())]);
+    ctx.home.touch(path, ctx.now());
+    ctx.advance(3_000);
+    ctx.poll();
+    expect(ctx.source.transcriptPathOf(KEY)).toBe(path);
+    expect(ctx.agent()).toMatchObject({ status: 'working', title: 'Turno atual' });
   });
 
   it('lock rápido (manutenção) não vira sessão; o que persiste uns segundos, vira', () => {

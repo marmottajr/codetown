@@ -86,7 +86,7 @@ interface Found {
 /**
  * Onde está o rollout de cada thread (pelo id no nome do arquivo), com cache. Um thread retomado continua no arquivo
  * antigo (a pasta é a da criação), então a procura varre as pastas por data; um thread revertido tem mais de um
- * arquivo e vale o modificado por último. Sem achar: as pastas dos dias mais recentes são revistas a cada 2 s e a
+ * arquivo e vale o modificado por último. As pastas dos dias mais recentes são revistas a cada 2 s e a
  * varredura completa, no máximo a cada 30 s.
  */
 export class RolloutIndex {
@@ -105,13 +105,11 @@ export class RolloutIndex {
   find(threadId: string): string | undefined {
     const id = threadId.toLowerCase();
     const hit = this.paths.get(id);
-    if (hit && existsSync(hit.path)) return hit.path;
-    if (hit) this.paths.delete(id);
+    if (hit && !existsSync(hit.path)) this.paths.delete(id);
     const now = this.now();
     if (now - this.lastRecentScan >= 2_000) {
       this.lastRecentScan = now;
       this.scan(rolloutDirs(this.home).slice(0, 2));
-      if (this.paths.has(id)) return this.paths.get(id)!.path;
     }
     if (now - this.lastFullScan >= 30_000) this.scanAll();
     return this.paths.get(id)?.path;
@@ -155,7 +153,14 @@ export class RolloutIndex {
         } catch {
           continue;
         }
-        if (!prev || mtimeMs >= prev.mtimeMs || !existsSync(prev.path)) this.paths.set(r.threadId, { path, mtimeMs });
+        if (prev) {
+          try {
+            prev.mtimeMs = statSync(prev.path).mtimeMs;
+          } catch {
+            prev.mtimeMs = -Infinity;
+          }
+        }
+        if (!prev || mtimeMs >= prev.mtimeMs) this.paths.set(r.threadId, { path, mtimeMs });
       }
     }
   }
