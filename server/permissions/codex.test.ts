@@ -186,6 +186,29 @@ describe('codexToolView: nomes de ferramenta do Codex', () => {
     expect(codexToolView('apply_patch', { command: '*** Begin Patch\n*** Delete File: velho.md\n*** End Patch' })).toMatchObject({ text: 'Apagando velho.md', icon: '🗑️' });
   });
 
+  it('máscara antes do corte no resumo do cartão: o começo de um token nunca aparece (hook e canal paralelo, e os demais nomes)', () => {
+    const token = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+    const leaks = (s: string | undefined) => /ghp_[A-Za-z0-9]/.test(s ?? '') || (s ?? '').includes('A1b2C3');
+    for (const tool of ['Bash', 'exec_command']) {
+      const v = codexToolView(tool, { command: `rg "uso de ${token}" src` });
+      expect(v.text, tool).toMatch(/^Buscando/);
+      expect(leaks(v.text), `${tool}: ${v.text}`).toBe(false);
+      expect(leaks(v.title), `${tool}: ${v.title}`).toBe(false);
+      expect(leaks(v.input), tool).toBe(false);
+      const described = codexToolView(tool, { command: 'npm run deploy', description: `publica com ${token}` });
+      expect(leaks(described.text), `${tool}: ${described.text}`).toBe(false);
+    }
+    for (const [tool, input] of [
+      ['Grep', { pattern: `uso de ${token}` }],
+      ['Glob', { pattern: `${token}/**` }],
+      ['WebSearch', { query: `onde vaza ${token}` }],
+    ] as const) {
+      const v = codexToolView(tool, input);
+      expect(leaks(v.text), `${tool}: ${v.text}`).toBe(false);
+      expect(leaks(v.title), `${tool}: ${v.title}`).toBe(false);
+    }
+  });
+
   it('request_permissions, mcp__ e write_stdin (session_id ali é de processo; o texto só no detalhe, mascarado)', () => {
     expect(codexToolView('request_permissions', { reason: 'Preciso gravar fora do projeto', permissions: { fileSystem: { write: ['/tmp/x'] } } })).toMatchObject({
       title: 'request_permissions(Preciso gravar fora do projeto)',

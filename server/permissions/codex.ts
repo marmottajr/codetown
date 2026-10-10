@@ -26,6 +26,12 @@ type Rec = Record<string, unknown>;
 
 /** Tamanho do resumo (o mesmo das atividades). */
 const TEXT_MAX = 46;
+/**
+ * Tetos do comando e dos demais textos livres antes da máscara: o describeTool corta (ex.: o padrão do rg) antes de
+ * mascarar, e um token cortado escapa da máscara. Então tudo o que vai para ele já vai mascarado.
+ */
+const COMMAND_MASK_MAX = 8_000;
+const FIELD_MASK_MAX = 2_000;
 /** Prefixo da description do Bash num pedido de acesso à rede. */
 const NETWORK = /^network-access\s+(\S[\s\S]*)$/;
 const PATCH_FILE = /^\*\*\* (Add|Update|Delete) File: (.+)$/gm;
@@ -37,6 +43,18 @@ function str(v: unknown): string | undefined {
 /** Uma linha mascarada e cortada. */
 function line(s: string, max: number): string {
   return truncate(maskSecrets(s.slice(0, max * 8)), max);
+}
+
+/** Texto livre mascarado (com teto), para o describeTool. */
+function masked(s: string, max = FIELD_MASK_MAX): string {
+  return maskSecrets(s.slice(0, max));
+}
+
+/** Os campos de texto (1º nível) mascarados, para o describeTool: o comando com o teto dele, os demais com o dos textos. */
+function maskedFields(input: Rec): Rec {
+  const out: Rec = {};
+  for (const [k, v] of Object.entries(input)) out[k] = typeof v === 'string' ? masked(v, k === 'command' ? COMMAND_MASK_MAX : FIELD_MASK_MAX) : v;
+  return out;
 }
 
 /** Texto mascarado e cortado como o terminal mostra os argumentos (o mesmo tratamento do comando do Bash). */
@@ -71,7 +89,8 @@ export function codexToolView(tool: string, input: Rec, cwd?: string): CodexTool
       const target = NETWORK.exec(str(input.description)?.trim() ?? '')?.[1];
       if (target) return { title: `Rede(${line(target, TITLE_ARG_MAX)})`, text: line(`Acessar a rede: ${target}`, TEXT_MAX), icon: '🌐', ...shown(command, 'command') };
       const view = toolView('Bash', { command: command ?? '' }, cwd);
-      const desc = describeTool('Bash', { command: command ?? '', description: str(input.description) });
+      const description = str(input.description);
+      const desc = describeTool('Bash', { command: masked(command ?? '', COMMAND_MASK_MAX), description: description === undefined ? undefined : masked(description) });
       return { title: view.title, text: desc.text, icon: desc.icon, ...shown(command, 'command') };
     }
     case 'apply_patch': {
@@ -102,7 +121,7 @@ export function codexToolView(tool: string, input: Rec, cwd?: string): CodexTool
     }
     default: {
       const view = toolView(tool, input, cwd);
-      const desc = describeTool(tool, input);
+      const desc = describeTool(tool, maskedFields(input));
       return { ...view, text: desc.text, icon: desc.icon };
     }
   }
