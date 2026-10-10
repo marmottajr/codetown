@@ -1175,6 +1175,12 @@ class RolloutLineParser {
   }
 
   private command(c: { id?: string; command: unknown; parsed?: unknown; exitCode?: number; output: string; status?: string }): void {
+    // Encerrado pelo próprio Codex no fim do turno (0.160.1: o processo do code mode grava o CommandExecution com
+    // código -1 depois do task_complete, com ou sem saída): não é erro nem o que o agente faz agora; fica de fora.
+    if (this.s.turnOpen === false && c.exitCode === -1) {
+      if (c.id) this.s.pending.delete(c.id);
+      return;
+    }
     const command = commandText(c.command);
     this.done(c.id);
     const key = c.id ?? this.autoKey();

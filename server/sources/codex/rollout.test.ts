@@ -55,6 +55,24 @@ describe('rollout do Codex: paginated', () => {
     expect(signals).toContain('turnEnd');
   });
 
+  it('0.160.1: comando encerrado pelo Codex no fim do turno (failed, código -1, depois do task_complete) não vira atividade nem "Erro", com ou sem saída', () => {
+    const at = Date.parse('2026-10-09T12:00:00Z');
+    const { state, results } = feed([
+      R.meta(T, { at }),
+      R.taskStarted('turn1', at + 1),
+      R.command(T, 'turn1', 'exec-1', 'npm test', { output: 'ok', at: at + 2 }),
+      R.taskComplete('turn1', at + 3, 3_000),
+      R.command(T, 'turn1', 'exec-2', 'npm run dev', { exit: -1, status: 'failed', output: '', at: at + 4 }),
+      R.command(T, 'turn1', 'exec-3', 'npm run watch', { exit: -1, status: 'failed', output: 'compilando…\n'.repeat(200), at: at + 5 }),
+    ]);
+    expect(results.slice(4).flatMap((r) => r.activities)).toEqual([]);
+    expect(texts(results).at(-1)).toBe('Concluiu em 3s');
+    expect(state.current?.id).toBe('acc:t#turn1:done');
+    // Com o turno aberto, o -1 continua sendo erro.
+    const open = feed([R.taskStarted('turn2', at), R.command(T, 'turn2', 'exec-4', 'npm test', { exit: -1, status: 'failed', output: '', at: at + 1 })]);
+    expect(texts(open.results)).toContain('Erro em Bash');
+  });
+
   it('comando: as mesmas atividades do Bash, comando em lista ou texto, erro e recusa', () => {
     const { results, state } = feed([
       R.command(T, 't', 'call_1', 'npm test', { output: 'ok' }),
