@@ -60,7 +60,7 @@ import type { AgentSource } from '../source';
 import { FileTail } from '../tail';
 import type { TerminalParser } from '../terminal';
 import { codexPlanLabel, detectCodexAccounts } from './accounts';
-import { readLocks, readRolloutHead, rolloutDirs, RolloutIndex, parseRolloutName, LOCKS_DIR, type LockInfo } from './files';
+import { readRolloutHead, rolloutDirs, RolloutIndex, parseRolloutName } from './files';
 import { ThreadNameIndex } from './history';
 import type { CodexLive } from './live';
 import { createLockProber, type LockProber } from './locks';
@@ -75,28 +75,17 @@ import {
   type RolloutMeta,
 } from './rollout';
 import { createShellScan, scanShellLine } from './shells';
+import { CodexPresence } from './source-presence';
 import { boundaryAfter, lastLineAt, scanPrefix } from './source-scan';
 import { CodexThreadTree } from './source-tree';
 import { newTracker, type CodexAccount, type CodexSourceOptions, type ThreadTracker } from './source-types';
 import { CodexWatchers } from './source-watch';
 import { createCodexTerminalParser } from './terminal';
 
+export { FALLBACK_RECENT_MS, HOOK_PRESENCE_MS, LOCK_SETTLE_MS, SESSION_END_GRACE_MS, STALE_LOCK_MS } from './source-presence';
 export { scanPrefix } from './source-scan';
 export type { CodexSourceOptions } from './source-types';
 
-/** Idade mínima do lock para valer como sessão aberta (os locks de manutenção duram menos). */
-export const LOCK_SETTLE_MS = 3_000;
-/**
- * Só no modo sem sondagem ('unknown'): lock criado há mais que isto, rollout parado há mais que isto (pela última
- * linha) e nenhum evento de hook = lock velho de um crash.
- */
-export const STALE_LOCK_MS = 12 * 3600_000;
-/** Sem `thread-writer-locks/`: presença = escrita no rollout nos últimos 30 min (o mtime só escolhe o que abrir). */
-export const FALLBACK_RECENT_MS = 30 * 60_000;
-/** Um evento de hook segura o agente presente por este tempo (sem lock visível). */
-export const HOOK_PRESENCE_MS = 60_000;
-/** SessionEnd com o lock ainda presente: fecha mesmo assim depois disto. */
-export const SESSION_END_GRACE_MS = 5_000;
 /** Principal ausente (lock sumido ou órfão, presença do hook vencida) por este tempo: encerrado. */
 export const MAIN_GONE_GRACE_MS = 5_000;
 /** Subagente ausente por este tempo: entrega e sai. */
@@ -188,6 +177,7 @@ export class CodexSource implements AgentSource, CodexLive {
   private readonly prober: LockProber;
   private readonly tree: CodexThreadTree;
   private readonly watchers: CodexWatchers;
+  private readonly presence: CodexPresence;
   private stopped = false;
 
   constructor(private readonly opts: CodexSourceOptions) {
@@ -198,6 +188,7 @@ export class CodexSource implements AgentSource, CodexLive {
     this.prober = opts.lockProber ?? createLockProber({ platform: process.platform, inDocker: detectDocker(env) });
     this.tree = new CodexThreadTree(this.threads, opts);
     this.watchers = new CodexWatchers(this.useWatch, this.dirWatchers, () => this.schedule());
+    this.presence = new CodexPresence(this.threads, this.prober, this.watchers, this.tree);
     const claude = opts.accounts.entries();
     this.detected = detectCodexAccounts(opts.dirs, {
       env,
@@ -314,7 +305,7 @@ export class CodexSource implements AgentSource, CodexLive {
     /** Threads presentes neste ciclo, e por quê. */
     const seen = new Map<string, 'lock' | 'recent' | 'hook'>();
     for (const acc of this.accs) {
-      const present = this.presentThreads(acc, now);
+      const present = this.presence.presentThreads(acc, now);
       for (const [threadId, via] of present) {
         const key = `${acc.id}:${threadId}`;
         let t = this.threads.get(key);
@@ -393,43 +384,6 @@ export class CodexSource implements AgentSource, CodexLive {
   }
 
   /**
-   * Threads presentes de uma conta e por quê: 'lock' (lock com idade suficiente que a sondagem não deu como órfão),
-   * 'recent' (sem pasta de locks: candidato pelo mtime ou com escrita recente; quem decide é `wanted`) ou 'hook'
-   * (evento de hook recente).
-   */
-  private presentThreads(acc: CodexAccount, now: number): Map<string, 'lock' | 'recent' | 'hook'> {
-    const out = new Map<string, 'lock' | 'recent' | 'hook'>();
-    acc.locks = readLocks(acc.dir, this.prober);
-    if (acc.locks) {
-      this.watchers.watchDir(`${acc.dir}${sep}${LOCKS_DIR}`);
-      for (const lock of acc.locks.values()) {
-        // Órfã (o arquivo ficou e ninguém segura a trava: o Codex morreu): conta como lock sumido.
-        if (lock.state === 'free') continue;
-        const known = this.threads.get(`${acc.id}:${lock.threadId}`);
-        // Lock novo demais (manutenção?): espera (o polling de ~1 s confere de novo). O que já está no escritório
-        // não precisa esperar de novo.
-        if (now - lock.createdAt < LOCK_SETTLE_MS && !known?.inOffice) continue;
-        out.set(lock.threadId, 'lock');
-      }
-    } else {
-      // O mtime só escolhe o que abrir (no Windows ele pode ficar parado); depois de lido, vale a última escrita.
-      if (now - acc.recentAt >= 10_000) {
-        acc.recentAt = now;
-        acc.recent = new Set(acc.index.recentlyModified(FALLBACK_RECENT_MS).map((r) => r.threadId));
-      }
-      for (const threadId of acc.recent) out.set(threadId, 'recent');
-      for (const t of this.threads.values()) {
-        if (t.acc === acc && t.lastWriteAt !== undefined && now - t.lastWriteAt <= FALLBACK_RECENT_MS) out.set(t.threadId, 'recent');
-      }
-    }
-    for (const t of this.threads.values()) {
-      if (t.acc !== acc || out.has(t.threadId)) continue;
-      if (t.lastHookAt !== undefined && now - t.lastHookAt < HOOK_PRESENCE_MS) out.set(t.threadId, 'hook');
-    }
-    return out;
-  }
-
-  /**
    * Um ciclo de um thread presente: acha/lê o rollout e decide se ele está (ou continua) no escritório. O subagente é
    * decidido no fim do ciclo (poll), depois de todos os threads lidos.
    */
@@ -449,55 +403,12 @@ export class CodexSource implements AgentSource, CodexLive {
 
   /** O thread deve estar no escritório agora? Entra, sai ou muda de sala conforme o caso. */
   private reconcile(t: ThreadTracker, now: number, via?: 'lock' | 'recent' | 'hook'): void {
-    const want = this.wanted(t, now, via);
+    const want = this.presence.wanted(t, now, via);
     if (!want) {
       if (t.inOffice) this.leave(t);
       return;
     }
     if (!t.inOffice) this.enter(t, now);
-  }
-
-  private wanted(t: ThreadTracker, now: number, via?: 'lock' | 'recent' | 'hook'): boolean {
-    if (t.kind === 'internal') return false;
-    const hookRecent = t.lastHookAt !== undefined && now - t.lastHookAt < HOOK_PRESENCE_MS;
-    // SessionEnd: fecha, a não ser que algo novo tenha acontecido depois.
-    if (t.endedAt !== undefined) {
-      const lock = this.lockOf(t);
-      const newer = (t.lastHookAt ?? 0) > t.endedAt || (t.lastWriteAt ?? 0) > t.endedAt + 1_000 || (lock?.createdAt ?? 0) > t.endedAt;
-      if (newer) delete t.endedAt;
-      else if (!lock || now - t.endedAt >= SESSION_END_GRACE_MS) return false;
-    }
-    if (!hookRecent && via === 'lock') {
-      const lock = this.lockOf(t);
-      // Só sem sondagem ('unknown'): lock velho de um crash = o lock é antigo e o rollout está parado há muito tempo
-      // pela última linha (ou nem existe), mesmo com o turno aberto. Um thread antigo retomado agora tem lock novo (o
-      // Codex cria o arquivo ao carregar e o apaga ao descarregar). Com a trava segura ('held'), a sessão está viva.
-      const rolloutIdle = !t.rolloutPath || (t.lastWriteAt !== undefined && now - t.lastWriteAt > STALE_LOCK_MS);
-      if (lock?.state === 'unknown' && now - lock.createdAt > STALE_LOCK_MS && rolloutIdle) return false;
-    }
-    // Sem a pasta de locks: o mtime só trouxe o candidato; fica quem escreveu nos últimos 30 min.
-    if (!hookRecent && via === 'recent' && (t.lastWriteAt === undefined || now - t.lastWriteAt > FALLBACK_RECENT_MS)) return false;
-    // Sem o projeto (sessão aberta ainda sem prompt, só com o lock) não há sala para o principal: espera o rollout ou um
-    // hook dizer o cwd. Isso também segura um lock de subagente até o rollout dele dizer de quem ele é.
-    if (t.kind === 'main' && !this.tree.cwdOf(t)) return false;
-    if (t.kind === 'sub') {
-      const parent = this.tree.parentKey(t);
-      if (!parent || !this.tree.activeInOffice(parent)) return false;
-      // Subagente só aparece trabalhando (ou recém-criado pelo hook); depois de entregar, sai.
-      if (!t.inOffice && t.status !== 'working' && t.status !== 'waiting' && !t.hookSpawned) return false;
-    }
-    return true;
-  }
-
-  /** Lock do thread que ainda conta: a órfã ('free', ninguém segura a trava) vale como sumida. */
-  private lockOf(t: ThreadTracker): LockInfo | undefined {
-    const lock = t.acc.locks?.get(t.threadId);
-    return lock && lock.state !== 'free' ? lock : undefined;
-  }
-
-  /** A trava do thread está segura por um processo vivo do Codex (a sondagem viu). */
-  private lockHeld(t: ThreadTracker): boolean {
-    return t.acc.locks?.get(t.threadId)?.state === 'held';
   }
 
   private enter(t: ThreadTracker, now: number): void {
@@ -800,7 +711,7 @@ export class CodexSource implements AgentSource, CodexLive {
     let status: AgentStatus;
     if (s.turnOpen !== undefined) status = s.turnOpen ? 'working' : 'idle';
     else status = s.lastAt !== undefined && this.now() - s.lastAt < LEGACY_WORKING_MS ? 'working' : 'idle';
-    if (status === 'working' && !this.lockHeld(t) && this.now() - Math.max(t.lastWriteAt ?? 0, at) > WORKING_QUIET_MS) status = 'idle';
+    if (status === 'working' && !this.presence.lockHeld(t) && this.now() - Math.max(t.lastWriteAt ?? 0, at) > WORKING_QUIET_MS) status = 'idle';
     // Turno aberto com request_user_input sem output: espera você responder.
     const asking = status === 'working' && s.asking.size > 0;
     t.status = asking ? 'waiting' : status;
@@ -924,7 +835,7 @@ export class CodexSource implements AgentSource, CodexLive {
    * o processo está vivo e o turno aberto continua (um comando longo pode passar horas sem escrever nada).
    */
   private quietCheck(t: ThreadTracker, now: number): void {
-    if (t.status !== 'working' || this.lockHeld(t)) return;
+    if (t.status !== 'working' || this.presence.lockHeld(t)) return;
     const last = Math.max(t.lastWriteAt ?? 0, t.lastHookAt ?? 0, t.statusAt);
     if (now - last > WORKING_QUIET_MS) this.decide(t, 'idle', now, undefined, true);
   }
