@@ -47,12 +47,14 @@
 // Boot síncrono, com endBoot num `finally`.
 import { createReadStream, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
+import { codexApprovalReason } from '../../../shared/activity';
 import type { AccountUsage, Activity, AgentStatus, SourceInfo } from '../../../shared/types';
 import type { DetectedAccount } from '../../accounts/detect';
 import type { AccountEntry, AccountsService } from '../../accounts/service';
 import { detectDocker } from '../../config';
 import { errMsg, log } from '../../log';
 import type { Office, TranscriptSummary } from '../../model/office';
+import { networkTarget } from '../../permissions/codex';
 import { reportShellDone, shellsByOwner, ShellTracker, type ShellFinish } from '../shells';
 import type { AgentSource } from '../source';
 import { FileTail } from '../tail';
@@ -1258,9 +1260,11 @@ export class CodexSource implements AgentSource, CodexLive {
         if (t.inOffice) office.addActivity(t.key, act, true);
         break;
       }
-      case 'PermissionRequest':
-        this.decide(t, 'waiting', now, 'aprovar um comando', true);
+      case 'PermissionRequest': {
+        const toolName = str(input.tool_name) ?? 'ferramenta';
+        this.decide(t, 'waiting', now, codexApprovalReason(toolName, !!networkTarget(rec(input.tool_input) ?? {})), true);
         break;
+      }
       case 'Stop':
       case 'Interrupt':
         this.decide(t, 'idle', now, undefined, true);

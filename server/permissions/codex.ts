@@ -81,12 +81,17 @@ function escaped(chars: string): string {
 }
 
 /** Título, resumo e argumentos de um pedido do Codex. */
+/** Destino de um pedido de acesso à rede (a description do Bash começa com "network-access"); senão, undefined. */
+export function networkTarget(input: Rec): string | undefined {
+  return NETWORK.exec(str(input.description)?.trim() ?? '')?.[1];
+}
+
 export function codexToolView(tool: string, input: Rec, cwd?: string): CodexToolView {
   switch (tool) {
     case 'Bash':
     case 'exec_command': {
       const command = str(input.command);
-      const target = NETWORK.exec(str(input.description)?.trim() ?? '')?.[1];
+      const target = networkTarget(input);
       if (target) return { title: `Rede(${line(target, TITLE_ARG_MAX)})`, text: line(`Acessar a rede: ${target}`, TEXT_MAX), icon: '🌐', ...shown(command, 'command') };
       const view = toolView('Bash', { command: command ?? '' }, cwd);
       const description = str(input.description);

@@ -850,6 +850,19 @@ export const SPECIAL = {
   },
 } as const;
 
+/** Ferramentas do Codex que rodam um comando no shell (hook, canal paralelo e demo). */
+const CODEX_COMMAND_TOOLS = new Set(['Bash', 'exec_command', 'shell', 'shell_command', 'local_shell', 'container.exec']);
+
+/**
+ * Espera de um pedido de aprovação do Codex, pelo tipo: comando, edição de arquivo (apply_patch) ou, para acesso à rede
+ * e o resto (MCP, request_permissions...), o "aprovar uma permissão" que o Claude Code já usa.
+ */
+export function codexApprovalReason(tool: string, network = false): string {
+  if (tool === 'apply_patch') return 'aprovar uma edição';
+  if (CODEX_COMMAND_TOOLS.has(tool) && !network) return 'aprovar um comando';
+  return 'aprovar uma permissão';
+}
+
 /** Traduz o `waitingFor` do registro de sessões do Claude Code. */
 export function describeWaitingFor(raw: string | undefined): string {
   if (!raw) return 'responder no terminal';

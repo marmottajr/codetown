@@ -83,6 +83,19 @@ describe('PermissionRegistry: pedidos do Codex', () => {
     expect(snapAgent(office, CLAUDE)!.permission).toBeUndefined();
   });
 
+  it('a espera diz o tipo do pedido: edição de arquivo (apply_patch), acesso à rede e MCP têm rótulo próprio', () => {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Update File: src/a.ts\n-x\n+y\n*** End Patch' } }, 'aprovar uma edição'],
+      [{ tool_name: 'Bash', tool_input: { command: 'curl https://api.exemplo.dev', description: 'network-access api.exemplo.dev:443' } }, 'aprovar uma permissão'],
+      [{ tool_name: 'mcp__github__create_issue', tool_input: { title: 'x' } }, 'aprovar uma permissão'],
+    ];
+    for (const [over, reason] of cases) {
+      const { office, registry } = setup();
+      registered(registry.register(codexInput(over)));
+      expect(snapAgent(office, MAIN)).toMatchObject({ status: 'waiting', waitingFor: reason });
+    }
+  });
+
   it('casa pelo thread: agent_id do subagente conhecido vai para ele; desconhecido vai para o principal com o tipo', () => {
     const { office, registry } = setup();
     registered(registry.register(codexInput({ agent_id: CHILD, agent_type: 'worker' })));

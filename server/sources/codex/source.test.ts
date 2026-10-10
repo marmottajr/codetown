@@ -687,6 +687,22 @@ describe('fonte do Codex: eventos de hook', () => {
     expect(ctx.agent()?.activity).toMatchObject({ text: 'GitHub: merge pull request', tool: 'mcp__github__merge_pull_request' });
   });
 
+  it('aprovação pelo hook diz o tipo do pedido: edição de arquivo, acesso à rede e o resto não viram "comando"', () => {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Update File: src/app.ts\n-a\n+b\n*** End Patch' } }, 'aprovar uma edição'],
+      [{ tool_name: 'Bash', tool_input: { command: 'curl https://api.exemplo.dev', description: 'network-access api.exemplo.dev:443' } }, 'aprovar uma permissão'],
+      [{ tool_name: 'mcp__github__merge_pull_request', tool_input: { pullNumber: 3 } }, 'aprovar uma permissão'],
+      [{ tool_name: 'Bash', tool_input: { command: 'npm test', description: 'Run the tests' } }, 'aprovar um comando'],
+    ];
+    for (const [over, reason] of cases) {
+      const ctx = setup();
+      ctx.source.boot();
+      ctx.hook(ev('UserPromptSubmit', { prompt: 'faça a tarefa' }));
+      expect(ctx.hook(ev('PermissionRequest', over))).toBe(true);
+      expect(ctx.agent(), String(over.tool_name)).toMatchObject({ status: 'waiting', waitingFor: reason });
+    }
+  });
+
   it('agent_id vs session_id: o evento de subagente vai para o filho, que entra como sub do pai', () => {
     const ctx = setup();
     ctx.source.boot();

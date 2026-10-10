@@ -16,7 +16,7 @@
 // ligado ao daemon: os pedidos dela vêm pelo canal paralelo ('parallel', sem prazo; vale quem responder primeiro);
 // as demais usam o hook (25 s). Isso também não gasta sorteio.
 import type { AccountInfo, AccountUsage, Activity, AgentInfo, FeedItem, Notice, OfficeSnapshot, PermissionDecision, PermissionRequestInfo, RoomInfo, ShellJob, TaskItem } from '../types';
-import { describePrompt, describeShellJob, describeTool, SHELL_DONE_TOOL, SHELL_WAIT_TOOL, SPECIAL, type ActivityDescription, type ShellOutcome } from '../activity';
+import { codexApprovalReason, describePrompt, describeShellJob, describeTool, SHELL_DONE_TOOL, SHELL_WAIT_TOOL, SPECIAL, type ActivityDescription, type ShellOutcome } from '../activity';
 import { answerSummary, ASK_TOOL, checkAnswers } from '../answers';
 import { describeGitHubEvent, GITHUB_TOOL, RoomEffects } from '../github';
 import { hash32, mulberry32 } from '../hash';
@@ -485,7 +485,8 @@ export class DemoSimulator {
     const codex = a.info.provider === 'codex';
     const channel = mode ?? (a.parallel ? 'parallel' : 'blocking');
     a.info.permission = codex ? demoCodexPermission(id, a.project, a.rng, now, channel) : demoPermission(id, a.project, a.rng, now, kind);
-    const reason = codex ? 'aprovar um comando' : a.info.permission.tool === ASK_TOOL ? 'responder uma pergunta' : 'aprovar uma permissão';
+    const p = a.info.permission;
+    const reason = codex ? codexApprovalReason(p.tool, p.text.startsWith('Acesso à rede')) : p.tool === ASK_TOOL ? 'responder uma pergunta' : 'aprovar uma permissão';
     a.info.waitingFor = reason;
     this.setStatus(a, 'waiting', now);
     this.activity(a, now, SPECIAL.waiting(reason));

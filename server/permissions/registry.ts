@@ -23,7 +23,7 @@
 // RESOLVED_KEEP_MS sem a confirmação. Numa thread atendida pelo canal o hook do Codex recebe {skip: 'parallel'} e sai
 // sem decidir; se ele chegou antes (corrida), o registerParallel da mesma thread o libera.
 import { randomBytes } from 'node:crypto';
-import { describeTool, maskSecrets, truncate } from '../../shared/activity';
+import { codexApprovalReason, describeTool, maskSecrets, truncate } from '../../shared/activity';
 import { ANSWER_OTHER_MAX, answerSummary, ASK_TOOL, checkAnswers } from '../../shared/answers';
 import type { Activity, AgentInfo, CodexDecision, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo } from '../../shared/types';
 import { errMsg, log } from '../log';
@@ -313,7 +313,7 @@ export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefin
   }
   // Codex: o pedido (hook ou canal paralelo) é sempre uma aprovação e vale por cima da espera que a fonte tenha posto
   // (a pergunta do request_user_input nunca passa por cima de uma aprovação pendente). Claude Code: vale o da fonte.
-  if (p.provider === 'codex') a.waitingFor = 'aprovar um comando';
+  if (p.provider === 'codex') a.waitingFor = codexApprovalReason(p.tool, p.title.startsWith('Rede('));
   else a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : 'aprovar uma permissão';
   return a;
 }

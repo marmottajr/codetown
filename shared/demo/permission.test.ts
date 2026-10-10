@@ -145,6 +145,24 @@ describe('pedidos do Codex (demo)', () => {
     expect(tools).toEqual(new Set(['Bash', 'apply_patch', 'rede']));
   });
 
+  it('forcePermission no Codex: a espera diz o tipo do pedido (comando, edição ou acesso à rede)', () => {
+    const reasons = new Map<string, Set<string>>();
+    for (let seed = 1; seed <= 40; seed++) {
+      const sim = new DemoSimulator({ seed, idPrefix: 'demo:' }, start);
+      const id = sim.forcePermission(start, 'permission', 'codex')!;
+      const a = sim.snapshot(start).agents.find((x) => x.id === id)!;
+      const p = a.permission!;
+      const kind = p.tool === 'apply_patch' ? 'edição' : p.text.startsWith('Acesso à rede') ? 'rede' : 'comando';
+      if (!reasons.has(kind)) reasons.set(kind, new Set());
+      reasons.get(kind)!.add(a.waitingFor!);
+    }
+    expect(Object.fromEntries([...reasons].map(([k, v]) => [k, [...v]]))).toEqual({
+      comando: ['aprovar um comando'],
+      edição: ['aprovar uma edição'],
+      rede: ['aprovar uma permissão'],
+    });
+  });
+
   it('forcePermission no Codex: espera "aprovar um comando"; recusa só com motivo; sem sempre permitir nem interromper', () => {
     const sim = new DemoSimulator({ seed: 4, idPrefix: 'demo:' }, start);
     const id = sim.forcePermission(start, 'question', 'codex')!;
@@ -222,8 +240,8 @@ describe('pedidos do Codex no canal paralelo (demo)', () => {
       const sim = new DemoSimulator({ seed, idPrefix: 'demo:' }, start);
       const id = sim.forcePermission(start, 'permission', 'codex', 'parallel')!;
       const a = agentOf(sim, id);
-      expect(a).toMatchObject({ provider: 'codex', status: 'waiting', waitingFor: 'aprovar um comando' });
       const p = a.permission!;
+      expect(a).toMatchObject({ provider: 'codex', status: 'waiting', waitingFor: p.tool === 'apply_patch' ? 'aprovar uma edição' : 'aprovar um comando' });
       expect(p).toMatchObject({ provider: 'codex', mode: 'parallel', expiresAt: Number.MAX_SAFE_INTEGER });
       tools.add(p.tool);
       expect(sim.decidePermission(p.id, { behavior: 'answer', answers: [] }, start + 1)).toBe(false);

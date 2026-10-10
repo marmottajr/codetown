@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  codexApprovalReason,
   describeCommand,
   describePrompt,
   describeShellJob,
@@ -118,6 +119,13 @@ describe('atividades', () => {
     expect(SPECIAL.cleared().kind).toBe('compact');
     expect(describeWaitingFor('worker request')).toBe('aprovar o pedido de um worker');
     expect(describeWaitingFor(undefined)).toBe('responder no terminal');
+  });
+
+  it('motivo da espera por um pedido do Codex, pelo tipo: comando, edição ou o genérico (rede e o resto)', () => {
+    expect(['Bash', 'exec_command', 'shell', 'local_shell'].map((t) => codexApprovalReason(t))).toEqual(Array(4).fill('aprovar um comando'));
+    expect(codexApprovalReason('apply_patch')).toBe('aprovar uma edição');
+    expect(codexApprovalReason('Bash', true)).toBe('aprovar uma permissão');
+    expect(['request_permissions', 'mcp__github__create_issue', 'write_stdin'].map((t) => codexApprovalReason(t))).toEqual(Array(3).fill('aprovar uma permissão'));
   });
 });
 
