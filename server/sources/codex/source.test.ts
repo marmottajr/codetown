@@ -1630,6 +1630,21 @@ describe('fonte do Codex: subagente que volta em followup_task (G1)', () => {
     expect(ctx.source.terminalParser(SUB)).toBeUndefined();
   });
 
+  it('um task_complete no rollout do subagente dá um "Concluiu" só (o do rollout), ao vivo e também na última leitura antes da graça', () => {
+    for (const unlockFirst of [false, true]) {
+      const ctx = setup();
+      const sub = bootWithSub(ctx);
+      ctx.advance(1_000);
+      ctx.home.append(sub, [R.agent(C, 's1', 'sa', 'Revisado.', ctx.now()), R.taskComplete('s1', ctx.now() + 1, 61_000)]);
+      if (unlockFirst) ctx.home.unlock(C);
+      ctx.poll();
+      ctx.home.unlock(C);
+      ctx.poll();
+      const done = ctx.agent(SUB)!.recent.filter((a) => a.kind === 'done');
+      expect(done.map((a) => [a.id, a.text])).toEqual([[`${SUB}#s1:done`, 'Concluiu em 1min 1s']]);
+    }
+  });
+
   it('task_complete e soltura da trava no mesmo intervalo de poll (sem fs.watch): a última leitura vem antes da graça, entrega com a resposta e sai em 1,5 s', () => {
     const ctx = setup();
     const sub = bootWithSub(ctx);

@@ -952,6 +952,11 @@ export class CodexSource implements AgentSource, CodexLive {
 
   /** Aplica um resultado de linha: ao vivo vai direto ao escritório; na carga inicial, fica no backlog. */
   private apply(t: ThreadTracker, r: CodexLineResult, live: boolean): void {
+    // Subagente ao vivo: o "Concluiu" do próprio rollout chega ao escritório antes do fim do turno que o entrega. O
+    // completeSub sintetiza um "Concluiu" quando a atividade atual não é uma conclusão; depois dele, o do rollout
+    // ficaria duplicado.
+    const doneFirst = live && t.inOffice && t.kind === 'sub' && r.activities.some((a) => a.activity.kind === 'done');
+    if (doneFirst) this.toOffice(t, r, true);
     for (const sig of r.signals) {
       switch (sig.type) {
         case 'meta':
@@ -1002,6 +1007,7 @@ export class CodexSource implements AgentSource, CodexLive {
     if (live && t.status === 'idle' && t.state.turnOpen === true && (r.activities.length || r.signals.some((s) => s.type === 'progress'))) {
       t.reviveAt = r.at;
     }
+    if (doneFirst) return;
     if (!live || !t.inOffice) {
       if (r.activities.length || r.signals.some((s) => s.type === 'github')) {
         t.backlog.push(r);
