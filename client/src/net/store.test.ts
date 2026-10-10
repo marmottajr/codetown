@@ -84,6 +84,15 @@ describe('OfficeStore: reconexão', () => {
     vi.useRealTimers();
   });
 
+  it('connect() repetido mantém um único stream, fechado por disconnect()', () => {
+    store.connect();
+    store.connect();
+    last().open();
+    store.connect();
+    store.disconnect();
+    expect(sources.map((s) => s.closed)).toEqual([true]);
+  });
+
   it('religa sozinho com espera crescente quando o navegador desiste do stream', () => {
     const states: string[] = [];
     store.on('connection', (s) => states.push(s));
@@ -134,6 +143,40 @@ describe('OfficeStore: reconexão', () => {
     expect(store.nextRetryAt).toBeNull();
     vi.advanceTimersByTime(60_000);
     expect(sources).toHaveLength(2);
+  });
+
+  it('disconnect() remove o listener de rede e connect() o restaura sem acumular', () => {
+    const online = new Set<EventListener>();
+    vi.stubGlobal('addEventListener', (type: string, cb: EventListener) => {
+      if (type === 'online') online.add(cb);
+    });
+    vi.stubGlobal('removeEventListener', (type: string, cb: EventListener) => {
+      if (type === 'online') online.delete(cb);
+    });
+    store = new OfficeStore({
+      eventSource: () => {
+        const s = new FakeSource();
+        sources.push(s);
+        return s;
+      },
+    });
+    try {
+      for (let i = 0; i < 3; i++) {
+        store.connect();
+        expect(online.size).toBe(1);
+        last().fail();
+        online.forEach((cb) => cb(new Event('online')));
+        expect(sources).toHaveLength((i + 1) * 2);
+        expect(store.nextRetryAt).toBeNull();
+        store.disconnect();
+        expect(online.size).toBe(0);
+        vi.advanceTimersByTime(60_000);
+        expect(sources).toHaveLength((i + 1) * 2);
+      }
+    } finally {
+      store.disconnect();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('disconnect() não reconecta e eventos do stream antigo são ignorados', () => {
