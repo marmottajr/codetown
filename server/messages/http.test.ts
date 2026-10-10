@@ -240,10 +240,14 @@ describe('rotas', () => {
   });
 
   it('a sessão some (sem rodadas): canMessage volta a falso e a mensagem na fila falha no prazo', async () => {
-    srv = await serveMessages({ registry: { presenceMs: 100, queuedTimeoutMs: 150 } });
+    let now = 1_000_000;
+    srv = await serveMessages({ registry: { now: () => now, presenceMs: 100, queuedTimeoutMs: 150 } });
     await post(srv, '/api/mod/inbox', { session: SESSION });
-    const msg = (await post(srv, '/api/messages', { agentId: MAIN, text: 'oi' })).json as OutboxMessage;
-    await sleep(250);
+    const created = await post(srv, '/api/messages', { agentId: MAIN, text: 'oi' });
+    expect(created.status).toBe(201);
+    const msg = created.json as OutboxMessage;
+    now += 250;
+    srv.registry!.tick();
     expect((await snapshot(srv)).agents.find((a) => a.id === MAIN)?.canMessage).toBeUndefined();
     expect((await request(srv.base, `/api/messages/${encodeURIComponent(msg.id)}`)).json).toMatchObject({ status: 'failed', error: expect.stringMatching(/não buscou/) });
     expect((await post(srv, '/api/messages', { agentId: MAIN, text: 'oi' })).status).toBe(409);
