@@ -45,7 +45,7 @@
 // `tailBytes` e até a fronteira de turno (reader.ts: o turno aberto pode estar a vários MB do fim); o tail continua de
 // onde a varredura parou e o começo anterior a ela é lido depois, em segundo plano (números e linha do tempo longa).
 // Boot síncrono, com endBoot num `finally`.
-import { createReadStream, readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { readdirSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import { codexApprovalReason } from '../../../shared/activity';
 import type { AccountUsage, Activity, AgentStatus, SourceInfo } from '../../../shared/types';
@@ -64,7 +64,7 @@ import { readLocks, readRolloutHead, rolloutDirs, RolloutIndex, parseRolloutName
 import { ThreadNameIndex } from './history';
 import type { CodexLive } from './live';
 import { createLockProber, type LockProber } from './locks';
-import { isTurnBoundary, lineTimestamp, scanBackward } from './reader';
+import { scanBackward } from './reader';
 import {
   codexAgentPath,
   createCodexState,
@@ -72,13 +72,14 @@ import {
   isThreadId,
   parseRolloutLine,
   type CodexLineResult,
-  type CodexState,
   type RolloutMeta,
 } from './rollout';
 import { createShellScan, scanShellLine } from './shells';
+import { boundaryAfter, lastLineAt, scanPrefix } from './source-scan';
 import { newTracker, type CodexAccount, type CodexSourceOptions, type ThreadTracker } from './source-types';
 import { createCodexTerminalParser } from './terminal';
 
+export { scanPrefix } from './source-scan';
 export type { CodexSourceOptions } from './source-types';
 
 /** Idade mínima do lock para valer como sessão aberta (os locks de manutenção duram menos). */
@@ -1275,63 +1276,4 @@ export class CodexSource implements AgentSource, CodexLive {
     t.watcher?.close();
     delete t.watcher;
   }
-}
-
-/**
- * Fronteira de turno para a varredura reversa, mas só depois de juntar `minBytes` do fim: as atividades recentes e o
- * último token_count/rate_limits vêm junto, como na janela fixa de antes, mesmo com o turno recém-fechado.
- */
-function boundaryAfter(minBytes: number): (line: string) => boolean {
-  let bytes = 0;
-  return (line) => {
-    bytes += Buffer.byteLength(line) + 1;
-    return bytes >= minBytes && isTurnBoundary(line);
-  };
-}
-
-/** `timestamp` da última linha que tiver um (as linhas vêm na ordem do arquivo). */
-function lastLineAt(lines: string[]): number | undefined {
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const at = lineTimestamp(lines[i]);
-    if (at !== undefined) return at;
-  }
-  return undefined;
-}
-
-/**
- * Lê em stream (sem travar o event loop) os bytes [0, end) de um rollout: os números, o título e as últimas
- * `keep` atividades (distintas) anteriores à varredura feita ao abrir a sessão. `now` = o relógio da fonte (a hora das
- * linhas sem `timestamp`).
- */
-export async function scanPrefix(path: string, end: number, idPrefix: string, keep: number, now: number): Promise<{ state: CodexState; activities: Activity[] }> {
-  const state = createCodexState();
-  if (end <= 0) return { state, activities: [] };
-  const ctx = { idPrefix, now, activities: keep > 0 };
-  // Por id, na ordem de chegada: a mesma chamada em duas linhas (function_call e o CommandExecution de mesmo call_id)
-  // fica uma entrada só, como no Office.addActivity: com `replace`, a versão mais nova no lugar (e no horário) da
-  // primeira; sem ele, fica a primeira.
-  const byId = new Map<string, Activity>();
-  const take = (line: string) => {
-    const r = parseRolloutLine(state, line, ctx);
-    for (const a of r.activities) {
-      const old = byId.get(a.activity.id);
-      if (!old) byId.set(a.activity.id, a.activity);
-      else if (a.replace) byId.set(a.activity.id, { ...a.activity, at: old.at });
-    }
-    if (byId.size > keep * 2) for (const id of [...byId.keys()].slice(0, byId.size - keep)) byId.delete(id);
-  };
-  let partial: Buffer | null = null;
-  const stream = createReadStream(path, { start: 0, end: end - 1, highWaterMark: 1024 * 1024 });
-  for await (const chunk of stream as AsyncIterable<Buffer>) {
-    const data: Buffer = partial ? Buffer.concat([partial, chunk]) : chunk;
-    let start = 0;
-    for (let i = data.indexOf(0x0a, start); i !== -1; i = data.indexOf(0x0a, start)) {
-      const line = data.toString('utf8', start, i);
-      start = i + 1;
-      if (line) take(line);
-    }
-    partial = start < data.length ? Buffer.from(data.subarray(start)) : null;
-  }
-  if (partial?.length) take(partial.toString('utf8'));
-  return { state, activities: [...byId.values()].slice(-keep) };
 }
