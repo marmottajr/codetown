@@ -205,6 +205,11 @@ export class TimelapsePlayer implements UiComponent {
     return this.open;
   }
 
+  /** Instante reproduzido (o mesmo do selo e do mundo), ou null ao vivo. */
+  get replayTime(): number | null {
+    return this.active ? this.t : null;
+  }
+
   toggle(): void {
     if (this.open) this.close();
     else void this.show();
