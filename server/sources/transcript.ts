@@ -8,6 +8,7 @@ import { describePrompt, describeShellJob, describeTool, maskSecrets, SPECIAL, t
 import type { GitHubEvent } from '../../shared/github';
 import { detectGitHubNotification, detectGitHubResult, githubCallOf, type GitHubCall } from './github';
 import type { ShellStart } from './shells';
+import { LineBuffer, warnOversizedLine } from './tail';
 
 // ------------------------------------------------------------------ tarefas
 
@@ -802,19 +803,23 @@ export async function scanPrefix(
       if (activities.length > keep * 2) activities = activities.slice(-keep);
     }
   };
-  let partial: Buffer | null = null;
+  const pending = new LineBuffer();
+  let discarded = 0;
   const stream = createReadStream(path, { start: 0, end: end - 1, highWaterMark: 1024 * 1024 });
   for await (const chunk of stream as AsyncIterable<Buffer>) {
-    const data: Buffer = partial ? Buffer.concat([partial, chunk]) : chunk;
-    let start = 0;
-    for (let i = data.indexOf(0x0a, start); i !== -1; i = data.indexOf(0x0a, start)) {
-      const line = data.toString('utf8', start, i);
-      start = i + 1;
+    const fed = pending.push(chunk);
+    discarded += fed.discarded;
+    for (const buf of fed.lines) {
+      const line = buf.toString('utf8');
       if (line) take(line);
     }
-    partial = start < data.length ? Buffer.from(data.subarray(start)) : null;
   }
-  if (partial?.length) take(partial.toString('utf8'));
+  const rest = pending.flush();
+  if (rest?.length) {
+    const line = rest.toString('utf8');
+    if (line) take(line);
+  }
+  if (discarded) warnOversizedLine(path);
   state.skipUsage = undefined;
   return { state, signals, activities: activities.slice(-keep), shellEvents };
 }

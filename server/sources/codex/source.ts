@@ -32,7 +32,7 @@ import type { AccountEntry, AccountsService } from '../../accounts/service';
 import { errMsg, log } from '../../log';
 import type { Office, TranscriptSummary } from '../../model/office';
 import type { AgentSource } from '../source';
-import { FileTail } from '../tail';
+import { FileTail, LineBuffer, warnOversizedLine } from '../tail';
 import type { TerminalParser } from '../terminal';
 import { codexPlanLabel, detectCodexAccounts } from './accounts';
 import { readLocks, readRolloutHead, rolloutDirs, RolloutIndex, parseRolloutName, LOCKS_DIR, type LockInfo } from './files';
@@ -989,18 +989,19 @@ export async function scanPrefix(path: string, end: number, idPrefix: string, ke
     for (const a of r.activities) activities.push(a.activity);
     if (activities.length > keep * 2) activities = activities.slice(-keep);
   };
-  let partial: Buffer | null = null;
+  const pending = new LineBuffer();
+  let discarded = 0;
   const stream = createReadStream(path, { start: 0, end: end - 1, highWaterMark: 1024 * 1024 });
   for await (const chunk of stream as AsyncIterable<Buffer>) {
-    const data: Buffer = partial ? Buffer.concat([partial, chunk]) : chunk;
-    let start = 0;
-    for (let i = data.indexOf(0x0a, start); i !== -1; i = data.indexOf(0x0a, start)) {
-      const line = data.toString('utf8', start, i);
-      start = i + 1;
+    const fed = pending.push(chunk);
+    discarded += fed.discarded;
+    for (const buf of fed.lines) {
+      const line = buf.toString('utf8');
       if (line) take(line);
     }
-    partial = start < data.length ? Buffer.from(data.subarray(start)) : null;
   }
-  if (partial?.length) take(partial.toString('utf8'));
+  const rest = pending.flush();
+  if (rest?.length) take(rest.toString('utf8'));
+  if (discarded) warnOversizedLine(path);
   return { state, activities: activities.slice(-keep) };
 }

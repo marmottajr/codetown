@@ -1,8 +1,9 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { log } from '../log';
 import { L, tempDir } from '../test/fixtures';
-import { FileTail } from './tail';
+import { FileTail, MAX_LINE_BYTES } from './tail';
 import {
   applyTaskOp,
   createTranscriptState,
@@ -366,6 +367,33 @@ describe('parseLine — sinais de shells', () => {
         ['notification', T0 + 9_000],
       ]);
     } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('scanPrefix ignora linha acima do teto e lê as vizinhas', async () => {
+    const tmp = tempDir();
+    const warn = vi.spyOn(log, 'warnOnce').mockImplementation(() => {});
+    try {
+      const file = join(tmp.dir, 's.jsonl');
+      const before = `${L.raw('custom-title', { customTitle: 'Antes' })}\n`;
+      const after = `${L.raw('ai-title', { aiTitle: 'Depois' })}\n`;
+      const body = Buffer.concat([
+        Buffer.from(before),
+        Buffer.from('{"type":"agent-name","sessionId":"sess-teste","agentName":"'),
+        Buffer.alloc(MAX_LINE_BYTES, 0x6e),
+        Buffer.from('"}\n'),
+        Buffer.from(after),
+      ]);
+      writeFileSync(file, body);
+      const prefix = await scanPrefix(file, body.length, new Set());
+      expect(prefix.state.customTitle).toBe('Antes');
+      expect(prefix.state.aiTitle).toBe('Depois');
+      // Booleano de propósito: o valor antigo é a linha gigante, e o diff não pode imprimi-la.
+      expect(prefix.state.agentName === undefined).toBe(true);
+      expect(warn).toHaveBeenCalledWith(`oversize-line:${file}`, expect.stringContaining('8 MiB'));
+    } finally {
+      warn.mockRestore();
       tmp.cleanup();
     }
   });

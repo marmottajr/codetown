@@ -1,6 +1,7 @@
 // Leitura incremental de arquivos append-only (JSONL): devolve só as linhas completas novas,
-// guarda a linha parcial para o próximo ciclo e detecta truncamento/rotação.
+// guarda a linha parcial para o próximo ciclo (até MAX_LINE_BYTES) e detecta truncamento/rotação.
 import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs';
+import { log } from '../log';
 
 export interface TailRead {
   lines: string[];
@@ -15,6 +16,88 @@ export interface TailRead {
 const NL = 0x0a;
 /** Quanto do começo do arquivo guardar para confirmar uma troca que só o birthtime aponta (ver `replaced`). */
 const HEAD_BYTES = 256;
+/**
+ * Teto de uma linha JSONL. Em conversas reais do Claude Code e do Codex a maior linha ficou
+ * em 5,8 MiB (tool_result grande, que precisa ser lido inteiro para virar atividade). 8 MiB
+ * cobre isso com folga; acima, a linha é descartada até o `\n`.
+ */
+export const MAX_LINE_BYTES = 8 * 1024 * 1024;
+
+/** Avisa uma vez por arquivo que uma linha passou do teto e foi ignorada. Sem o conteúdo da linha. */
+export function warnOversizedLine(path: string): void {
+  const mb = MAX_LINE_BYTES / (1024 * 1024);
+  log.warnOnce(`oversize-line:${path}`, `Linha com mais de ${mb} MiB em ${path} foi ignorada até a próxima quebra.`);
+}
+
+/**
+ * Linha incompleta em pedaços: só junta quando acha `\n`. Cada leitura copia só o pedaço novo;
+ * acima de `max`, solta o acumulado e descarta até a próxima quebra.
+ */
+export class LineBuffer {
+  private pieces: Buffer[] = [];
+  private bytes = 0;
+  private skipping = false;
+
+  constructor(private readonly max = MAX_LINE_BYTES) {}
+
+  reset(): void {
+    this.pieces = [];
+    this.bytes = 0;
+    this.skipping = false;
+  }
+
+  /** Consome `chunk` e devolve as linhas fechadas, sem o `\n`. */
+  push(chunk: Buffer): { lines: Buffer[]; discarded: number } {
+    const lines: Buffer[] = [];
+    let discarded = 0;
+    let i = 0;
+    while (i < chunk.length) {
+      if (this.skipping) {
+        const nl = chunk.indexOf(NL, i);
+        if (nl === -1) return { lines, discarded };
+        this.skipping = false;
+        i = nl + 1;
+        continue;
+      }
+      const nl = chunk.indexOf(NL, i);
+      if (nl === -1) {
+        const rest = chunk.length - i;
+        if (rest > 0 && this.bytes + rest > this.max) {
+          this.pieces = [];
+          this.bytes = 0;
+          this.skipping = true;
+          discarded++;
+        } else if (rest > 0) {
+          this.pieces.push(Buffer.from(chunk.subarray(i)));
+          this.bytes += rest;
+        }
+        return { lines, discarded };
+      }
+      const total = this.bytes + (nl - i);
+      if (total > this.max) discarded++;
+      else if (total > 0) lines.push(this.take(chunk.subarray(i, nl)));
+      this.pieces = [];
+      this.bytes = 0;
+      i = nl + 1;
+    }
+    return { lines, discarded };
+  }
+
+  /** Resto sem `\n` no fim do arquivo; null se estiver vazio ou se a linha estourou o teto. */
+  flush(): Buffer | null {
+    if (this.skipping || this.bytes === 0) return null;
+    const out = this.pieces.length === 1 ? this.pieces[0] : Buffer.concat(this.pieces);
+    this.pieces = [];
+    this.bytes = 0;
+    return out;
+  }
+
+  private take(tail: Buffer): Buffer {
+    if (this.pieces.length === 0) return tail;
+    if (tail.length === 0) return this.pieces.length === 1 ? this.pieces[0] : Buffer.concat(this.pieces);
+    return Buffer.concat([...this.pieces, tail]);
+  }
+}
 
 /** Os primeiros `max` bytes do arquivo, numa leitura posicional (não mexe no offset da leitura incremental). */
 function readHead(fd: number, max: number): Buffer {
@@ -27,7 +110,8 @@ export class FileTail {
   offset = 0;
   size = 0;
   mtimeMs = 0;
-  private partial: Buffer | null = null;
+  /** Linha ainda sem `\n`. Acima de MAX_LINE_BYTES, o resto é descartado até a quebra. */
+  private pending = new LineBuffer();
   private ino: number | undefined;
   /** Momento de criação do arquivo (0 quando o sistema de arquivos não informa). */
   private birthtimeMs = 0;
@@ -47,7 +131,7 @@ export class FileTail {
    * (a linha cortada é descartada). Devolve o offset escolhido (0 = arquivo inteiro).
    */
   seekTail(maxBytes: number): number {
-    this.partial = null;
+    this.pending.reset();
     let fd: number;
     try {
       fd = openSync(this.path, 'r');
@@ -88,7 +172,7 @@ export class FileTail {
 
   /** Posiciona no fim do arquivo (só o que for escrito daqui em diante será lido). */
   seekEnd(): void {
-    this.partial = null;
+    this.pending.reset();
     this.head = null;
     try {
       const st = statSync(this.path);
@@ -129,7 +213,7 @@ export class FileTail {
       let reset = false;
       if (this.replaced(fd, st) || st.size < this.offset) {
         this.offset = 0;
-        this.partial = null;
+        this.pending.reset();
         this.head = null;
         reset = true;
       }
@@ -146,16 +230,13 @@ export class FileTail {
       const chunk = Buffer.allocUnsafe(len);
       const n = readSync(fd, chunk, 0, len, this.offset);
       this.offset += n;
-      const data = this.partial ? Buffer.concat([this.partial, chunk.subarray(0, n)]) : chunk.subarray(0, n);
+      const fed = this.pending.push(chunk.subarray(0, n));
+      if (fed.discarded) warnOversizedLine(this.path);
       const lines: string[] = [];
-      let start = 0;
-      for (let i = data.indexOf(NL, start); i !== -1; i = data.indexOf(NL, start)) {
-        const line = data.toString('utf8', start, i).replace(/\r$/, '');
+      for (const buf of fed.lines) {
+        const line = buf.toString('utf8').replace(/\r$/, '');
         if (line.trim()) lines.push(line);
-        start = i + 1;
       }
-      // Copia o resto para não segurar o buffer grande inteiro na memória.
-      this.partial = start < data.length ? Buffer.from(data.subarray(start)) : null;
       return { lines, reset, missing: false, more: avail > len };
     } finally {
       closeSync(fd);
