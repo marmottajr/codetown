@@ -45,6 +45,11 @@ export function truncate(s: string, n: number): string {
   return one.length > n ? `${one.slice(0, Math.max(1, n - 1)).trimEnd()}…` : one;
 }
 
+/** truncate de texto vindo do agente: mascara antes de cortar (um segredo cortado ao meio vazaria o começo). */
+function maskedTruncate(s: string, n: number): string {
+  return truncate(maskSecrets(s.slice(0, n * 8)), n);
+}
+
 export function basename(p: string): string {
   const clean = p.replace(/[\\/]+$/, '');
   const i = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
@@ -55,7 +60,7 @@ function domainOf(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '');
   } catch {
-    return truncate(url, 30);
+    return maskedTruncate(url, 30);
   }
 }
 
@@ -381,7 +386,7 @@ function describeHttp(args: string[]): string {
   const host = url.hostname.replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host === '0.0.0.0' || host === '::1' || /^127\./.test(host)) {
     const path = `${url.port ? `:${url.port}` : ''}${url.pathname === '/' && !url.port ? '/' : url.pathname}`;
-    return `${url.pathname.startsWith('/api') ? 'Testando a API local' : 'Testando o servidor local'} (${truncate(path, 22)})`;
+    return `${url.pathname.startsWith('/api') ? 'Testando a API local' : 'Testando o servidor local'} (${maskedTruncate(path, 22)})`;
   }
   return `Chamando ${host.replace(/^www\./, '')}`;
 }
@@ -480,7 +485,7 @@ function describeWords(w: string[], depth: number): ActivityDescription | undefi
     const e = args.findIndex((a) => a === '-e' || a === '--regexp');
     const pat = e >= 0 ? args[e + 1] : positionals(args, GREP_VALUED)[0];
     const shown = pat?.replace(/\\\|/g, ' | ').replace(/\\([.()[\]{}+?*^$])/g, '$1');
-    return mk('search', '🔎', shown ? `Buscando “${truncate(shown, 24)}”` : 'Buscando no código');
+    return mk('search', '🔎', shown ? `Buscando “${maskedTruncate(shown, 24)}”` : 'Buscando no código');
   }
   if (/^(ls|find|tree|fd|du|df|eza|exa)$/.test(prog)) return mk('read', '📂', 'Explorando pastas');
   if (prog === 'cd' || prog === 'pushd') return mk('read', '📂', 'Mudando de pasta');
@@ -664,10 +669,10 @@ export function describeTool(name: string, rawInput: unknown): ActivityDescripti
     case 'NotebookEdit':
       return make('edit', '📓', `Editando notebook ${basename(file)}`, file);
     case 'Glob':
-      return make('search', '🔎', `Procurando ${truncate(str(input.pattern) || 'arquivos', 30)}`, str(input.pattern));
+      return make('search', '🔎', `Procurando ${maskedTruncate(str(input.pattern) || 'arquivos', 30)}`, str(input.pattern));
     case 'Grep': {
       const pat = str(input.pattern);
-      return make('search', '🔎', pat ? `Buscando “${truncate(pat, 26)}”` : 'Buscando no código', pat);
+      return make('search', '🔎', pat ? `Buscando “${maskedTruncate(pat, 26)}”` : 'Buscando no código', pat);
     }
     case 'LS':
       return make('read', '📂', `Listando ${basename(file) || 'pasta'}`, file);
@@ -684,7 +689,7 @@ export function describeTool(name: string, rawInput: unknown): ActivityDescripti
       return make('run', '🛑', 'Parando um processo');
     case 'WebSearch': {
       const q = str(input.query);
-      return make('web', '🌐', q ? `Pesquisando “${truncate(q, 28)}”` : 'Pesquisando na web', q);
+      return make('web', '🌐', q ? `Pesquisando “${maskedTruncate(q, 28)}”` : 'Pesquisando na web', q);
     }
     case 'WebFetch': {
       const url = str(input.url);
@@ -763,7 +768,7 @@ export function describeTool(name: string, rawInput: unknown): ActivityDescripti
 
 /** Atividade para um prompt do usuário. */
 export function describePrompt(text: string): ActivityDescription {
-  return make('prompt', '📨', `Nova tarefa: “${truncate(text, 30)}”`, text);
+  return make('prompt', '📨', `Nova tarefa: “${maskedTruncate(text, 30)}”`, text);
 }
 
 export function formatDuration(ms: number): string {

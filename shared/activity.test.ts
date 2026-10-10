@@ -105,6 +105,24 @@ describe('segredos mascarados', () => {
     expect(describePrompt('usa a chave sk-proj-0123456789abcdef pra testar').detail).toBe('usa a chave sk-*** pra testar');
   });
 
+  it('mascara antes de cortar: um token partido no corte não vaza o começo', () => {
+    const tok = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+    const cases: Array<[ReturnType<typeof describeTool> | { label: string }, string]> = [
+      [describeTool('Grep', { pattern: `senha ${tok}` }), 'Buscando “senha gh*_***”'],
+      [describeTool('Glob', { pattern: `src/arquivos/${tok}` }), 'Procurando src/arquivos/gh*_***'],
+      [describeTool('WebSearch', { query: `erro com ${tok} no CI` }), 'Pesquisando “erro com gh*_*** no CI”'],
+      [describeTool('WebFetch', { url: `nao-e-url ${tok}` }), 'Lendo nao-e-url gh*_***'],
+      [describePrompt(`usa a chave ${tok} agora`), 'Nova tarefa: “usa a chave gh*_*** agora”'],
+      [describeCommand(`rg "senha ${tok}"`), 'Buscando “senha gh*_***”'],
+      [describeCommand(`curl http://localhost:3000/api/${tok}`), 'Testando a API local (:3000/api/gh*_***)'],
+      [describeShellJob('Monitor', { ws: { url: `sem-esquema ${tok}` } }), 'Escutando sem-esquema gh*_***'],
+    ];
+    for (const [d, text] of cases) {
+      expect('label' in d ? d.label : d.text).toBe(text);
+      expect(JSON.stringify(d)).not.toContain('ABCDEFG');
+    }
+  });
+
   it('shell: palavras e segmentos', () => {
     expect(shellWords(`a 'b c' "d \\"e\\"" f\\ g ''`)).toEqual(['a', 'b c', 'd "e"', 'f g', '']);
     expect(splitShell('a && b | c; d & e 2>&1 || f "x|y" $(g; h)')).toEqual(['a', 'b', 'c', 'd', 'e 2>&1', 'f "x|y" $(g; h)']);
