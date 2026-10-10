@@ -94,6 +94,8 @@ export interface RunContext {
   /** O statusline do repositório (a origem da cópia, com --uso). */
   statuslinePath?: string;
   out: (line: string) => void;
+  /** Variáveis de ambiente (HABBLAUD_USAGE_DIR muda a pasta do arquivo de cota); ausente = a pasta padrão. */
+  env?: NodeJS.ProcessEnv;
   /** Consulta o /api/health do Habblaud (testes injetam um falso). */
   health?: (port: number) => Promise<Health | undefined>;
 }
@@ -130,12 +132,16 @@ export const hookCopy = (home: string): string => join(home, '.habblaud', 'antig
 export const configPath = (home: string): string => join(home, '.habblaud', CONFIG_NAME);
 export const statuslineCopy = (home: string): string => join(home, '.habblaud', 'antigravity-statusline.mjs');
 export const settingsFile = (home: string): string => join(home, '.gemini', 'antigravity-cli', 'settings.json');
-export const quotaFile = (home: string): string => join(home, '.habblaud', 'usage', 'antigravity-quota.json');
+export const quotaFile = (home: string, env: NodeJS.ProcessEnv = {}): string => join(usageDirOf(home, env), 'antigravity-quota.json');
+/** Pasta do uso: HABBLAUD_USAGE_DIR (a mesma que o statusline e o servidor respeitam) ou ~/.habblaud/usage. */
+const usageDirOf = (home: string, env: NodeJS.ProcessEnv): string => env.HABBLAUD_USAGE_DIR?.trim() || join(home, '.habblaud', 'usage');
 
 /** O statusLine que o Habblaud põe no settings.json do agy. */
 export const statusLineEntry = (copyPath: string): Json => ({ type: 'command', command: `node ${copyPath}`, stack_with_default: true });
 
-const isOurStatusLine = (v: unknown): boolean => !!v && typeof v === 'object' && typeof (v as Json).command === 'string' && ((v as Json).command as string).includes(STATUSLINE_MARK);
+/** É do Habblaud se o comando termina no nome da cópia (e não só o contém, ex.: `meu-antigravity-statusline.mjs.sh`). */
+const OUR_COMMAND_RE = new RegExp(`(^|[\\s/\\\\'"])${STATUSLINE_MARK.replace(/\./g, '\\.')}['"]?\\s*$`);
+const isOurStatusLine = (v: unknown): boolean => !!v && typeof v === 'object' && typeof (v as Json).command === 'string' && OUR_COMMAND_RE.test((v as Json).command as string);
 
 type Json = Record<string, unknown>;
 
@@ -365,7 +371,9 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
       }
     }
     // Com o hooks.json sem mexer (inválido ou sem poder gravar), o hook pode seguir registrado: a cópia fica, para o comando não apontar para um arquivo que sumiu.
-    const extra = [[statuslineCopy(home), tildify(statuslineCopy(home), home)], [quotaFile(home), tildify(quotaFile(home), home)]] as const;
+    // O arquivo de cota sai da pasta de HABBLAUD_USAGE_DIR (se houver) e da padrão, sem repetir.
+    const quotas = [...new Set([quotaFile(home, ctx.env), quotaFile(home)])];
+    const extra = [[statuslineCopy(home), tildify(statuslineCopy(home), home)], ...quotas.map((q) => [q, tildify(q, home)] as const)] as const;
     for (const [file, label] of failures ? [] : ([[copy, copyLabel], [cfgFile, cfgLabel], ...extra] as const)) {
       if (!existsSync(file)) out(`= ${label}: não existia`);
       else if (opts.dryRun) out(`~ ${label}: seria removido (simulação: nada removido)`);
@@ -410,7 +418,7 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
     else {
       let age = 'ainda sem leitura (abra o agy)';
       try {
-        const sec = Math.max(0, Math.round((Date.now() - statSync(quotaFile(home)).mtimeMs) / 1000));
+        const sec = Math.max(0, Math.round((Date.now() - statSync(quotaFile(home, ctx.env)).mtimeMs) / 1000));
         age = sec < 90 ? `última leitura há ${sec} s` : `última leitura há ${Math.round(sec / 60)} min`;
       } catch {
         // sem arquivo ainda
@@ -431,7 +439,7 @@ async function main(): Promise<void> {
     console.log(USAGE);
     return;
   }
-  process.exitCode = await run(parsed, { home: process.env.HOME || homedir(), now: new Date(), hookPath: HOOK_SOURCE, out: (l) => console.log(l) });
+  process.exitCode = await run(parsed, { home: process.env.HOME || homedir(), now: new Date(), hookPath: HOOK_SOURCE, out: (l) => console.log(l), env: process.env });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

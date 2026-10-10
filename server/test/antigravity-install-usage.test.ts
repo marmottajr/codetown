@@ -147,6 +147,43 @@ describe('antigravity-install --uso: uninstall (AG-29)', () => {
     expect(existsSync(join(home, '.habblaud', 'usage', 'outro.json'))).toBe(true);
   });
 
+  it('HABBLAUD_USAGE_DIR: o arquivo de cota dessa pasta também sai (e o da pasta padrão, se existir); o resto da pasta fica', async () => {
+    seed(MINE);
+    await exec('install', { usage: true });
+    const custom = join(tmp.dir, 'uso-custom');
+    mkdirSync(custom, { recursive: true });
+    writeFileSync(quotaFile(home, { HABBLAUD_USAGE_DIR: custom }), '{"quota":{}}');
+    writeFileSync(join(custom, 'outro.json'), '{}');
+    quota();
+    expect(quotaFile(home, { HABBLAUD_USAGE_DIR: custom })).toBe(join(custom, 'antigravity-quota.json'));
+    expect(quotaFile(home, { HABBLAUD_USAGE_DIR: '  ' })).toBe(quotaFile(home));
+    expect(await exec('uninstall', {}, { env: { HABBLAUD_USAGE_DIR: custom } })).toBe(0);
+    expect(existsSync(join(custom, 'antigravity-quota.json'))).toBe(false);
+    expect(existsSync(quotaFile(home))).toBe(false);
+    expect(existsSync(join(custom, 'outro.json'))).toBe(true);
+  });
+
+  it('sem HABBLAUD_USAGE_DIR no contexto, a pasta padrão continua valendo', async () => {
+    seed(MINE);
+    await exec('install', { usage: true });
+    quota();
+    expect(await exec('uninstall')).toBe(0);
+    expect(existsSync(quotaFile(home))).toBe(false);
+  });
+
+  it('marcador: só o comando que termina na cópia do Habblaud é "do Habblaud" (um script de outra pessoa com o nome dentro não é)', async () => {
+    for (const command of ['bash /x/meu-antigravity-statusline.mjs.sh', 'node /x/antigravity-statusline.mjs.bak', 'echo antigravity-statusline.mjs-fake']) {
+      seed({ ...MINE, statusLine: { type: 'command', command } });
+      const before = readFileSync(SETTINGS(), 'utf8');
+      expect(await exec('install', { usage: true }), command).toBe(1);
+      expect(await exec('uninstall'), command).toBe(0);
+      expect(readFileSync(SETTINGS(), 'utf8'), command).toBe(before);
+    }
+    seed({ ...MINE, statusLine: { type: 'command', command: 'node "/home com espaço/antigravity-statusline.mjs"' } });
+    expect(await exec('uninstall')).toBe(0);
+    expect(readSettings()).toEqual(MINE);
+  });
+
   it('statusLine de outra pessoa continua; a cópia e a cota do Habblaud saem', async () => {
     seed({ ...MINE, statusLine: FOREIGN });
     const before = readFileSync(SETTINGS(), 'utf8');
