@@ -1608,6 +1608,20 @@ describe('fonte do Codex: subagente que volta em followup_task (G1)', () => {
     ctx.poll();
     expect(ctx.source.terminalParser(SUB)).toBeUndefined();
   });
+
+  it('task_complete e soltura da trava no mesmo intervalo de poll (sem fs.watch): a última leitura vem antes da graça, entrega com a resposta e sai em 1,5 s', () => {
+    const ctx = setup();
+    const sub = bootWithSub(ctx);
+    ctx.advance(1_000);
+    ctx.home.append(sub, [R.agent(C, 's1', 'sa', 'Revisão entregue.', ctx.now()), R.taskComplete('s1', ctx.now() + 1)]);
+    ctx.home.unlock(C);
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    expect(ctx.agent(SUB)?.recent.some((a) => a.detail?.includes('Revisão entregue'))).toBe(true);
+    ctx.advance(1_500);
+    ctx.poll();
+    expect(ctx.source.terminalParser(SUB)).toBeUndefined();
+  });
 });
 
 describe('fonte do Codex: turno aberto e fechado para o canal paralelo (onTurn, C1)', () => {

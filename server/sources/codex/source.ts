@@ -407,7 +407,17 @@ export class CodexSource implements AgentSource, CodexLive {
     }
     for (const [key, t] of [...this.threads]) {
       if (seen.has(key)) continue;
-      t.missingSince ??= now;
+      if (t.missingSince === undefined) {
+        t.missingSince = now;
+        // Primeiro ciclo sem a trava: uma última leitura antes da graça. Sem fs.watch (Docker, macOS), o task_complete e
+        // a soltura da trava podem cair no mesmo intervalo de poll; sem ela, o status ficaria 'working' (graça de 120 s
+        // para o subagente) e a última resposta nunca entraria.
+        try {
+          this.pump(t, false);
+        } catch (err) {
+          log.warnOnce(`codex-thread:${key}:${errMsg(err)}`, `Codex: thread ${key}: ${errMsg(err)}`);
+        }
+      }
       const grace = t.kind === 'main' ? MAIN_GONE_GRACE_MS : t.kind === 'sub' && !t.subDone && t.status !== 'idle' ? SUB_FOLLOWUP_GRACE_MS : CLOSE_AFTER_MISSING_MS;
       if (!boot && now - t.missingSince < grace) continue;
       this.leave(t);
