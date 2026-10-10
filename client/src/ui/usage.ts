@@ -326,7 +326,9 @@ export class UsageCards {
     setHidden(r.five.el, agy);
     const weekName = agy ? (usage?.labels?.sevenDay ?? 'Semana') : 'Semana';
     setText(r.week.labelLong, weekName);
-    setText(r.week.labelShort, agy ? weekName.slice(0, 4) : 'Sem.');
+    // O nome da cota vai inteiro também na forma curta ("Gemini", não "Gemi"); a coluna do rótulo se alarga (is-single).
+    setText(r.week.labelShort, agy ? weekName : 'Sem.');
+    r.meters.classList.toggle('is-single', agy);
     if (usage && showMeters) {
       if (!agy) updateMeter(r.five, five, 'Sessão de 5 horas');
       updateMeter(r.week, week, agy ? `${weekName} (semana)` : 'Semana');

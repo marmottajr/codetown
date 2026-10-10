@@ -1078,6 +1078,14 @@
   row-gap: 1px;
 }
 
+/* Cartão de uma barra só (Antigravity): mesma altura das duas linhas dos outros (15 + 1 + 15 px), barra centralizada,
+   e a coluna do rótulo cabe o nome inteiro da cota ("Gemini"), inclusive na forma curta. */
+.ui-usage-card__meters.is-single {
+  grid-template-columns: 46px minmax(16px, 1fr) 32px auto;
+  min-height: 31px;
+  align-content: center;
+}
+
 /* Números antigos: barras e percentuais em cinza (legíveis), sem apagar o bloco inteiro. */
 .ui-usage-card__meters.is-dim .ui-meter {
   --lv: #a3abbd;
@@ -1181,6 +1189,10 @@
   .ui-usage-card__meters {
     grid-template-columns: 30px minmax(14px, 1fr) 30px auto;
     column-gap: 5px;
+  }
+
+  .ui-usage-card__meters.is-single {
+    grid-template-columns: 44px minmax(14px, 1fr) 30px auto;
   }
 
   .ui-meter__label-long,
