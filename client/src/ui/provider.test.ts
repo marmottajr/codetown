@@ -85,13 +85,14 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(hasCodexPermission(null)).toBe(false);
   });
 
-  it('dica do Codex ao vivo: os hooks para ver ao vivo e aprovar no app/VS Code/CLI fora do daemon; o terminal no daemon aprova sem eles só no modo Node com o terminal do Habblaud', () => {
+  it('dica do Codex ao vivo: os hooks para ver ao vivo e aprovar no app/VS Code/CLI fora do daemon; o terminal no daemon aprova sem eles só no modo Node com o terminal do Habblaud; no Docker, o hook', () => {
     expect(CODEX_LIVE_HINT).toContain('`npm run codex:install`');
     expect(CODEX_LIVE_HINT).toContain('`/hooks`');
     expect(CODEX_LIVE_HINT).toMatch(/app, do VS Code e da CLI fora do daemon/);
     expect(CODEX_LIVE_HINT).toMatch(/ligado ao daemon aprova por aqui sem eles/);
     expect(CODEX_LIVE_HINT).toContain('modo Node');
     expect(CODEX_LIVE_HINT).toContain('terminal do Habblaud ligado');
+    expect(CODEX_LIVE_HINT).toMatch(/no Docker, vale o hook/);
   });
 
   it('aprovações do Codex em português (valor desconhecido passa como veio)', () => {
