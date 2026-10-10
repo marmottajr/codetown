@@ -413,6 +413,30 @@ describe('janela final + prefixo em segundo plano', () => {
     }
   });
 
+  it.each(['antes', 'depois'])('TaskCreate preserva a tarefa concluída do prefixo quando o resultado chega %s da mesclagem', (quando) => {
+    const prefix = createTranscriptState();
+    feed(prefix, [
+      L.assistant([L.tool('c1', 'TaskCreate', { subject: 'Antiga' })]),
+      L.result('c1', 'Task #1 created successfully'),
+      L.assistant([L.tool('u1', 'TaskUpdate', { taskId: '1', status: 'completed' })]),
+    ]);
+    const state = createTranscriptState({ trackPrefix: true });
+    feed(state, [L.assistant([L.tool('c2', 'TaskCreate', { subject: 'Nova' })])]);
+    const result = L.result('c2', 'Task #29 created successfully');
+    if (quando === 'antes') feed(state, [result]);
+
+    mergePrefix(state, prefix);
+    if (quando === 'depois') {
+      expect(state.tasks).toHaveLength(2);
+      expect(state.tasks[0]).toEqual({ id: '1', title: 'Antiga', status: 'completed' });
+      feed(state, [result]);
+    }
+    expect(state.tasks).toEqual([
+      { id: '1', title: 'Antiga', status: 'completed' },
+      { id: '29', title: 'Nova', status: 'pending' },
+    ]);
+  });
+
   it('applyTaskOp ignora atualização de tarefa desconhecida', () => {
     expect(applyTaskOp([], { op: 'update', id: '9', status: 'completed' })).toEqual([]);
   });
