@@ -453,6 +453,26 @@ describe('codex-install.ts (arquivos, HOME falso)', () => {
     expect(out.join('\n')).not.toContain('O comando dos hooks mudou');
   });
 
+  it('Windows: caminho do hook ou do Node com $, crase ou % (o PowerShell e o cmd trocam dentro das aspas): o install avisa; fora do Windows, não', async () => {
+    const warning = /tem \$, crase ou %/;
+    const win: Partial<RunContext> = { platform: 'win32', nodeProbe: versions({ PATH: 'v24.16.0' }) };
+    for (const hookPath of ['C:\\Users\\a$b\\habblaud\\mod\\habblaud-codex\\hook.mjs', 'C:\\Users\\a`b\\habblaud\\mod\\habblaud-codex\\hook.mjs', 'C:\\Users\\50%\\habblaud\\mod\\habblaud-codex\\hook.mjs']) {
+      out = [];
+      expect(await exec('install', { dryRun: true }, {}, undefined, { ...win, hookPath }), hookPath).toBe(0);
+      expect(out.join('\n'), hookPath).toMatch(warning);
+    }
+    out = [];
+    expect(await exec('install', { dryRun: true, node: 'C:\\Node$22\\node.exe' }, {}, undefined, { platform: 'win32' })).toBe(0);
+    expect(out.join('\n')).toMatch(warning);
+    // Caminhos comuns no Windows, e o mesmo caractere fora do Windows (lá o caminho vai entre aspas simples): sem aviso.
+    out = [];
+    expect(await exec('install', { dryRun: true }, {}, undefined, win)).toBe(0);
+    expect(out.join('\n')).not.toMatch(warning);
+    out = [];
+    expect(await exec('install', { dryRun: true }, {}, undefined, { hookPath: '/home/a$b/habblaud/mod/habblaud-codex/hook.mjs' })).toBe(0);
+    expect(out.join('\n')).not.toMatch(warning);
+  });
+
   it('cópia repetida antes do grupo de outro app: o install não a tira e diz por quê; o status aponta a mesma causa', async () => {
     const h = handlerFor('Stop', cmd, DEFAULT_WAIT_S);
     const file = { ...ORCA, hooks: { ...ORCA.hooks, Stop: [{ hooks: [h] }, { hooks: [{ ...h, timeout: 99 }] }, ...ORCA.hooks.Stop] } };
