@@ -1076,7 +1076,7 @@ export class CodexSource implements AgentSource, CodexLive {
     this.prefixChain = this.prefixChain
       .then(async () => {
         if (this.stopped) return;
-        const prefix = await scanPrefix(path, end, t.key, PREFIX_HISTORY);
+        const prefix = await scanPrefix(path, end, t.key, PREFIX_HISTORY, this.now());
         if (this.threads.get(t.key) !== t || t.state !== state) return;
         state.stats.toolCalls += prefix.state.stats.toolCalls;
         state.stats.subagents += prefix.state.stats.subagents;
@@ -1378,12 +1378,13 @@ function lastLineAt(lines: string[]): number | undefined {
 
 /**
  * Lê em stream (sem travar o event loop) os bytes [0, end) de um rollout: os números, o título e as últimas
- * `keep` atividades (distintas) anteriores à varredura feita ao abrir a sessão.
+ * `keep` atividades (distintas) anteriores à varredura feita ao abrir a sessão. `now` = o relógio da fonte (a hora das
+ * linhas sem `timestamp`).
  */
-export async function scanPrefix(path: string, end: number, idPrefix: string, keep: number): Promise<{ state: CodexState; activities: Activity[] }> {
+export async function scanPrefix(path: string, end: number, idPrefix: string, keep: number, now: number): Promise<{ state: CodexState; activities: Activity[] }> {
   const state = createCodexState();
   if (end <= 0) return { state, activities: [] };
-  const ctx = { idPrefix, now: Date.now(), activities: keep > 0 };
+  const ctx = { idPrefix, now, activities: keep > 0 };
   // Por id, na ordem de chegada: a mesma chamada em duas linhas (function_call e o CommandExecution de mesmo call_id)
   // fica uma entrada só, como no Office.addActivity: com `replace`, a versão mais nova no lugar (e no horário) da
   // primeira; sem ele, fica a primeira.

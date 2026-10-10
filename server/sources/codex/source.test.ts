@@ -889,9 +889,23 @@ describe('fonte do Codex: parsed_cmd reclassifica o comando que já estava no es
       R.functionCall('call_9', 'exec_command', { cmd: 'Get-Content src/soma.ts' }, t0 + 3_000),
       commandParsed(T, 'turn0', 'call_9', 'Get-Content src/soma.ts', read, t0 + 4_000),
     ]);
-    const { activities } = await scanPrefix(path, statSync(path).size, KEY, 2);
+    const { activities } = await scanPrefix(path, statSync(path).size, KEY, 2, ctx.now());
     expect(activities.map((a) => a.id)).toEqual([`${KEY}#call_7`, `${KEY}#call_9`]);
     expect(activities.map((a) => a.kind)).toEqual(['read', 'read']);
+  });
+
+  it('scanPrefix: atividade de linha sem `timestamp` ganha a hora do relógio injetado, não a do sistema', async () => {
+    const ctx = setup();
+    ctx.advance(-7 * 24 * 3600_000); // relógio da fonte bem longe do Date.now() real
+    const t0 = ctx.now() - 60_000;
+    const untimed = (raw: string) => {
+      const j = JSON.parse(raw) as Record<string, unknown>;
+      delete j.timestamp;
+      return JSON.stringify(j);
+    };
+    const path = ctx.home.rollout(T, [R.meta(T, { at: t0, cwd: '/projetos/loja' }), R.taskStarted('turn0', t0), untimed(R.functionCall('call_1', 'exec_command', { cmd: 'npm test' }, t0))]);
+    const { activities } = await scanPrefix(path, statSync(path).size, KEY, 4, ctx.now());
+    expect(activities.find((a) => a.id === `${KEY}#call_1`)?.at).toBe(ctx.now());
   });
 });
 
