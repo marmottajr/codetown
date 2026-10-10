@@ -10,6 +10,12 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Corrigido
+
+- `usage:install`, `hooks:install`, `mod:install` e `codex:install` param quando o arquivo de configuração muda
+  no meio da instalação, em vez de apagar essa edição (ela também sumia do backup). Rode o comando de novo; o
+  backup passa a ser o arquivo que foi substituído.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio

@@ -14,7 +14,7 @@
 //
 // Nome antigo (CodeTown, até a 0.3.2): o install leva ~/.codetown para ~/.habblaud antes de tudo, para o uso
 // já capturado seguir valendo.
-import { accessSync, chmodSync, constants, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -269,16 +269,30 @@ export function readSettings(file: string): { settings: Settings; raw?: string }
 /** Backup + gravação atômica preservando a permissão do arquivo. Devolve o caminho do backup. */
 export function writeSettings(file: string, settings: Settings, raw: string | undefined, now: Date): string | undefined {
   let mode = 0o600;
-  let backup: string | undefined;
-  if (raw !== undefined) {
-    mode = statSync(file).mode & 0o777;
-    backup = `${file}.habblaud-backup-${stamp(now)}`;
-    for (let i = 2; existsSync(backup); i++) backup = `${file}.habblaud-backup-${stamp(now)}-${i}`;
-    writeFileSync(backup, raw, { mode: 0o600 });
-  }
+  if (raw !== undefined) mode = statSync(file).mode & 0o777;
   const tmp = `${file}.habblaud-tmp-${process.pid}`;
   writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode });
   chmodSync(tmp, mode);
+  // Relê agora: o backup é o que o rename substitui. Se mudou desde a leitura, aborta (sem merge).
+  let current: string | undefined;
+  try {
+    current = readFileSync(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      unlinkSync(tmp);
+      throw err;
+    }
+  }
+  if (current !== raw) {
+    unlinkSync(tmp);
+    throw new Error('o arquivo mudou desde a leitura; nada foi alterado, rode o comando de novo');
+  }
+  let backup: string | undefined;
+  if (current !== undefined) {
+    backup = `${file}.habblaud-backup-${stamp(now)}`;
+    for (let i = 2; existsSync(backup); i++) backup = `${file}.habblaud-backup-${stamp(now)}-${i}`;
+    writeFileSync(backup, current, { mode: 0o600 });
+  }
   renameSync(tmp, file);
   return backup;
 }

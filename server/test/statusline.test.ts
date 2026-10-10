@@ -16,6 +16,7 @@ import {
   tildify,
   unwrapCommand,
   wrapCommand,
+  writeSettings,
   type RunOptions,
 } from '../../scripts/statusline-install';
 import { HAS_POSIX_MODES, posixShell, tempDir } from './fixtures';
@@ -324,5 +325,34 @@ describe('statusline-install.ts (arquivos, HOME falso)', () => {
     expect(exec('install')).toBe(1);
     expect(readFileSync(join(home, '.claude-conta2', 'settings.json'), 'utf8')).toBe('{ quebrado');
     expect(out.join('\n')).toContain('JSON inválido');
+  });
+
+  it('writeSettings: sem corrida, grava e o backup é o conteúdo que o rename substituiu', () => {
+    const file = join(home, '.claude', 'settings.json');
+    const raw = readFileSync(file, 'utf8');
+    const next = { ...original, statusLine: { type: 'command', command: 'tap' } };
+    const backup = writeSettings(file, next, raw, new Date(2026, 9, 6, 14, 5, 9));
+    expect(backup).toBe(`${file}.habblaud-backup-20261006-140509`);
+    expect(readFileSync(backup!, 'utf8')).toBe(raw);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(next);
+    if (HAS_POSIX_MODES) expect(statSync(file).mode & 0o777).toBe(0o644);
+  });
+
+  it('writeSettings: edição concorrente entre a leitura e a gravação aborta e o arquivo fica intacto', () => {
+    const file = join(home, '.claude', 'settings.json');
+    const raw = readFileSync(file, 'utf8');
+    const concurrent = `${JSON.stringify({ ...original, enabledPlugins: { outro: true } }, null, 2)}\n`;
+    expect(concurrent).not.toBe(raw);
+    writeFileSync(file, concurrent);
+    let message = '';
+    try {
+      writeSettings(file, { ...original, statusLine: { type: 'command', command: 'tap' } }, raw, new Date(2026, 9, 6, 14, 5, 9));
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    // A chave gravada no meio fica no arquivo: a instalação aborta e não deixa backup nem temporário.
+    expect(readFileSync(file, 'utf8')).toBe(concurrent);
+    expect(message).toMatch(/rode o comando de novo/);
+    expect(readdirSync(join(home, '.claude')).filter((f) => f.includes('habblaud-backup') || f.includes('habblaud-tmp'))).toEqual([]);
   });
 });
