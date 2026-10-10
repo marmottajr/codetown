@@ -165,8 +165,11 @@ interface AccountState {
 
 export class CodexAppServerService implements ParallelSink {
   private readonly states = new Map<string, AccountState>();
-  /** Turnos fechados (setTurnOpen false), por conta: thread → quando fechou. Fora da conexão: sobrevive à reconexão. */
-  private readonly closedTurns = new Map<string, Map<string, number>>();
+  /**
+   * Turnos fechados (setTurnOpen false), por conta: thread → quando fechou, ou null (fechado, sem prazo armado: uma
+   * listagem viu a thread descarregada; o prazo arma quando ela volta a ser assinada). Fora da conexão: sobrevive à reconexão.
+   */
+  private readonly closedTurns = new Map<string, Map<string, number | null>>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private readonly now: () => number;
@@ -253,9 +256,9 @@ export class CodexAppServerService implements ParallelSink {
    */
   setTurnOpen(account: string, threadId: string, open: boolean): void {
     if (this.stopped) return;
-    const closed = this.closedTurns.get(account) ?? new Map<string, number>();
+    const closed = this.closedTurns.get(account) ?? new Map<string, number | null>();
     if (!open) {
-      if (!closed.has(threadId)) closed.set(threadId, this.now());
+      if (typeof closed.get(threadId) !== 'number') closed.set(threadId, this.now());
       this.closedTurns.set(account, closed);
       return;
     }
@@ -329,10 +332,11 @@ export class CodexAppServerService implements ParallelSink {
     client.on('approvalResolved', (r: { requestId: string | number }) => this.guard(() => this.onResolved(st, conn, r.requestId)));
     client.on('threadStarted', (threadId: string) =>
       this.guard(() => {
-        // Thread de turno fechado há UNSUBSCRIBE_AFTER_MS (o Habblaud não a retoma): outro cliente acabou de carregá-la,
-        // então o turno fechado não vale mais. Com o prazo ainda correndo, não: o daemon pode anunciar thread/started a
-        // quem retoma a thread, e só a reabertura do turno cancela o desassinar.
-        if (this.idle(st.id, threadId, this.now())) this.turnReopened(st.id, threadId);
+        // Thread de turno fechado conhecido (o prazo venceu, ou ficou sem prazo): outro cliente acabou de carregá-la. O
+        // prazo recomeça agora, em vez de sumir: a thread é assinada e, sem turno novo, solta UNSUBSCRIBE_AFTER_MS depois
+        // (o "fechado" não chega de novo). Com o prazo ainda correndo, nada muda (o daemon pode anunciar thread/started a
+        // quem retoma a thread). Sem marca, nenhuma é criada: o turno pode estar aberto.
+        this.rearm(st.id, threadId);
         this.resume(st, conn, threadId);
       }),
     );
@@ -354,9 +358,17 @@ export class CodexAppServerService implements ParallelSink {
     this.listLoaded(st, conn);
   }
 
-  /** Conexão pronta, a cada tick: desassina as threads de turno fechado e lista de novo (descoberta que falhou, novas tentativas vencidas). */
+  /**
+   * Conexão pronta, a cada tick: arma o prazo das threads assinadas de turno fechado sem prazo (assinadas pela listagem,
+   * sem thread/started), desassina as de turno fechado há UNSUBSCRIBE_AFTER_MS e lista de novo (descoberta que falhou,
+   * novas tentativas vencidas).
+   */
   private maintain(st: AccountState, conn: Conn, now: number): void {
-    for (const threadId of [...conn.owned]) if (this.idle(st.id, threadId, now)) this.release(conn, threadId);
+    const closed = this.closedTurns.get(st.id);
+    for (const threadId of [...conn.owned]) {
+      if (closed?.get(threadId) === null) closed.set(threadId, now);
+      else if (this.idle(st.id, threadId, now)) this.release(conn, threadId);
+    }
     if (now < conn.listAt) return;
     if (!conn.discovered || [...conn.retry.values()].some((at) => now >= at)) this.listLoaded(st, conn);
   }
@@ -481,7 +493,16 @@ export class CodexAppServerService implements ParallelSink {
   /** O turno fechou há UNSUBSCRIBE_AFTER_MS ou mais (e não reabriu): o Habblaud não assina nem segura a thread. */
   private idle(account: string, threadId: string, now: number): boolean {
     const at = this.closedTurns.get(account)?.get(threadId);
-    return at !== undefined && now - at >= UNSUBSCRIBE_AFTER_MS;
+    return typeof at === 'number' && now - at >= UNSUBSCRIBE_AFTER_MS;
+  }
+
+  /** Thread de turno fechado conhecido carregada de novo: o prazo vencido ou não armado recomeça agora. Sem marca, nada. */
+  private rearm(account: string, threadId: string): void {
+    const closed = this.closedTurns.get(account);
+    const at = closed?.get(threadId);
+    if (!closed || at === undefined) return;
+    const now = this.now();
+    if (at === null || now - at >= UNSUBSCRIBE_AFTER_MS) closed.set(threadId, now);
   }
 
   /** O turno reabriu (ou a thread foi carregada de novo): cancela o desassinar. */
@@ -492,12 +513,14 @@ export class CodexAppServerService implements ParallelSink {
     if (closed.size === 0) this.closedTurns.delete(account);
   }
 
-  /** Turnos fechados de threads que o daemon já descarregou não valem mais (uma nova carga vem com thread/started). */
+  /**
+   * Turnos fechados de threads que o daemon já descarregou ficam sem prazo (o turno continua fechado): o prazo arma de
+   * novo quando a thread volta a ser assinada (thread/started, ou a listagem e o maintain).
+   */
   private forgetUnloaded(account: string, loaded: ReadonlySet<string>): void {
     const closed = this.closedTurns.get(account);
     if (!closed) return;
-    for (const threadId of [...closed.keys()]) if (!loaded.has(threadId)) closed.delete(threadId);
-    if (closed.size === 0) this.closedTurns.delete(account);
+    for (const threadId of [...closed.keys()]) if (!loaded.has(threadId)) closed.set(threadId, null);
   }
 
   // ---------------------------------------------------------------- pedidos

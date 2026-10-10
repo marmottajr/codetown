@@ -634,7 +634,7 @@ describe('CodexAppServerService: o Habblaud não segura thread que o usuário fe
     await until(() => s.svc.owns(ACCOUNT, THREAD));
   });
 
-  it('turno fechado de thread que o daemon descarregou deixa de valer: carregada de novo, a próxima conexão assina', async () => {
+  it('turno fechado de thread que o daemon descarregou fica sem prazo: carregada de novo, a próxima conexão assina e solta 60 s depois', async () => {
     // Arrange: desassinada pelo turno fechado; a reconexão lista sem ela (o daemon a descarregou).
     const threads = [THREAD];
     const s = setup({ threads });
@@ -654,6 +654,97 @@ describe('CodexAppServerService: o Habblaud não segura thread que o usuário fe
 
     // Assert
     await until(() => s.proxies.length === 3 && s.svc.owns(ACCOUNT, THREAD));
+    // O turno continua fechado: assinada pela listagem, a thread solta 60 s depois se nenhum turno abrir.
+    s.svc.tick();
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS);
+    s.svc.tick();
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    await until(() => s.proxies[2].fake.calls('thread/unsubscribe').length === 1);
+  });
+
+  it('thread/started de thread solta pelo turno fechado renova o prazo: assina de novo e, sem turno novo, solta outra vez 60 s depois', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+    await released(s, fake);
+
+    // Act: o usuário reabre a thread no TUI e sai sem mandar prompt (nenhum setTurnOpen chega).
+    fake.notify('thread/started', { thread: { id: THREAD, source: 'cli' } });
+    await until(() => s.svc.owns(ACCOUNT, THREAD));
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS - 1);
+    s.svc.tick();
+    await flush();
+
+    // Assert
+    expect(fake.calls('thread/unsubscribe')).toHaveLength(1);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(true);
+    s.clock.advance(1);
+    s.svc.tick();
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    await until(() => fake.calls('thread/unsubscribe').length === 2);
+  });
+
+  it('controle: turno reaberto (setTurnOpen true), resume e thread/started: continua assinada depois de 60 s', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+    await released(s, fake);
+
+    // Act
+    s.svc.setTurnOpen(ACCOUNT, THREAD, true);
+    await until(() => s.svc.owns(ACCOUNT, THREAD) && fake.calls('thread/resume').length === 2);
+    fake.notify('thread/started', { thread: { id: THREAD, source: 'cli' } });
+    await flush();
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS);
+    s.svc.tick();
+    await flush();
+
+    // Assert
+    expect(fake.calls('thread/unsubscribe')).toHaveLength(1);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(true);
+  });
+
+  it('turno fechado de thread que uma listagem viu descarregada fica sem prazo: carregada de novo (thread/started), assina e solta 60 s depois sem turno novo', async () => {
+    // Arrange: solta pelo turno fechado; uma listagem roda com ela descarregada.
+    const threads = [THREAD];
+    const s = setup({ threads });
+    const fake = await connected(s);
+    await released(s, fake);
+    threads.splice(0);
+    s.svc.setTurnOpen(ACCOUNT, OTHER, true);
+    await until(() => fake.calls('thread/loaded/list').length === 2);
+    await flush();
+
+    // Act: um cliente a carrega de novo.
+    threads.push(THREAD);
+    fake.notify('thread/started', { thread: { id: THREAD, source: 'cli' } });
+    await until(() => s.svc.owns(ACCOUNT, THREAD));
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS);
+    s.svc.tick();
+
+    // Assert
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(false);
+    await until(() => fake.calls('thread/unsubscribe').length === 2);
+  });
+
+  it('thread/started de thread sem turno fechado conhecido não cria marca: assinada, continua assinada depois de 60 s', async () => {
+    // Arrange
+    const s = setup({ threads: [] });
+    s.svc.tick();
+    await until(() => s.proxies.length === 1 && s.proxies[0].fake.calls('thread/loaded/list').length === 1);
+    const fake = s.proxies[0].fake;
+
+    // Act
+    fake.notify('thread/started', { thread: { id: THREAD, source: 'cli' } });
+    await until(() => s.svc.owns(ACCOUNT, THREAD));
+    s.svc.tick();
+    s.clock.advance(UNSUBSCRIBE_AFTER_MS);
+    s.svc.tick();
+    await flush();
+
+    // Assert
+    expect(fake.calls('thread/unsubscribe')).toEqual([]);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(true);
   });
 });
 
