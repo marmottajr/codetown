@@ -76,6 +76,7 @@ import {
 } from './rollout';
 import { createShellScan, scanShellLine } from './shells';
 import { boundaryAfter, lastLineAt, scanPrefix } from './source-scan';
+import { CodexThreadTree } from './source-tree';
 import { newTracker, type CodexAccount, type CodexSourceOptions, type ThreadTracker } from './source-types';
 import { createCodexTerminalParser } from './terminal';
 
@@ -184,6 +185,7 @@ export class CodexSource implements AgentSource, CodexLive {
   private readonly tailBytes: number;
   private readonly useWatch: boolean;
   private readonly prober: LockProber;
+  private readonly tree: CodexThreadTree;
   private stopped = false;
 
   constructor(private readonly opts: CodexSourceOptions) {
@@ -192,6 +194,7 @@ export class CodexSource implements AgentSource, CodexLive {
     this.useWatch = opts.watch ?? true;
     const env = opts.env ?? process.env;
     this.prober = opts.lockProber ?? createLockProber({ platform: process.platform, inDocker: detectDocker(env) });
+    this.tree = new CodexThreadTree(this.threads, opts);
     const claude = opts.accounts.entries();
     this.detected = detectCodexAccounts(opts.dirs, {
       env,
@@ -351,7 +354,7 @@ export class CodexSource implements AgentSource, CodexLive {
     // ligação do neto (pai direto ou principal) não depende da ordem do readdir, e o neto ligado ao principal sai se o
     // principal fechou agora (o closeMain não o alcança pelo pai direto).
     const subs = [...this.threads.values()].filter((t) => t.kind === 'sub' && seen.has(t.key));
-    const depth = new Map(subs.map((t) => [t, this.depthOf(t)]));
+    const depth = new Map(subs.map((t) => [t, this.tree.depthOf(t)]));
     for (const t of subs.sort((a, b) => depth.get(a)! - depth.get(b)!)) {
       try {
         this.reconcile(t, now, seen.get(t.key));
@@ -473,10 +476,10 @@ export class CodexSource implements AgentSource, CodexLive {
     if (!hookRecent && via === 'recent' && (t.lastWriteAt === undefined || now - t.lastWriteAt > FALLBACK_RECENT_MS)) return false;
     // Sem o projeto (sessão aberta ainda sem prompt, só com o lock) não há sala para o principal: espera o rollout ou um
     // hook dizer o cwd. Isso também segura um lock de subagente até o rollout dele dizer de quem ele é.
-    if (t.kind === 'main' && !this.cwdOf(t)) return false;
+    if (t.kind === 'main' && !this.tree.cwdOf(t)) return false;
     if (t.kind === 'sub') {
-      const parent = this.parentKey(t);
-      if (!parent || !this.activeInOffice(parent)) return false;
+      const parent = this.tree.parentKey(t);
+      if (!parent || !this.tree.activeInOffice(parent)) return false;
       // Subagente só aparece trabalhando (ou recém-criado pelo hook); depois de entregar, sai.
       if (!t.inOffice && t.status !== 'working' && t.status !== 'waiting' && !t.hookSpawned) return false;
     }
@@ -494,59 +497,10 @@ export class CodexSource implements AgentSource, CodexLive {
     return t.acc.locks?.get(t.threadId)?.state === 'held';
   }
 
-  /**
-   * Pai do subagente no escritório: o pai direto enquanto ele está lá e não entregou, ou enquanto ele ainda pode entrar
-   * (o sub espera por ele); senão (neto cujo pai já concluiu ou saiu) o principal da árvore, se estiver lá. Sem nenhum
-   * dos dois, o pai direto (o sub espera).
-   */
-  private parentKey(t: ThreadTracker): string | undefined {
-    if (!t.parentThreadId) return undefined;
-    const direct = `${t.acc.id}:${t.parentThreadId}`;
-    if (this.activeInOffice(direct) || !this.parentDone(direct)) return direct;
-    const root = this.rootKey(t);
-    return root && root !== direct && this.opts.office.has(root) ? root : direct;
-  }
-
-  /**
-   * O pai direto já entregou ou saiu: sem tracker (fechou), entregue ou encerrado no escritório, ou lido e ocioso fora
-   * dele (concluiu antes de entrar). Um pai presente que ainda pode entrar (trabalhando, ou com o rollout ainda não lido)
-   * não conta como concluído.
-   */
-  private parentDone(key: string): boolean {
-    const p = this.threads.get(key);
-    if (!p) return true;
-    if (this.opts.office.has(key)) return this.opts.office.isSubDone(key);
-    return p.subDone || (p.meta !== undefined && p.status === 'idle');
-  }
-
-  /** Ancestrais do subagente entre os threads conhecidos (1 = filho do principal, 2 = neto); o pai vem antes do neto. */
-  private depthOf(t: ThreadTracker): number {
-    let depth = 0;
-    for (let p: ThreadTracker | undefined = t; p?.parentThreadId && depth < 8; depth++) p = this.threads.get(`${p.acc.id}:${p.parentThreadId}`);
-    return depth;
-  }
-
-  /** Principal da árvore: session_meta.session_id (o thread raiz), do próprio sub ou do pai dele. */
-  private rootKey(t: ThreadTracker): string | undefined {
-    const parent = t.parentThreadId ? this.threads.get(`${t.acc.id}:${t.parentThreadId}`) : undefined;
-    const root = t.meta?.sessionId ?? parent?.meta?.sessionId;
-    return root ? `${t.acc.id}:${root.toLowerCase()}` : undefined;
-  }
-
-  /** No escritório e ainda ativo (nem concluído, nem encerrado). */
-  private activeInOffice(key: string): boolean {
-    return this.opts.office.has(key) && !this.opts.office.isSubDone(key);
-  }
-
-  /** Projeto conhecido do thread (session_meta ou hook). */
-  private cwdOf(t: ThreadTracker): string | undefined {
-    return t.meta?.cwd ?? t.hookCwd;
-  }
-
   private enter(t: ThreadTracker, now: number): void {
     const office = this.opts.office;
     if (t.kind === 'main') {
-      const cwd = this.cwdOf(t)!;
+      const cwd = this.tree.cwdOf(t)!;
       office.addMain({
         id: t.key,
         provider: 'codex',
@@ -563,7 +517,7 @@ export class CodexSource implements AgentSource, CodexLive {
       // Reaberta dentro do período de graça: o status pode ter mudado enquanto esteve fora (e pode haver shell vivo).
       this.statusToOffice(t);
     } else {
-      const parent = this.parentKey(t)!;
+      const parent = this.tree.parentKey(t)!;
       const added = office.addSub({
         id: t.key,
         parentId: parent,
@@ -644,7 +598,7 @@ export class CodexSource implements AgentSource, CodexLive {
   /** Árvore dos processos de um thread: o principal dele (session_meta.session_id), senão o pai, senão ele mesmo. */
   private treeKey(t: ThreadTracker): string {
     if (t.kind !== 'sub') return t.key;
-    return this.rootKey(t) ?? (t.parentThreadId ? `${t.acc.id}:${t.parentThreadId}` : t.key);
+    return this.tree.rootKey(t) ?? (t.parentThreadId ? `${t.acc.id}:${t.parentThreadId}` : t.key);
   }
 
   /**
