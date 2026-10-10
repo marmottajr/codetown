@@ -695,6 +695,8 @@ export class Office {
       rec.history = swap(rec.history);
       // Subagente entregue: a resposta final (lida depois do "Concluiu" sintetizado) é a atividade atual; o balão volta ao "Concluiu".
       if (info.activity?.id === synthId || (current && info.status === 'done')) info.activity = replaced;
+      // Codex: o item do feed do sintetizado também passa a mostrar o do rollout (o Claude fica como sempre foi).
+      if (info.provider === 'codex') this.updateFeed(synthId, replaced);
       delete rec.synthDone;
       this.markDirty();
       return;
@@ -1062,6 +1064,20 @@ export class Office {
     this.pendingFeed.push(...items);
     this.feed.push(...items);
     if (this.feed.length > FEED_LIMIT) this.feed.splice(0, this.feed.length - FEED_LIMIT);
+  }
+
+  /**
+   * Troca no lugar a atividade do item do feed de id `id`. Ainda não transmitido, sai já trocado; já transmitido, sai de
+   * novo com o mesmo id, que o cliente trata como atualização.
+   */
+  private updateFeed(id: string, activity: Activity): void {
+    const i = this.feed.findIndex((f) => f.id === id);
+    if (i < 0) return;
+    const item: FeedItem = { ...this.feed[i], activity };
+    this.feed[i] = item;
+    const p = this.pendingFeed.findIndex((f) => f.id === id);
+    if (p >= 0) this.pendingFeed[p] = item;
+    else this.pendingFeed.push(item);
   }
 
   private notice(

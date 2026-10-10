@@ -489,6 +489,41 @@ describe('Office', () => {
     expect(done[1]).toMatchObject({ id: 'fim2', text: 'Concluiu em 2s' });
   });
 
+  it('Codex: a troca do "Concluiu" sintetizado também atualiza o item do feed (mesmo id); já transmitido, vai de novo', () => {
+    const { office, advance, now } = makeOffice();
+    const done = (id: string, text: string): Activity => ({ ...act(id, now(), 'done'), text });
+    // Transmitido antes da troca (o Stop do hook numa rodada, o task_complete na seguinte).
+    office.addMain({ id: 'acc:1', provider: 'codex', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    advance(96_000);
+    office.setStatus('acc:1', 'idle');
+    const synth = office.get('acc:1')!.activity!;
+    expect(office.commit().feed.map((f) => [f.id, f.activity.text])).toEqual([[synth.id, 'Concluiu em 1min 36s']]);
+    advance(10);
+    office.addActivity('acc:1', done('fim', 'Concluiu em 1min 41s'), true);
+    expect(office.commit().feed.map((f) => [f.id, f.activity.text])).toEqual([[synth.id, 'Concluiu em 1min 41s']]);
+    expect(office.recentFeed(10).map((f) => [f.id, f.activity.text])).toEqual([[synth.id, 'Concluiu em 1min 41s']]);
+    // Na mesma rodada: um item só, já com o texto do rollout.
+    office.addMain({ id: 'acc:2', provider: 'codex', account: 'acc', sessionId: 's2', cwd: '/p/b', role: 'x', startedAt: now(), status: 'working' });
+    office.commit();
+    advance(5_000);
+    office.setStatus('acc:2', 'idle');
+    office.addActivity('acc:2', done('fim2', 'Concluiu em 4s'), true);
+    expect(office.commit().feed.map((f) => f.activity.text)).toEqual(['Concluiu em 4s']);
+  });
+
+  it('Claude: a troca do "Concluiu" sintetizado não mexe no feed (como antes)', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    advance(30_000);
+    office.setStatus('acc:1', 'idle');
+    const synth = office.get('acc:1')!.activity!;
+    office.commit();
+    office.addActivity('acc:1', { ...act('real', now(), 'done'), text: 'Concluiu em 29s', durationMs: 29_000 }, true);
+    expect(office.get('acc:1')!.activity).toMatchObject({ id: synth.id, text: 'Concluiu em 29s' });
+    expect(office.commit().feed).toEqual([]);
+    expect(office.recentFeed(10).map((f) => [f.id, f.activity.text])).toEqual([[synth.id, 'Concluiu em 30s']]);
+  });
+
   it('subagente: com o "Concluiu" já na tela, o completeSub não sintetiza outro', () => {
     const { office, now } = makeOffice();
     office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });

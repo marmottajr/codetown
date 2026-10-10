@@ -13,6 +13,8 @@ export type ConnectionState = 'connecting' | 'open' | 'closed' | 'mock';
 export interface StoreEvents {
   snapshot: OfficeSnapshot;
   feed: FeedItem[];
+  /** Itens já recebidos que voltaram com outro conteúdo (o mesmo id): trocados no lugar, não são novos. */
+  feedUpdate: FeedItem[];
   notice: Notice;
   connection: ConnectionState;
   /** O servidor está servindo outro build do cliente: esta página está desatualizada. Emitido uma vez. */
@@ -405,8 +407,15 @@ export class OfficeStore {
 
   private applyFeed(items: FeedItem[]): void {
     if (!items.length) return;
-    const known = new Set(this.feed.map((f) => f.id));
+    const known = new Map(this.feed.map((f) => [f.id, f]));
     const fresh = items.filter((f) => !known.has(f.id));
+    // Mesmo id com outro conteúdo (ex.: o "Concluiu" do Codex trocado pelo do rollout); igual (reconexão) não conta.
+    const updated = items.filter((f) => known.has(f.id) && JSON.stringify(known.get(f.id)) !== JSON.stringify(f));
+    if (updated.length) {
+      const byId = new Map(updated.map((f) => [f.id, f]));
+      this.feed = this.feed.map((f) => byId.get(f.id) ?? f);
+      this.emit('feedUpdate', updated);
+    }
     if (!fresh.length) return;
     this.feed = [...this.feed, ...fresh].slice(-FEED_LIMIT);
     this.emit('feed', fresh);

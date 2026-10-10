@@ -70,6 +70,13 @@ export class FeedPanel implements UiComponent {
       this.pending.push(...fresh);
       ctx.invalidate();
     });
+    // O mesmo item mais bem descrito (ex.: o "Concluiu" do Codex trocado pelo do rollout): troca no lugar, sem contar como novo.
+    ctx.store.on('feedUpdate', (updated) => {
+      const byId = new Map(updated.map((f) => [f.id, f]));
+      this.items = this.items.map((f) => byId.get(f.id) ?? f);
+      this.pending = this.pending.map((f) => byId.get(f.id) ?? f);
+      ctx.invalidate();
+    });
     this.pending.push(...ctx.store.feed.slice(-VISIBLE));
     // Partidas e apostas resolvidas no escritório (vida social) entram no feed como eventos locais.
     ctx.world.onSocialEvent?.((e) => {

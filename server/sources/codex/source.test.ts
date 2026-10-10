@@ -1857,6 +1857,19 @@ describe('fonte do Codex: turno que termina com erro (task_complete com error, e
     expect(a.activity).toMatchObject({ kind: 'done', text: 'Concluiu com erro em 8s', error: true });
   });
 
+  it('feed: o Stop do hook numa rodada e o task_complete na outra deixam um item só no feed, com o texto do rollout', () => {
+    const ctx = setup();
+    const path = working(ctx);
+    ctx.advance(1_000);
+    ctx.hook({ hook_event_name: 'Stop', session_id: T, cwd: '/projetos/loja', turn_id: 't1' });
+    ctx.poll();
+    ctx.advance(10);
+    ctx.home.append(path, [R.taskComplete('t1', ctx.now(), 101_000)]);
+    ctx.poll();
+    const feedDone = ctx.office.recentFeed(50).filter((f) => f.agentId === KEY && f.activity.kind === 'done');
+    expect(feedDone.map((f) => f.activity.text)).toEqual(['Concluiu em 1min 41s']);
+  });
+
   it('subagente, sem hook e com o SubagentStop antes: um "Concluiu" só, atual, com o erro', () => {
     for (const hook of [false, true]) {
       const ctx = setup();
