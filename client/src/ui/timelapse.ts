@@ -130,6 +130,17 @@ export class TimelapsePlayer implements UiComponent {
         this.speed = s;
         this.ctx.invalidate();
       });
+      b.addEventListener('keydown', (e) => {
+        // Setas navegam entre as opções (padrão de radiogroup) e não seguem para a câmera.
+        const dir = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+        if (!dir) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const next = SPEEDS[(SPEEDS.indexOf(s) + dir + SPEEDS.length) % SPEEDS.length];
+        this.speed = next;
+        this.syncSpeed(next);
+        this.ctx.invalidate();
+      });
       this.speedBtns.set(s, b);
       speedGroup.append(b);
     }
@@ -255,6 +266,16 @@ export class TimelapsePlayer implements UiComponent {
     this.ctx.announce('De volta ao escritório ao vivo.');
   }
 
+  /** Marca a velocidade atual e deixa só ela na ordem do Tab; com `focus`, move o foco para ela. */
+  private syncSpeed(focus?: Speed): void {
+    for (const [s, b] of this.speedBtns) {
+      const on = s === this.speed;
+      setAttr(b, 'aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    if (focus !== undefined) this.speedBtns.get(focus)?.focus();
+  }
+
   render(): void {
     setHidden(this.el, !this.open);
     const on = this.active;
@@ -277,7 +298,7 @@ export class TimelapsePlayer implements UiComponent {
     const playLabel = this.playing ? 'Pausar' : r && this.t >= r.to ? 'Reproduzir de novo' : 'Reproduzir';
     setAttr(this.playBtn, 'aria-label', playLabel);
     setTitle(this.playBtn, `${playLabel} (espaço na linha do tempo)`);
-    for (const [s, b] of this.speedBtns) setAttr(b, 'aria-checked', String(s === this.speed));
+    this.syncSpeed();
     setHidden(this.demoBtn, !(r?.hasDemo && r.hasReal));
     this.demoBtn.classList.toggle('is-on', this.includeDemo);
     setAttr(this.demoBtn, 'aria-pressed', String(this.includeDemo));
