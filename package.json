@@ -43,6 +43,9 @@
     "opencode:install": "tsx scripts/opencode-install.ts install",
     "opencode:uninstall": "tsx scripts/opencode-install.ts uninstall",
     "opencode:status": "tsx scripts/opencode-install.ts status",
+    "antigravity:install": "tsx scripts/antigravity-install.ts install",
+    "antigravity:uninstall": "tsx scripts/antigravity-install.ts uninstall",
+    "antigravity:status": "tsx scripts/antigravity-install.ts status",
     "release": "tsx scripts/release.ts"
   },
   "devDependencies": {
