@@ -23,20 +23,7 @@ import type { AccountUsage, Activity, AgentStats, TaskItem, TaskStatus, UsageWin
 import { detectGitHubResult, githubCallOf } from '../github';
 import type { ParsedActivity } from '../transcript';
 import { unwrapCommand } from './command';
-
-type Rec = Record<string, unknown>;
-
-function rec(v: unknown): Rec | undefined {
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Rec) : undefined;
-}
-
-function str(v: unknown): string | undefined {
-  return typeof v === 'string' && v.trim() ? v : undefined;
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-}
+import { num, rec, str, toMs, type Rec } from './rollout-util';
 
 /**
  * Teto (em caracteres) do texto que passa pela máscara antes de qualquer corte visível. É alto e fixo de propósito: o
@@ -115,12 +102,6 @@ function maskedInput(input: Rec): Rec {
   const out: Rec = {};
   for (const [key, value] of Object.entries(input)) out[key] = key === 'questions' ? maskedQuestions(value) : PATH_KEYS.has(key) ? value : maskedValue(value);
   return out;
-}
-
-function toMs(v: unknown): number | undefined {
-  if (typeof v !== 'string') return undefined;
-  const t = Date.parse(v);
-  return Number.isNaN(t) ? undefined : t;
 }
 
 /** Id de thread do Codex (UUID). */
