@@ -895,7 +895,8 @@ class RolloutLineParser {
       }
       case 'turn_aborted':
         this.endTurn(true);
-        if (p.reason === 'interrupted' || p.reason === undefined) this.push(SPECIAL.interrupted(), { key: `${str(p.turn_id) ?? this.autoKey()}:int` });
+        // No subagente (e no neto), o "interrupted" é o Codex abortando o filho quando o pai encerra, não você.
+        if (p.reason === 'interrupted' || p.reason === undefined) this.push(SPECIAL.interrupted(!this.s.meta?.parentThreadId), { key: `${str(p.turn_id) ?? this.autoKey()}:int` });
         return;
       case 'token_count':
         return this.tokens(p);

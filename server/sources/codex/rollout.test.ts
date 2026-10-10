@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { R, SOURCES, threadId } from '../../test/codex-fixtures';
 import { LIMIT_MESSAGE, taskCompleteError } from '../../test/codex-fixtures-fim';
 import { envelope, fernet, spawnEncrypted } from '../../test/codex-fixtures-live';
+import { grandchildSource } from '../../test/codex-fixtures-source-ii';
 import {
   commandText,
   createCodexState,
@@ -289,6 +290,15 @@ describe('rollout do Codex: paginated', () => {
     expect(texts(a.results)).toEqual(['Interrompido por você', 'Escrevendo a resposta']);
     expect(ids(a.results)).toEqual(ids(b.results));
     expect(a.state.turnOpen).toBe(false);
+  });
+
+  it('subagente e neto abortados pelo Codex (turn_aborted "interrupted" quando o pai encerra): "Interrompido", sem "por você"; o principal segue igual', () => {
+    const at = Date.parse('2026-10-09T12:00:00Z');
+    const P = threadId(7);
+    const turn = (meta: string) => texts(feed([meta, R.taskStarted('t1', at + 1), R.turnAborted('t1', at + 2)]).results);
+    expect(turn(R.meta(T, { at, sessionId: P, source: SOURCES.sub(P, 'worker') }))).toEqual(['Interrompido']);
+    expect(turn(R.meta(threadId(8), { at, sessionId: P, source: grandchildSource(T) }))).toEqual(['Interrompido']);
+    expect(turn(R.meta(P, { at }))).toEqual(['Interrompido por você']);
   });
 });
 

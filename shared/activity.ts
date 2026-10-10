@@ -823,7 +823,8 @@ export const SPECIAL = {
     error: true,
   }),
   error: (tool?: string, detail?: string): ActivityDescription => make('error', '⚠️', tool ? `Erro em ${tool}` : 'Algo deu errado', detail),
-  interrupted: (): ActivityDescription => make('wait', '✋', 'Interrompido por você'),
+  /** `byYou: false` = quem interrompeu não foi você (ex.: o subagente do Codex abortado quando o pai encerra). */
+  interrupted: (byYou = true): ActivityDescription => make('wait', '✋', byYou ? 'Interrompido por você' : 'Interrompido'),
   compact: (): ActivityDescription => make('compact', '🧹', 'Organizando a memória (compactando)'),
   waiting: (reason?: string): ActivityDescription => make('wait', '✋', reason ? `Precisa de você: ${reason}` : 'Precisa de você'),
   backgroundResult: (summary?: string): ActivityDescription => make('other', '📬', 'Recebeu resultado em segundo plano', summary),
