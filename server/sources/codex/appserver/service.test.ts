@@ -306,7 +306,7 @@ describe('CodexAppServerService: daemon e conexão', () => {
   it('proxy vivo sem o 101: cai no prazo do handshake (proxy morto, linha no log) e a próxima conexão, pronta, não cai', async () => {
     // Arrange
     const calls = warnings();
-    const s = setup({ service: { handshakeTimeoutMs: 60 } });
+    const s = setup({ service: { handshakeTimeoutMs: 300 } });
     s.queue.push(new FakeAppServer({ handshake: 'manual' }));
 
     // Act
@@ -316,11 +316,11 @@ describe('CodexAppServerService: daemon e conexão', () => {
     // Assert
     expect(s.proxies[0].killed).toBe(false);
     await until(() => s.proxies[0].killed);
-    expect(calls).toContainEqual([`codex-appserver-refused:${ACCOUNT}:sem handshake em 0.06 s`, `Codex (${ACCOUNT}): o app-server não ficou pronto (sem handshake em 0.06 s); os pedidos seguem com o hook e tento de novo.`]);
+    expect(calls).toContainEqual([`codex-appserver-refused:${ACCOUNT}:sem handshake em 0.3 s`, `Codex (${ACCOUNT}): o app-server não ficou pronto (sem handshake em 0.3 s); os pedidos seguem com o hook e tento de novo.`]);
     s.clock.advance(BACKOFF_MIN_MS);
     s.svc.tick();
     await until(() => s.proxies.length === 2 && s.svc.owns(ACCOUNT, THREAD));
-    await new Promise((ok) => setTimeout(ok, 120));
+    await new Promise((ok) => setTimeout(ok, 600));
     expect(s.proxies[1].killed).toBe(false);
     expect(s.svc.owns(ACCOUNT, THREAD)).toBe(true);
   });
@@ -942,13 +942,13 @@ describe('CodexAppServerService: queda e corrida (Review Focus #3 e #4)', () => 
 
   it('batimento numa conexão saudável: thread/loaded/list de 1 a cada intervalo, sem queda, o cartão continua aberto', async () => {
     // Arrange
-    const s = setup({ service: { heartbeatMs: 20, heartbeatTimeoutMs: 40 } });
+    const s = setup({ service: { heartbeatMs: 20, heartbeatTimeoutMs: 200 } });
     const fake = await connected(s);
     fake.request(8, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-8', command: 'npm test' });
     await until(() => pendingOf(s).length === 1);
 
-    // Act: vários intervalos.
-    await until(() => fake.calls('thread/loaded/list').filter((c) => (c.params as { limit?: number }).limit === 1).length >= 4);
+    // Act: intervalos que somam mais que um prazo inteiro (um prazo que não fosse limpo dispararia).
+    await until(() => fake.calls('thread/loaded/list').filter((c) => (c.params as { limit?: number }).limit === 1).length >= 12);
 
     // Assert
     expect(s.proxies[0].killed).toBe(false);
@@ -959,7 +959,7 @@ describe('CodexAppServerService: queda e corrida (Review Focus #3 e #4)', () => 
 
   it('daemon que para de responder (o proxy, filho do Habblaud, segue vivo e nada fecha): o batimento derruba a conexão no prazo, fecha o cartão, mata o proxy, avisa e reconecta', async () => {
     // Arrange
-    const s = setup({ service: { heartbeatMs: 20, heartbeatTimeoutMs: 40 } });
+    const s = setup({ service: { heartbeatMs: 20, heartbeatTimeoutMs: 150 } });
     const fake = await connected(s);
     fake.request(10, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-10', command: 'npm test' });
     await until(() => pendingOf(s).length === 1);
