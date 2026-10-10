@@ -14,8 +14,9 @@ export type AgentKind = 'main' | 'sub';
  * - claude: Claude Code;
  * - codex: OpenAI Codex (CLI `codex` e o app desktop, que gravam no mesmo CODEX_HOME).
  * - opencode: OpenCode (sessões no SQLite do diretório de dados do OpenCode).
+ * - antigravity: Antigravity CLI (`agy`), visto pelos hooks dele.
  */
-export type Provider = 'claude' | 'codex' | 'opencode';
+export type Provider = 'claude' | 'codex' | 'opencode' | 'antigravity';
 
 /**
  * Estado de alto nível de um agente — é o que dirige o comportamento do personagem.

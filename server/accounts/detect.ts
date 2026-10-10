@@ -223,6 +223,11 @@ const ALIAS_TOOLS: Record<Provider, { invokes: RegExp; dir: RegExp }> = {
     invokes: /(?:^|[\s;&|(])(?:[\w.~/-]*\/)?opencode(?=$|[\s;&|)])/,
     dir: /\bHABBLAUD_OPENCODE_DIR=(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/,
   },
+  // Antigravity (`agy`) também não tem conta extra: o alias só importa para o comando invocado.
+  antigravity: {
+    invokes: /(?:^|[\s;&|(])(?:[\w.~/-]*\/)?agy(?=$|[\s;&|)])/,
+    dir: /\bHABBLAUD_ANTIGRAVITY_DIR=(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/,
+  },
 };
 
 /**
