@@ -77,6 +77,16 @@ describe('statusline do Antigravity: o que grava (AG-26)', () => {
     });
   });
 
+  it('o arquivo de cota é legível por todos e gravável só pelo dono (0644), mesmo com umask 0', async () => {
+    // umask 000 no processo filho: sem ela, um modo largo demais (0666) seria cortado e passaria despercebido.
+    const child = spawn('sh', ['-c', 'umask 000; exec "$0" "$1"', process.execPath, SCRIPT], { env: { ...process.env, HOME: home, HABBLAUD_USAGE_DIR: usage } });
+    await new Promise((ok) => {
+      child.on('close', ok);
+      child.stdin.end(JSON.stringify(PAYLOAD));
+    });
+    expect(statSync(file()).mode & 0o777).toBe(0o644);
+  });
+
   it('o e-mail, as pastas, o transcript, o modelo e os tokens nunca vão para o arquivo', async () => {
     await runScript(JSON.stringify(PAYLOAD));
     const text = readFileSync(file(), 'utf8');

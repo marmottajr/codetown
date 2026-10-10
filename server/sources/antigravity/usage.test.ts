@@ -101,6 +101,20 @@ describe('uso do Antigravity (arquivo de cotas)', () => {
     }
   });
 
+  it('arquivo grande demais (JSON válido, números diferentes) é ignorado: o número anterior fica', () => {
+    const c = setup();
+    c.write({ fetchedAt: c.now(), quota: QUOTA });
+    c.source.start();
+    const before = c.usage()!.sevenDay!.utilization;
+    c.write(JSON.stringify({ fetchedAt: c.now(), quota: { 'gemini-weekly': { remaining_fraction: 0.5, reset_time: '2026-10-17T14:54:02Z' } }, lixo: 'x'.repeat(20_000) }));
+    c.source.readUsage();
+    expect(c.usage()!.sevenDay!.utilization).toBe(before);
+    // o mesmo conteúdo abaixo do limite entra (prova que o tamanho foi o motivo)
+    c.write(JSON.stringify({ fetchedAt: c.now(), quota: { 'gemini-weekly': { remaining_fraction: 0.5, reset_time: '2026-10-17T14:54:02Z' } } }));
+    c.source.readUsage();
+    expect(c.usage()!.sevenDay!.utilization).toBe(50);
+  });
+
   it('arquivo estragado, grande demais ou sem cota válida não derruba; o último número é trocado por nada só se o arquivo ficou sem cota', () => {
     const c = setup();
     c.write({ fetchedAt: c.now(), quota: QUOTA });

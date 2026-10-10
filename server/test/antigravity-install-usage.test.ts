@@ -135,8 +135,13 @@ describe('antigravity-install --uso: uninstall (AG-29)', () => {
     await exec('install', { usage: true });
     quota();
     expect(quotaFile(home)).toBe(join(home, '.habblaud', 'usage', 'antigravity-quota.json'));
+    const withSl = readFileSync(SETTINGS(), 'utf8');
     expect(await exec('uninstall')).toBe(0);
     expect(readSettings()).toEqual(MINE);
+    // o settings anterior (ainda com o statusLine do Habblaud) fica num backup
+    const dir = settingsDir();
+    expect(backups().map((f) => readFileSync(join(dir, f), 'utf8'))).toContain(withSl);
+    expect(text()).toContain('backup em');
     expect(existsSync(SL_COPY())).toBe(false);
     expect(existsSync(quotaFile(home))).toBe(false);
     expect(existsSync(join(home, '.habblaud', 'usage', 'outro.json'))).toBe(true);
