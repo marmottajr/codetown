@@ -18,6 +18,7 @@ import {
   ERR_CODEX_SLOW,
   ERR_CODEX_UNAVAILABLE,
   ERR_GONE,
+  ERR_SESSION_CHANGED,
   MessageRegistry,
   PRESENCE_MS,
   QUEUED_TIMEOUT_MS,
@@ -270,5 +271,14 @@ describe('MessageRegistry: Codex pelo auxiliar do host (Docker)', () => {
     clock.advance(QUEUED_TIMEOUT_MS);
     registry.tick();
     expect(registry.get(c)).toMatchObject({ status: 'failed', error: ERR_CODEX_NOT_FETCHED });
+  });
+
+  it('troca de thread antes da busca: o auxiliar não recebe a mensagem e ela falha', () => {
+    const { office, registry } = setup();
+    registry.codexPoll({});
+    const id = sent(registry.send({ agentId: MAIN, text: 'para o thread antigo' }));
+    office.switchSession(MAIN, '0199b0c0-0000-7abc-8def-0000000000ff');
+    expect(registry.codexPoll({})).toEqual([]);
+    expect(registry.get(id)).toMatchObject({ status: 'failed', error: ERR_SESSION_CHANGED });
   });
 });
