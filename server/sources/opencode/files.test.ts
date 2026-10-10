@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tempDir } from '../../test/fixtures';
-import { buildOpencodeDb, HAS_SQLITE, ocId, toolPart, type OcFixture } from '../../test/opencode-fixtures';
-import { lastMessage, lastPart, listSessions, openDb, todos, type OcDb } from './files';
+import { buildOpencodeDb, HAS_SQLITE, ocId, questionPart, toolPart, type OcFixture } from '../../test/opencode-fixtures';
+import { lastMessage, lastPart, listSessions, openDb, pendingQuestion, todos, type OcDb } from './files';
 
 const SENTINEL = 'SEGREDO-NAO-PODE-VAZAR';
 const NOW = 1_800_000_000_000;
@@ -168,5 +168,89 @@ describe.skipIf(!HAS_SQLITE)('leitor do opencode.db', () => {
     expect(listSessions(d, 0)).toEqual(before);
     expect(lastMessage(d, s)).toEqual(msg);
     expect(onError).toHaveBeenCalled();
+  });
+});
+
+describe.skipIf(!HAS_SQLITE)('pendingQuestion: a pergunta pendente no banco (OQ-08)', () => {
+  const QS = [
+    { question: 'Qual banco?', header: 'Banco', options: [{ label: 'SQLite', description: 'local' }, { label: 'Postgres', description: 'remoto' }], multiple: false },
+    { question: 'Nome?', header: 'Nome', options: [] },
+  ];
+  let fx: OcFixture;
+  let db: OcDb | undefined;
+  const open = async (): Promise<OcDb> => {
+    const r = await openDb(fx.dir);
+    if (typeof r === 'string') throw new Error(`openDb: ${r}`);
+    db = r;
+    return r;
+  };
+  afterEach(() => {
+    db?.close();
+    db = undefined;
+    fx?.cleanup();
+  });
+  const session = () => {
+    fx = buildOpencodeDb();
+    const s = fx.addSession({ updated: NOW });
+    return { s, m: fx.addMessage({ session: s, role: 'assistant' }) };
+  };
+
+  it('devolve o array de perguntas de uma parte question em running', async () => {
+    const { s, m } = session();
+    fx.addPart({ message: m, session: s, created: 10, data: questionPart(QS) });
+    expect(pendingQuestion(await open(), s)).toEqual(QS);
+  });
+
+  it('parte question concluída, ou outra ferramenta, ou sem parte: undefined', async () => {
+    const { s, m } = session();
+    const d = await open();
+    expect(pendingQuestion(d, s)).toBeUndefined();
+    fx.addPart({ message: m, session: s, created: 10, data: questionPart(QS, { status: 'completed' }) });
+    expect(pendingQuestion(d, s)).toBeUndefined();
+    fx.addPart({ message: m, session: s, created: 20, data: { ...toolPart('bash', { status: 'running' }), state: { status: 'running', input: { questions: QS } } } });
+    expect(pendingQuestion(d, s)).toBeUndefined();
+    fx.addPart({ message: m, session: s, created: 30, data: { type: 'text', text: 'oi', state: { status: 'running', input: { questions: QS } } } });
+    expect(pendingQuestion(d, s)).toBeUndefined();
+  });
+
+  it('vale a última parte question; a pergunta antiga já respondida não volta', async () => {
+    const { s, m } = session();
+    fx.addPart({ message: m, session: s, created: 10, data: questionPart([{ question: 'Antiga?', options: [] }]) });
+    fx.addPart({ message: m, session: s, created: 20, data: questionPart(QS) });
+    const d = await open();
+    expect(pendingQuestion(d, s)).toEqual(QS);
+    fx.addPart({ message: m, session: s, created: 30, data: questionPart(QS, { status: 'completed' }) });
+    expect(pendingQuestion(d, s)).toBeUndefined();
+  });
+
+  it('JSON ruim, questions que não é lista ou parte sem state: undefined', async () => {
+    const { s, m } = session();
+    fx.addPart({ message: m, session: s, created: 10, rawData: '{quebrado' });
+    const d = await open();
+    expect(pendingQuestion(d, s)).toBeUndefined();
+    fx.addPart({ message: m, session: s, created: 20, data: questionPart('texto solto') });
+    expect(pendingQuestion(d, s)).toBeUndefined();
+    fx.addPart({ message: m, session: s, created: 30, data: { type: 'tool', tool: 'question' } });
+    expect(pendingQuestion(d, s)).toBeUndefined();
+  });
+
+  it('OQ-08: o SQL executado lê só $.state.input.questions (nenhum outro caminho de input nem texto de mensagem), e outras chaves de input não vazam', async () => {
+    const { s, m } = session();
+    fx.addPart({ message: m, session: s, created: 10, data: questionPart(QS, { extraInput: { segredo: SENTINEL } }) });
+    const d = await open();
+    const sqls: string[] = [];
+    const real = d.raw;
+    const spy: OcDb = { ...d, raw: { prepare: (sql: string) => (sqls.push(sql), real.prepare(sql)) } as unknown as OcDb['raw'] };
+    const got = pendingQuestion(spy, s);
+    expect(got).toEqual(QS);
+    expect(JSON.stringify(got)).not.toContain(SENTINEL);
+    expect(sqls).toHaveLength(1);
+    const sql = sqls[0];
+    const paths = [...sql.matchAll(/\$\.[A-Za-z0-9_.]+/g)].map((x) => x[0]);
+    expect(paths).toContain('$.state.input.questions');
+    for (const p of paths) expect(['$.tool', '$.state.status', '$.state.input.questions'], p).toContain(p);
+    expect(sql).not.toMatch(/\bmessage\b|\bsummary\b|\bbody\b|\boutput\b|\btext\b|\*/i);
+    expect(sql).not.toMatch(/state\.input(?!\.questions)/);
+    expect(sql).not.toMatch(/json_extract\(\s*data\s*,\s*'\$'\s*\)|\bSELECT\s+data\b/i);
   });
 });

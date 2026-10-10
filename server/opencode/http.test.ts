@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { HttpError, sendJson } from '../http/app';
 import { createRequestGuard } from '../http/guard';
 import { setQuiet } from '../log';
+import { NameStore } from '../model/names';
+import { Office } from '../model/office';
+import { PermissionRegistry } from '../permissions/registry';
 import type { OpencodeEvent, OpencodeLive } from '../sources/opencode/live';
 import { request } from '../test/permission-server';
 import { OPENCODE_EVENT_TYPES, handleOpencodeEvent, parseOpencodeEvent } from './http';
@@ -116,5 +119,52 @@ describe('handleOpencodeEvent', () => {
   it('peça pura parseOpencodeEvent', () => {
     expect(parseOpencodeEvent(ev('todo.updated', { todos: [] }))).toEqual({ type: 'todo.updated', properties: { sessionID: SES, todos: [] } });
     expect(() => parseOpencodeEvent({ event: { type: 'session.idle', properties: { sessionID: 'x' } } })).toThrow(HttpError);
+  });
+});
+
+describe('OQ-16: question.replied/rejected liberam o cartão da pergunta', () => {
+  const OTHER = 'ses_' + 'b'.repeat(26);
+  function setup() {
+    let permissions: PermissionRegistry | undefined;
+    const office = new Office({ names: new NameStore(null), version: 't', startedAt: 0, accounts: () => [], sources: () => [], accountName: () => undefined, permissions: () => permissions?.snapshot() ?? new Map() });
+    for (const [id, ses] of [['opencode:a', SES], ['opencode:b', OTHER]] as const) {
+      office.addMain({ id, provider: 'opencode', account: 'opencode', sessionId: ses, cwd: '/p/loja', role: 'Agente principal (OpenCode)', startedAt: 0, status: 'working' });
+    }
+    permissions = new PermissionRegistry({ office, viewers: () => 1 });
+    const ask = (session_id: string) => {
+      const r = permissions!.register({ provider: 'opencode', session_id, tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Q?', options: [{ label: 'a' }] }] }, timeout_ms: 30_000 });
+      if ('skip' in r) throw new Error(r.skip);
+      return r.id;
+    };
+    return { office, permissions, ask };
+  }
+  const cardOf = (office: Office, id: string) => office.commit().snapshot.agents.find((a) => a.id === id)?.permission;
+
+  it('replied da sessão libera só a pergunta dela; replied de outra sessão não mexe; rejected também libera', async () => {
+    const { office, permissions, ask } = setup();
+    const base = await serve({ applyHookEvent: () => true }, (sid) => permissions.releaseOpencodeQuestions(sid));
+    const a = ask(SES);
+    ask(OTHER);
+    expect(cardOf(office, 'opencode:a')).toBeDefined();
+    await request(base, '/x', { method: 'POST', body: ev('question.replied', { requestID: 'que_1', answers: [['a']] }) });
+    expect(cardOf(office, 'opencode:a')).toBeUndefined();
+    expect(await permissions.wait(a, 500)!.result).toEqual({ status: 'released', reason: 'answered' });
+    expect(cardOf(office, 'opencode:b')).toBeDefined();
+    const again = ask(SES);
+    await request(base, '/x', { method: 'POST', body: ev('question.rejected', { requestID: 'que_2' }) });
+    expect(await permissions.wait(again, 500)!.result).toEqual({ status: 'released', reason: 'answered' });
+    // Outros tipos de evento não liberam nada.
+    const third = ask(SES);
+    await request(base, '/x', { method: 'POST', body: ev('question.asked', { id: 'que_3' }) });
+    await request(base, '/x', { method: 'POST', body: ev('session.idle') });
+    expect(cardOf(office, 'opencode:a')).toBeDefined();
+    expect(permissions.decide(third, { behavior: 'terminal' })).toBe('ok');
+  });
+
+  it('a falha do liberador não derruba a rota (200 e ok segue o da fonte)', async () => {
+    const base = await serve({ applyHookEvent: () => true }, () => {
+      throw new Error('quebrou');
+    });
+    expect(await request(base, '/x', { method: 'POST', body: ev('question.replied', { requestID: 'q' }) })).toMatchObject({ status: 200, json: { ok: true } });
   });
 });

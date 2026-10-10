@@ -7,8 +7,8 @@ import { setQuiet } from '../../log';
 import { NameStore } from '../../model/names';
 import { Office, OFFLINE_GRACE_MS } from '../../model/office';
 import { tempDir } from '../../test/fixtures';
-import { buildOpencodeDb, HAS_SQLITE, ocId, toolPart, type OcFixture } from '../../test/opencode-fixtures';
-import { LIVE_HOLD_MS, OpencodeSource, PRESENCE_MS } from './source';
+import { buildOpencodeDb, HAS_SQLITE, ocId, questionPart, toolPart, type OcFixture } from '../../test/opencode-fixtures';
+import { LIVE_HOLD_MS, OpencodeSource, PRESENCE_MS, QUESTION_TTL_MS } from './source';
 
 setQuiet(true);
 
@@ -406,5 +406,266 @@ describe.skipIf(!HAS_SQLITE)('fonte do OpenCode: eventos ao vivo (applyHookEvent
     const ctx = setup({ noDb: true });
     await ctx.source.start();
     expect(ctx.source.applyHookEvent(status(S1, 'busy'))).toBe(false);
+  });
+});
+
+describe.skipIf(!HAS_SQLITE)('fonte do OpenCode: perguntas ao vivo (question.*)', () => {
+  const asked = (id = 'que_1', extra: Record<string, unknown> = {}) => ({
+    type: 'question.asked',
+    properties: {
+      id,
+      sessionID: S1,
+      questions: [
+        { question: 'Qual banco usar?', header: 'Banco', options: [{ label: 'SQLite', description: 'local' }, { label: 'Postgres', description: 'remoto' }], multiple: true },
+        { question: 'Nome do projeto?', header: 'Nome', options: [] },
+      ],
+      ...extra,
+    },
+  });
+  const replied = (requestID = 'que_1') => ({ type: 'question.replied', properties: { sessionID: S1, requestID, answers: [['SQLite'], ['x']] } });
+  const rejected = (requestID = 'que_1') => ({ type: 'question.rejected', properties: { sessionID: S1, requestID } });
+  const idle = { type: 'session.idle', properties: { sessionID: S1 } };
+
+  /** Sessão com o turno do assistente ainda aberto (o ciclo de leitura diz "working"). */
+  async function workingSession() {
+    const ctx = setup();
+    const t = ctx.now();
+    ctx.fx.addSession({ id: S1, directory: '/p/a', updated: t });
+    ctx.fx.addMessage({ session: S1, role: 'assistant', created: t - 100 });
+    await ctx.source.start();
+    expect(ctx.agent(S1)?.status).toBe('working');
+    return ctx;
+  }
+  const statusAfterPoll = (ctx: ReturnType<typeof setup>) => ctx.poll().agents.find((a) => a.id === key(S1));
+
+  it('OQ-03: question.asked deixa o agente waiting com "responder uma pergunta" e atividade ask com perguntas e opções', async () => {
+    const ctx = await workingSession();
+    expect(ctx.source.applyHookEvent(asked())).toBe(true);
+    const a = ctx.agent(S1)!;
+    expect(a.status).toBe('waiting');
+    expect(a.waitingFor).toBe('responder uma pergunta');
+    expect(a.activity).toMatchObject({ kind: 'ask', text: describeTool('AskUserQuestion', { questions: [] }).text });
+    expect(a.activity?.questions).toEqual([
+      { index: 0, question: 'Qual banco usar?', header: 'Banco', multiSelect: true, options: [{ index: 0, label: 'SQLite', description: 'local' }, { index: 1, label: 'Postgres', description: 'remoto' }] },
+      { index: 1, question: 'Nome do projeto?', header: 'Nome', options: [] },
+    ]);
+  });
+
+  it('OQ-03: no máximo 4 perguntas e 6 opções, segredos mascarados', async () => {
+    const ctx = await workingSession();
+    const options = Array.from({ length: 9 }, (_, i) => ({ label: `op${i}`, description: '' }));
+    const questions = Array.from({ length: 6 }, (_, i) => ({ question: i === 0 ? 'Use a chave sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 ?' : `P${i}?`, header: 'h', options }));
+    ctx.source.applyHookEvent({ type: 'question.asked', properties: { id: 'que_9', sessionID: S1, questions } });
+    const qs = ctx.agent(S1)!.activity!.questions!;
+    expect(qs).toHaveLength(4);
+    expect(qs[0].options).toHaveLength(6);
+    expect(JSON.stringify(qs)).not.toContain('sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789');
+  });
+
+  it('OQ-04: o ciclo sobre um assistente incompleto não volta o status, mesmo depois de LIVE_HOLD_MS', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked());
+    ctx.advance(LIVE_HOLD_MS + 5_000);
+    const a = statusAfterPoll(ctx)!;
+    expect(a.status).toBe('waiting');
+    expect(a.waitingFor).toBe('responder uma pergunta');
+    expect(a.activity?.kind).toBe('ask');
+    ctx.advance(60_000);
+    expect(statusAfterPoll(ctx)?.status).toBe('waiting');
+  });
+
+  it('OQ-05: question.replied tira de waiting e troca a atividade ask', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked());
+    expect(ctx.source.applyHookEvent(replied())).toBe(true);
+    const a = ctx.agent(S1)!;
+    expect(a.status).toBe('working');
+    expect(a.waitingFor).toBeUndefined();
+    expect(a.activity?.questions).toBeUndefined();
+    ctx.advance(LIVE_HOLD_MS + 5_000);
+    expect(statusAfterPoll(ctx)?.status).toBe('working'); // sem pendência guardada: o banco (turno aberto) manda
+  });
+
+  it('OQ-04: eventos ao vivo de trabalho (session.status busy, tool.execute.before) e o ciclo não tiram a espera da pergunta; replied com o mesmo requestID tira', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked());
+    const still = () => {
+      const a = ctx.agent(S1)!;
+      expect(a.status).toBe('waiting');
+      expect(a.waitingFor).toBe('responder uma pergunta');
+      expect(a.activity?.kind).toBe('ask');
+      expect(a.activity?.questions).toHaveLength(2);
+    };
+    ctx.source.applyHookEvent({ type: 'session.status', properties: { sessionID: S1, status: { type: 'busy' } } });
+    still();
+    ctx.source.applyHookEvent({ type: 'tool.execute.before', properties: { sessionID: S1, tool: 'bash', callID: 'call_9', title: 'npm test' } });
+    still();
+    ctx.advance(LIVE_HOLD_MS + 5_000);
+    ctx.poll();
+    still();
+    expect(ctx.source.applyHookEvent(replied('que_1'))).toBe(true);
+    const a = ctx.agent(S1)!;
+    expect(a.status).toBe('working');
+    expect(a.waitingFor).toBeUndefined();
+    expect(a.activity?.questions).toBeUndefined();
+  });
+
+  it('OQ-05: pergunta respondida direto no OpenCode, sem página aberta (só o evento ao vivo): o ciclo seguinte troca o balão ask e segue as regras do banco', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked());
+    expect(ctx.agent(S1)?.activity?.kind).toBe('ask');
+    expect(ctx.source.applyHookEvent(replied('que_1'))).toBe(true);
+    ctx.advance(LIVE_HOLD_MS + 8_000);
+    const a = statusAfterPoll(ctx)!;
+    expect(a.status).toBe('working'); // turno ainda aberto no banco
+    expect(a.waitingFor).toBeUndefined();
+    expect(a.activity?.questions).toBeUndefined();
+    expect(a.activity?.text).not.toBe(describeTool('AskUserQuestion', { questions: [] }).text);
+    expect(a.activity?.text).toBe('Recebeu a sua resposta');
+    ctx.advance(60_000);
+    const b = statusAfterPoll(ctx)!;
+    expect(b.status).toBe('working');
+    expect(b.activity?.questions).toBeUndefined();
+  });
+
+  it('OQ-05: question.rejected tira de waiting e limpa a atividade ask', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked());
+    expect(ctx.source.applyHookEvent(rejected())).toBe(true);
+    const a = ctx.agent(S1)!;
+    expect(a.status).not.toBe('waiting');
+    expect(a.activity?.kind).not.toBe('ask');
+  });
+
+  it('OQ-05: session.idle limpa a pergunta pendente e o ciclo seguinte fica idle', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked());
+    ctx.source.applyHookEvent(idle);
+    expect(ctx.agent(S1)).toMatchObject({ status: 'idle' });
+    expect(ctx.agent(S1)?.waitingFor).toBeUndefined();
+    expect(ctx.agent(S1)?.activity?.questions).toBeUndefined();
+    ctx.advance(LIVE_HOLD_MS + 5_000);
+    expect(statusAfterPoll(ctx)?.status).toBe('working'); // o banco ainda tem o turno aberto; a pendência não segura mais
+  });
+
+  it('OQ-05: resposta de OUTRO pedido não limpa a pergunta pendente', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked('que_2'));
+    ctx.source.applyHookEvent(replied('que_1'));
+    expect(ctx.agent(S1)?.status).toBe('waiting');
+    ctx.source.applyHookEvent(replied('que_2'));
+    expect(ctx.agent(S1)?.status).toBe('working');
+  });
+
+  it('OQ-06: aos 29 min a pergunta continua pendente; aos 31 min o ciclo a limpa', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked());
+    const keepAlive = () => ctx.fx.setSession(S1, { time_updated: ctx.now() });
+    ctx.advance(29 * 60_000);
+    keepAlive();
+    expect(statusAfterPoll(ctx)?.status).toBe('waiting');
+    ctx.advance(2 * 60_000);
+    keepAlive();
+    const a = statusAfterPoll(ctx)!;
+    expect(a.status).toBe('working');
+    expect(a.waitingFor).toBeUndefined();
+    expect(a.activity?.questions).toBeUndefined();
+    expect(QUESTION_TTL_MS).toBe(30 * 60_000);
+  });
+
+  it('pergunta sem estrutura válida ainda deixa waiting (cartão genérico); sessão desconhecida: false', async () => {
+    const ctx = await workingSession();
+    expect(ctx.source.applyHookEvent({ type: 'question.asked', properties: { id: 'que_1', sessionID: S1, questions: 'lixo' } })).toBe(true);
+    expect(ctx.agent(S1)).toMatchObject({ status: 'waiting', waitingFor: 'responder uma pergunta' });
+    expect(ctx.agent(S1)?.activity?.questions).toBeUndefined();
+    expect(ctx.source.applyHookEvent({ type: 'question.asked', properties: { id: 'que_1', sessionID: ocId('ses', 99), questions: [] } })).toBe(false);
+  });
+
+  it('o mesmo question.asked duas vezes deixa o mesmo estado (idempotente)', async () => {
+    const ctx = await workingSession();
+    ctx.source.applyHookEvent(asked());
+    const once = JSON.stringify(ctx.office.get(key(S1)));
+    ctx.source.applyHookEvent(asked());
+    expect(JSON.stringify(ctx.office.get(key(S1)))).toBe(once);
+  });
+});
+
+describe.skipIf(!HAS_SQLITE)('fonte do OpenCode: pergunta pendente vista pelo banco, sem o plugin (OQ-07)', () => {
+  const QS = [
+    { question: 'Qual banco usar?', header: 'Banco', options: [{ label: 'SQLite', description: 'local' }, { label: 'Postgres', description: 'remoto' }], multiple: true },
+  ];
+
+  function withQuestion(opts: { completed?: boolean; status?: string } = {}) {
+    const ctx = setup();
+    const t = ctx.now();
+    ctx.fx.addSession({ id: S1, directory: '/p/a', updated: t });
+    const m = ctx.fx.addMessage({ session: S1, role: 'assistant', created: t - 100, ...(opts.completed ? { completed: t - 10 } : {}) });
+    const part = ctx.fx.addPart({ message: m, session: S1, created: t - 50, data: questionPart(QS, { status: opts.status }) });
+    return { ctx, m, part, t };
+  }
+
+  it('OQ-07: parte question running com o turno aberto: waiting com atividade ask e as 2 opções, sem evento ao vivo', async () => {
+    const { ctx } = withQuestion();
+    await ctx.source.start();
+    const a = ctx.agent(S1)!;
+    expect(a).toMatchObject({ status: 'waiting', waitingFor: 'responder uma pergunta' });
+    expect(a.activity).toMatchObject({ kind: 'ask', tool: 'AskUserQuestion' });
+    expect(a.activity?.questions).toEqual([
+      { index: 0, question: 'Qual banco usar?', header: 'Banco', multiSelect: true, options: [{ index: 0, label: 'SQLite', description: 'local' }, { index: 1, label: 'Postgres', description: 'remoto' }] },
+    ]);
+    ctx.advance(10_000);
+    expect(ctx.poll().agents.find((x) => x.id === key(S1))).toMatchObject({ status: 'waiting', activity: { kind: 'ask' } });
+  });
+
+  it('OQ-07: sessão já em andamento (working) passa a waiting quando a parte question aparece, e sai quando ela conclui', async () => {
+    const ctx = setup();
+    const t = ctx.now();
+    ctx.fx.addSession({ id: S1, directory: '/p/a', updated: t });
+    const m = ctx.fx.addMessage({ session: S1, role: 'assistant', created: t - 100 });
+    await ctx.source.start();
+    expect(ctx.agent(S1)?.status).toBe('working');
+    ctx.fx.addPart({ message: m, session: S1, created: t, data: questionPart(QS) });
+    const a = ctx.poll().agents.find((x) => x.id === key(S1))!;
+    expect(a).toMatchObject({ status: 'waiting', activity: { kind: 'ask' } });
+    ctx.fx.db.prepare("UPDATE part SET data = json_set(data, '$.state.status', 'completed') WHERE session_id = ? AND json_extract(data, '$.tool') = 'question'").run(S1);
+    const b = ctx.poll().agents.find((x) => x.id === key(S1))!;
+    expect(b.status).toBe('working');
+    expect(b.waitingFor).toBeUndefined();
+    expect(b.activity?.questions).toBeUndefined();
+  });
+
+  it('OQ-07: parte question esquecida em running depois que o turno do assistente completou não fica waiting', async () => {
+    const { ctx } = withQuestion({ completed: true });
+    await ctx.source.start();
+    expect(ctx.agent(S1)?.status).toBe('idle');
+    expect(ctx.agent(S1)?.activity?.questions).toBeUndefined();
+  });
+
+  it('parte question já concluída (turno aberto): working, não waiting', async () => {
+    const { ctx } = withQuestion({ status: 'completed' });
+    await ctx.source.start();
+    expect(ctx.agent(S1)?.status).toBe('working');
+  });
+
+  it('com o evento ao vivo da mesma pergunta o plugin vale: nada duplicado e waiting mantido', async () => {
+    const { ctx } = withQuestion();
+    await ctx.source.start();
+    ctx.source.applyHookEvent({ type: 'question.asked', properties: { id: 'que_1', sessionID: S1, questions: QS } });
+    ctx.advance(LIVE_HOLD_MS + 1_000);
+    const a = ctx.poll().agents.find((x) => x.id === key(S1))!;
+    expect(a.status).toBe('waiting');
+    ctx.source.applyHookEvent({ type: 'question.replied', properties: { sessionID: S1, requestID: 'que_1', answers: [['SQLite']] } });
+    expect(ctx.agent(S1)?.activity?.questions).toBeUndefined();
+  });
+
+  it('a pergunta no banco só entra com questionPart (privacidade): outra ferramenta running não vira ask', async () => {
+    const ctx = setup();
+    const t = ctx.now();
+    ctx.fx.addSession({ id: S1, directory: '/p/a', updated: t });
+    const m = ctx.fx.addMessage({ session: S1, role: 'assistant', created: t - 100 });
+    ctx.fx.addPart({ message: m, session: S1, created: t - 50, data: toolPart('bash', { title: 'ls' }) });
+    await ctx.source.start();
+    expect(ctx.agent(S1)?.status).toBe('working');
+    expect(ctx.agent(S1)?.activity?.kind).not.toBe('ask');
   });
 });

@@ -200,6 +200,7 @@ const api = createApiHandler({
   codexLive,
   opencodeEvents: config.opencode,
   opencodeLive: opencode,
+  releaseOpencodeQuestions: permissions ? (sessionId) => void permissions.releaseOpencodeQuestions(sessionId) : undefined,
   stats,
   updates,
 });

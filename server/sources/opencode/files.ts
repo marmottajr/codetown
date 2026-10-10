@@ -4,8 +4,9 @@
 //   project, session, message, part, todo.
 // Nunca são lidas: account, event, auth.json, opencode.jsonc, log/ e tool-output/. As consultas pedem colunas nomeadas e
 // extraem do JSON `data` só o que a fonte usa (papel, tempos, tipo da parte, nome da ferramenta e `state.title`) com
-// json_extract no próprio SQLite, então o texto das mensagens, o `input` e o `output` das ferramentas e o raciocínio
-// NUNCA chegam a este processo. `node:sqlite` é carregado por import dinâmico: no Node 22.12 (sem a API sem flag) a fonte só fica
+// json_extract no próprio SQLite, então o texto das mensagens, o `output` das ferramentas e o raciocínio NUNCA chegam
+// a este processo. Única exceção: `pendingQuestion` lê `$.state.input.questions` das partes da ferramenta `question`
+// (o prompt que ela mostra ao usuário; nada mais de `state.input`). `node:sqlite` é carregado por import dinâmico: no Node 22.12 (sem a API sem flag) a fonte só fica
 // desligada ('unsupported'), o resto do Habblaud segue.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -204,6 +205,35 @@ export function lastPart(db: OcDb, sessionId: string): OcPart | undefined {
     return part;
   });
 }
+
+/**
+ * Perguntas pendentes da ferramenta `question`: o array `state.input.questions` da ÚLTIMA parte `question` da sessão, se
+ * ela ainda está `running`. É o único trecho de `state.input` que este leitor toca (o prompt da própria ferramenta,
+ * mascarado depois por `askQuestions`); nada de outras chaves de `input`, do `output` nem do texto das mensagens.
+ * undefined = nenhuma pendente, JSON ruim ou `questions` que não é lista.
+ */
+export function pendingQuestion(db: OcDb, sessionId: string): unknown[] | undefined {
+  return read<unknown[] | undefined>(db, `question:${sessionId}`, undefined, () => {
+    const row = db.raw
+      .prepare(
+        `SELECT CASE WHEN json_extract(data, '$.state.status') = 'running' THEN json_extract(data, '$.state.input.questions') END AS questions
+           FROM part
+          WHERE session_id = ? AND json_valid(data) AND json_extract(data, '$.tool') = 'question'
+          ORDER BY time_created DESC, id DESC LIMIT 1`,
+      )
+      .get(sessionId) as Record<string, unknown> | undefined;
+    if (!row || typeof row.questions !== 'string' || row.questions.length > MAX_QUESTIONS_JSON) return undefined;
+    try {
+      const parsed: unknown = JSON.parse(row.questions);
+      return Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+}
+
+/** Perguntas maiores que isto (em JSON) são ignoradas: o escritório só mostra prévias. */
+const MAX_QUESTIONS_JSON = 200_000;
 
 export interface OcTodo {
   content: string;

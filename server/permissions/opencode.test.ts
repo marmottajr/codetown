@@ -245,6 +245,33 @@ describe('perguntas do OpenCode no registro de permissões (OQ-10, OQ-11, OQ-16)
     expect(await result(registry, b)).toEqual({ status: 'released', reason: 'terminal' });
   });
 
+  it('OQ-16: releaseOpencodeQuestions libera só as perguntas pendentes daquela sessão', async () => {
+    const { office, registry } = setup();
+    const q1 = idOf(registry.register(ask()));
+    const q2 = idOf(registry.register(ask()));
+    const other = idOf(registry.register(ask({ session_id: SUBSES })));
+    const perm = idOf(registry.register(body()));
+    expect(registry.releaseOpencodeQuestions(SES)).toBe(2);
+    expect(await result(registry, q1)).toEqual({ status: 'released', reason: 'answered' });
+    expect(await result(registry, q2)).toEqual({ status: 'released', reason: 'answered' });
+    expect(registry.size).toBe(2);
+    expect(registry.decide(other, { behavior: 'terminal' })).toBe('ok');
+    expect(registry.decide(perm, { behavior: 'allow' })).toBe('ok');
+    expect(registry.releaseOpencodeQuestions(SES)).toBe(0);
+    expect(office.commit().snapshot.agents.find((x) => x.id === OC_MAIN)?.permission).toBeUndefined();
+  });
+
+  it('OQ-16: releaseOpencodeQuestions não solta pergunta de outro provider da MESMA sessão', async () => {
+    const { office, registry } = setup();
+    office.addMain({ id: 'acc:2', account: 'acc', sessionId: SES, cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'working' });
+    const claude = idOf(registry.register({ session_id: SES, tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS }, cwd: '/p/loja', timeout_ms: 30_000 }));
+    const oc = idOf(registry.register(ask()));
+    expect(registry.releaseOpencodeQuestions(SES)).toBe(1);
+    expect(await result(registry, oc)).toEqual({ status: 'released', reason: 'answered' });
+    expect(registry.decide(claude, { behavior: 'deny' })).toBe('ok'); // continua pendente
+    expect(registry.releaseOpencodeQuestions(SES)).toBe(0);
+  });
+
   it('opencodeToolView: AskUserQuestion devolve título, texto e as perguntas mascaradas; entrada hostil não quebra', () => {
     const v = opencodeToolView('AskUserQuestion', { questions: [{ question: 'Use Authorization: Bearer abcdef123456?', options: [{ label: 'Sim' }] }] });
     expect(v).toMatchObject({ icon: '❓', questions: [{ index: 0, options: [{ index: 0, label: 'Sim' }] }] });

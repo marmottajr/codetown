@@ -105,6 +105,11 @@ export function toolPart(tool: string, o: { status?: string; title?: string; out
   return part;
 }
 
+/** Parte da ferramenta `question` como o OpenCode a grava (pendente = `running`, sem `state.title`), com um texto sintético em `input` que o leitor não pode devolver. */
+export function questionPart(questions: unknown, o: { status?: string; extraInput?: Record<string, unknown> } = {}): Record<string, unknown> {
+  return { type: 'tool', tool: 'question', callID: 'call_sintetico', state: { status: o.status ?? 'running', input: { questions, ...(o.extraInput ?? {}) }, time: { start: 1 } } };
+}
+
 /**
  * Cria o banco sintético (vazio) em um diretório temporário e devolve os construtores de linhas.
  * Lança se `node:sqlite` não existir: guarde o uso com `describe.skipIf(!HAS_SQLITE)`.

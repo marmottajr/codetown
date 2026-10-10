@@ -242,6 +242,17 @@ describe('PermissionCard: pergunta do OpenCode mostra o formulário de resposta'
     expect(sent).toEqual([{ behavior: 'answer', answers: [{ question: 0, other: 'staging' }] }]);
   });
 
+  it('"Não responder" manda {behavior:"deny"} sem motivo obrigatório (só o texto, se houver, vai junto)', async () => {
+    const { el, sent, button } = mount(OC_ASK);
+    button(/Recusar/)!.click(); // abre o formulário de recusa
+    const submit = el.querySelectorAll('button').find((b) => b.attrs.get('type') === 'submit' && /^Recusar$/.test(b.textContent))!;
+    expect(submit.disabled).toBe(false); // sem motivo escrito, mesmo assim liga
+    const denyForm = el.children.find((c) => c instanceof FakeEl && c.className === 'ui-perm__deny') as FakeEl;
+    denyForm.dispatch('submit');
+    await Promise.resolve();
+    expect(sent).toEqual([{ behavior: 'deny' }]);
+  });
+
   it('aviso e prazo seguem o do OpenCode (segundos), sem sempre permitir nem interromper', () => {
     const { el } = mount({ ...OC_ASK, expiresAt: 30_000 });
     expect(el.textContent).toContain('No OpenCode, o pedido já está na tela dele');

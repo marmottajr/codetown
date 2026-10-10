@@ -8,7 +8,8 @@
 // motivo. O Codex nunca pergunta pelo escritório (sem cartão de pergunta).
 // Pedido do OpenCode (`provider: 'opencode'`): como o do Codex (só aprovar ou recusar, recusar pede um motivo, o prazo é
 // de segundos); a diferença é que o pedido do próprio OpenCode já está na tela dele enquanto o cartão espera:
-// responder aqui o resolve lá, e sem resposta vale o prompt do OpenCode.
+// responder aqui o resolve lá, e sem resposta vale o prompt do OpenCode. A PERGUNTA do OpenCode (AskUserQuestion) tem o
+// mesmo formulário do Claude Code (Responder; "Não responder" sem motivo obrigatório).
 import { ANSWER_OTHER_MAX, ASK_TOOL, checkAnswers } from '../../../shared/answers';
 import type { AgentInfo, AskQuestion, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo } from '../../../shared/types';
 import type { UiContext } from './context';
@@ -65,9 +66,10 @@ export interface PermissionOptions {
   note: string;
 }
 
-export function permissionOptions(p: Pick<PermissionRequestInfo, 'provider' | 'suggestions'>, agent: Pick<AgentInfo, 'kind' | 'background'>): PermissionOptions {
+export function permissionOptions(p: Pick<PermissionRequestInfo, 'provider' | 'suggestions'> & { tool?: string }, agent: Pick<AgentInfo, 'kind' | 'background'>): PermissionOptions {
   if (p.provider === 'codex') return { always: false, interrupt: false, reasonRequired: true, seconds: true, note: CODEX_PERMISSION_NOTE };
-  if (p.provider === 'opencode') return { always: false, interrupt: false, reasonRequired: true, seconds: true, note: OPENCODE_PERMISSION_NOTE };
+  // Pergunta: recusar não leva texto (o plugin manda reject sem corpo), então o motivo não é obrigatório.
+  if (p.provider === 'opencode') return { always: false, interrupt: false, reasonRequired: p.tool !== ASK_TOOL, seconds: true, note: OPENCODE_PERMISSION_NOTE };
   // Subagente em segundo plano: o Claude Code só mostra o diálogo depois que o hook responde.
   const blocking = agent.kind === 'sub' && !!agent.background;
   return {
@@ -104,7 +106,7 @@ export function isLocalHostname(hostname: string): boolean {
   return name === 'localhost' || name.endsWith('.localhost') || name === '::1' || /^127(?:\.\d{1,3}){3}$/.test(name);
 }
 
-/** Pedido que se responde escolhendo (as perguntas do AskUserQuestion), não aprovando. O Codex nunca pergunta. */
+/** Pedido que se responde escolhendo (as perguntas do AskUserQuestion), não aprovando. O Codex nunca pergunta; o OpenCode pergunta como o Claude Code. */
 export function isQuestionRequest(p: Pick<PermissionRequestInfo, 'tool' | 'questions' | 'provider'> | undefined): boolean {
   return !!p && p.provider !== 'codex' && p.tool === ASK_TOOL && !!p.questions?.length;
 }

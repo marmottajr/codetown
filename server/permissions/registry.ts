@@ -539,6 +539,20 @@ export class PermissionRegistry {
     return 'ok';
   }
 
+  /**
+   * O OpenCode recebeu a resposta (no terminal ou pelo escritório): libera as perguntas dele ainda abertas daquela
+   * sessão, e só elas, para o cartão sumir. Devolve quantas liberou.
+   */
+  releaseOpencodeQuestions(sessionId: string): number {
+    let n = 0;
+    for (const p of [...this.pending.values()]) {
+      if (p.outcome || p.sessionId !== sessionId || p.info.provider !== 'opencode' || !isQuestion(p.info)) continue;
+      this.release(p, 'answered');
+      n++;
+    }
+    return n;
+  }
+
   /** Relógio: expiração, órfãos, agente que saiu, resposta no terminal e limpeza das decisões entregues. */
   tick(): void {
     const now = this.now();

@@ -22,6 +22,14 @@ export function isOpencode(x: { provider?: Provider } | null | undefined): boole
   return x?.provider === 'opencode';
 }
 
+/**
+ * A dica do plugin habblaud-permissoes (responder perguntas pelo escritório) vale só para o Claude Code: o Codex não
+ * pergunta pelo escritório e o OpenCode usa o plugin dele, não esse.
+ */
+export function showsPermissionsPluginHint(x: { provider?: Provider } | null | undefined): boolean {
+  return providerOf(x) === 'claude';
+}
+
 /** O id de conta é o do OpenCode ("opencode", "opencode~2", "demo:opencode")? Mesma ideia de looksLikeCodexId. */
 export function looksLikeOpencodeId(id: string): boolean {
   return /(?:^|[:/\\])\.?opencode(?:[-_.~]|$)/i.test(id);

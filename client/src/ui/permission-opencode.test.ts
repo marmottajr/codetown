@@ -22,6 +22,16 @@ describe('cartão de permissão do OpenCode', () => {
     expect(OPENCODE_PERMISSION_NOTE).toMatch(/^No OpenCode, o pedido já está na tela dele/);
   });
 
+  it('recusar uma PERGUNTA do OpenCode não exige motivo; recusar uma permissão do OpenCode continua exigindo; Claude e Codex iguais', () => {
+    const q = permissionOptions({ provider: 'opencode', tool: 'AskUserQuestion' }, { kind: 'main' });
+    expect(q.reasonRequired).toBe(false);
+    expect(q).toMatchObject({ always: false, interrupt: false, seconds: true, note: OPENCODE_PERMISSION_NOTE });
+    expect(permissionOptions({ provider: 'opencode', tool: 'bash' }, { kind: 'main' }).reasonRequired).toBe(true);
+    expect(permissionOptions({ provider: 'opencode' }, { kind: 'main' }).reasonRequired).toBe(true);
+    expect(permissionOptions({ tool: 'AskUserQuestion' }, { kind: 'main' }).reasonRequired).toBe(false);
+    expect(permissionOptions({ provider: 'codex', tool: 'AskUserQuestion' }, { kind: 'main' }).reasonRequired).toBe(true);
+  });
+
   it('a pergunta do OpenCode vira cartão de pergunta (como a do Claude Code); sem perguntas ou outra ferramenta, não', () => {
     expect(isQuestionRequest({ tool: 'AskUserQuestion', questions: [question], provider: 'opencode' })).toBe(true);
     expect(isQuestionRequest({ tool: 'AskUserQuestion', questions: [], provider: 'opencode' })).toBe(false);
