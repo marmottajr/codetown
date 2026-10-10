@@ -14,6 +14,7 @@ import { encodeCwd } from '../watcher';
 import { parseRolloutName, rolloutDirs } from './files';
 import { createCodexState, isThreadId, metaFromLine, parseRolloutLine, type RolloutMeta } from './rollout';
 import { createCodexTerminalParser } from './terminal';
+import { tr } from '../../../shared/i18n';
 
 /** Começo lido de cada rollout (o session_meta costuma caber; senão lê mais, até META_MAX). */
 const HEAD_BYTES = 64 * 1024;
@@ -113,14 +114,14 @@ export class CodexHistory implements HistoryProvider {
    * resolvidos) dentro da pasta da conta. Um rollout só compactado (.jsonl.zst) ainda não dá para ler: 404.
    */
   resolve(account: string, sessionId: string): HistoryResolveResult {
-    if (!isThreadId(sessionId)) return { status: 400, error: 'id de sessão inválido' };
+    if (!isThreadId(sessionId)) return { status: 400, error: tr('id de sessão inválido') };
     const acc = this.opts.accounts().find((a) => a.id === account);
-    if (!acc) return { status: 404, error: 'conta desconhecida' };
+    if (!acc) return { status: 404, error: tr('conta desconhecida') };
     let root: string;
     try {
       root = realpathSync(acc.dir);
     } catch {
-      return { status: 404, error: 'sessão não encontrada' };
+      return { status: 404, error: tr('sessão não encontrada') };
     }
     const id = sessionId.toLowerCase();
     let best: { path: string; mtimeMs: number } | undefined;
@@ -152,7 +153,7 @@ export class CodexHistory implements HistoryProvider {
       }
     }
     if (best) return { path: best.path, createParser: createCodexTerminalParser };
-    return { status: 404, error: compressed ? 'sessão compactada pelo Codex (.zst): ainda não dá para ler' : 'sessão não encontrada' };
+    return { status: 404, error: compressed ? tr('sessão compactada pelo Codex (.zst): ainda não dá para ler') : tr('sessão não encontrada') };
   }
 
   /** Rollouts (um por thread: o mais recente) modificados dentro da janela. */

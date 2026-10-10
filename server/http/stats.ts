@@ -4,6 +4,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { addDays, canonicalTimeZone, parseDayKey, RETENTION_DAYS, type StatsSource } from '../../shared/daystats';
 import type { DayStatsService } from '../history/daystats';
+import { tr } from '../../shared/i18n';
 
 type Send = (res: ServerResponse, status: number, body: unknown) => void;
 
@@ -12,7 +13,7 @@ export type StatsQuery = { ok: true; day: string; tz: string; source?: StatsSour
 /** Um parâmetro aparece no máximo uma vez (o valor é validado por quem chama). */
 function single(url: URL, name: string): { value?: string; error?: string } {
   const all = url.searchParams.getAll(name);
-  if (all.length > 1) return { error: `parâmetro "${name}" repetido` };
+  if (all.length > 1) return { error: tr('parâmetro "{0}" repetido', [name]) };
   if (!all.length) return {};
   return { value: all[0] };
 }
@@ -23,7 +24,7 @@ function parseTz(url: URL, fallback: string): { tz?: string; error?: string } {
   if (p.error) return { error: p.error };
   if (p.value === undefined) return { tz: fallback };
   const tz = canonicalTimeZone(p.value);
-  if (!tz) return { error: 'fuso inválido: use um nome IANA, ex.: America/Sao_Paulo' };
+  if (!tz) return { error: tr('fuso inválido: use um nome IANA, ex.: America/Sao_Paulo') };
   return { tz };
 }
 
@@ -38,12 +39,12 @@ export function parseStatsQuery(url: URL, defaultTz: string, today: (tz: string)
   if (d.error) return { ok: false, status: 400, error: d.error };
   const now = today(t.tz);
   const day = d.value ?? now;
-  if (!parseDayKey(day)) return { ok: false, status: 400, error: 'dia inválido: use AAAA-MM-DD (ex.: 2026-10-08)' };
-  if (day > now) return { ok: false, status: 400, error: 'dia no futuro' };
-  if (day < addDays(now, -RETENTION_DAYS)) return { ok: false, status: 404, error: `o Habblaud guarda só os últimos ${RETENTION_DAYS} dias` };
+  if (!parseDayKey(day)) return { ok: false, status: 400, error: tr('dia inválido: use AAAA-MM-DD (ex.: 2026-10-08)') };
+  if (day > now) return { ok: false, status: 400, error: tr('dia no futuro') };
+  if (day < addDays(now, -RETENTION_DAYS)) return { ok: false, status: 404, error: tr('o Habblaud guarda só os últimos {0} dias', [RETENTION_DAYS]) };
   const s = single(url, 'source');
   if (s.error) return { ok: false, status: 400, error: s.error };
-  if (s.value !== undefined && s.value !== 'real' && s.value !== 'demo') return { ok: false, status: 400, error: 'fonte inválida: use real ou demo' };
+  if (s.value !== undefined && s.value !== 'real' && s.value !== 'demo') return { ok: false, status: 400, error: tr('fonte inválida: use real ou demo') };
   const out: StatsQuery = { ok: true, day, tz: t.tz };
   if (s.value) out.source = s.value;
   return out;
@@ -54,16 +55,16 @@ export function handleStatsRoute(req: IncomingMessage, res: ServerResponse, url:
   const method = req.method ?? 'GET';
   const path = url.pathname;
   if (path !== '/api/stats' && path !== '/api/stats/days') {
-    send(res, 404, { error: 'rota desconhecida' });
+    send(res, 404, { error: tr('rota desconhecida') });
     return;
   }
   if (method !== 'GET' && method !== 'HEAD') {
     res.setHeader('Allow', 'GET');
-    send(res, 405, { error: 'método não permitido' });
+    send(res, 405, { error: tr('método não permitido') });
     return;
   }
   if (!stats) {
-    send(res, 404, { error: 'estatísticas indisponíveis' });
+    send(res, 404, { error: tr('estatísticas indisponíveis') });
     return;
   }
   if (path === '/api/stats/days') {
@@ -78,10 +79,10 @@ export function handleStatsRoute(req: IncomingMessage, res: ServerResponse, url:
     return;
   }
   if (q.source === 'demo' && !stats.isDemo()) {
-    send(res, 404, { error: 'o modo demonstração está desligado' });
+    send(res, 404, { error: tr('o modo demonstração está desligado') });
     return;
   }
   const body = stats.day(q.day, q.tz, q.source);
   if (body) send(res, 200, body);
-  else send(res, 404, { error: 'sem estatísticas para este dia' });
+  else send(res, 404, { error: tr('sem estatísticas para este dia') });
 }

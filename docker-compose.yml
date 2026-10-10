@@ -34,6 +34,7 @@ services:
       HABBLAUD_MENSAGENS: ${HABBLAUD_MENSAGENS:-}
       # 0 desliga a verificação de versão nova (consulta às releases no GitHub a cada 6 h).
       HABBLAUD_UPDATE_CHECK: ${HABBLAUD_UPDATE_CHECK:-}
+      HABBLAUD_LANG: ${HABBLAUD_LANG:-}
       # 0 desliga as sessões do Codex no escritório.
       HABBLAUD_CODEX: ${HABBLAUD_CODEX:-}
     # Endurecimento: sistema de arquivos só leitura (exceto /data e /tmp), sem capabilities extras.

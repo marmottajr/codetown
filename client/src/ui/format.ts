@@ -1,11 +1,12 @@
-// Formatação em PT-BR (tempos, números, uso). Funções puras: sem DOM, testadas em ui/format.test.ts.
+// Formatação no idioma ativo (PT-BR por padrão) (tempos, números, uso). Funções puras: sem DOM, testadas em ui/format.test.ts.
+import { intlLocale, tr } from '../../../shared/i18n';
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-const LOCALE = 'pt-BR';
+const LOCALE = intlLocale();
 
 const numberFmt1 = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 1 });
 const integerFmt = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });
@@ -19,10 +20,10 @@ const dateTimeFmt = new Intl.DateTimeFormat(LOCALE, { day: '2-digit', month: 'sh
 export function relativeTime(at: number, now: number): string {
   const diff = now - at;
   if (!Number.isFinite(diff) || diff < 5 * SECOND) return 'agora';
-  if (diff < MINUTE) return `há ${Math.floor(diff / SECOND)} s`;
-  if (diff < HOUR) return `há ${Math.floor(diff / MINUTE)} min`;
-  if (diff < DAY) return `há ${Math.floor(diff / HOUR)} h`;
-  return `há ${Math.floor(diff / DAY)} d`;
+  if (diff < MINUTE) return tr('há {0} s', [Math.floor(diff / SECOND)]);
+  if (diff < HOUR) return tr('há {0} min', [Math.floor(diff / MINUTE)]);
+  if (diff < DAY) return tr('há {0} h', [Math.floor(diff / HOUR)]);
+  return tr('há {0} d', [Math.floor(diff / DAY)]);
 }
 
 /** Duração legível: "12 s", "3 min", "2 h 10 min", "3 d 4 h". */
@@ -58,7 +59,7 @@ export function formatElapsed(ms: number): string {
 export function formatCountdown(target: number, now: number): string {
   const diff = target - now;
   if (diff <= 0) return 'agora';
-  if (diff < MINUTE) return 'em menos de 1 min';
+  if (diff < MINUTE) return tr('em menos de 1 min');
   return `em ${formatDuration(diff)}`;
 }
 
@@ -81,8 +82,8 @@ export function formatResetAt(resetsAt: number, now: number): string {
   if (!Number.isFinite(resetsAt) || resetsAt <= now) return '';
   const time = clockFmt.format(resetsAt);
   const days = calendarDayDiff(resetsAt, now);
-  if (days <= 0) return `às ${time}`;
-  if (days === 1) return `amanhã às ${time}`;
+  if (days <= 0) return tr('às {0}', [time]);
+  if (days === 1) return tr('amanhã às {0}', [time]);
   return `${weekdayFmt.format(resetsAt)}, ${time}`;
 }
 
@@ -132,7 +133,7 @@ export function usageWindowView(win: { utilization: number; resetsAt?: number } 
       renewed: true,
       reset: 'renovada',
       resetShort: 'renovada',
-      summary: 'renovada depois da última leitura (uso atual desconhecido)',
+      summary: tr('renovada depois da última leitura (uso atual desconhecido)'),
     };
   }
   const pct = clampPercent(win.utilization);
@@ -142,7 +143,7 @@ export function usageWindowView(win: { utilization: number; resetsAt?: number } 
   if (diff < DAY) reset = formatCountdown(resetsAt, now);
   else {
     const time = clockFmt.format(resetsAt);
-    reset = calendarDayDiff(resetsAt, now) === 1 ? `amanhã, ${time}` : `${weekdayFmt.format(resetsAt)}, ${time}`;
+    reset = calendarDayDiff(resetsAt, now) === 1 ? tr('amanhã, {0}', [time]) : `${weekdayFmt.format(resetsAt)}, ${time}`;
   }
   const at = formatResetAt(resetsAt, now);
   return {
@@ -150,7 +151,7 @@ export function usageWindowView(win: { utilization: number; resetsAt?: number } 
     renewed: false,
     reset,
     resetShort: compactDuration(diff),
-    summary: `${pct}% usado · reinicia ${at} (${formatCountdown(resetsAt, now)})`,
+    summary: tr('{0}% usado · reinicia {1} ({2})', [pct, at, formatCountdown(resetsAt, now)]),
   };
 }
 
@@ -232,12 +233,12 @@ export function prettyModel(model: string | undefined): string {
 }
 
 const PERMISSION_LABELS: Record<string, string> = {
-  default: 'Padrão (pergunta)',
-  acceptEdits: 'Aceita edições',
-  plan: 'Modo plano',
-  bypassPermissions: 'Sem confirmações',
-  dontAsk: 'Não pergunta',
-  auto: 'Automático',
+  default: tr('Padrão (pergunta)'),
+  acceptEdits: tr('Aceita edições'),
+  plan: tr('Modo plano'),
+  bypassPermissions: tr('Sem confirmações'),
+  dontAsk: tr('Não pergunta'),
+  auto: tr('Automático'),
 };
 
 export function permissionLabel(mode: string | undefined): string {

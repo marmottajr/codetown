@@ -35,6 +35,7 @@ import { RoomState } from './room-state';
 import { countShells, latestShellDone, shellLabel, shellStage, shellWaitSince, spinDir, spinPhase, yawnPhase } from './shell';
 import { SpotRegistry } from './spots';
 import type { Step } from './steps';
+import { tr } from '../../../../shared/i18n';
 
 /**
  * Efeito visual pontual pedido pela simulação ao render (drenado a cada frame): confete (shell
@@ -1378,7 +1379,7 @@ export class Sim {
         t: 'do',
         fn: () => {
           ch.dir = facing(ch.x, ch.y, parent.x, parent.y);
-          ch.showBubble('📦', `Entregando: ${title}`, 3000, this.now);
+          ch.showBubble('📦', tr('Entregando: {0}', [title]), 3000, this.now);
           ch.setIcon('box', 2800, this.now);
           parent.setIcon(parent.rng() < 0.5 ? 'heart' : 'check', 2800, this.now);
         },

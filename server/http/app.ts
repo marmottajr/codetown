@@ -13,6 +13,7 @@ import { handleSessionsRoute } from './sessions';
 import type { Hub } from './sse';
 import { handleStatsRoute } from './stats';
 import type { TerminalStreams } from './terminal';
+import { tr } from '../../shared/i18n';
 
 export interface ApiDeps {
   office: Office;
@@ -194,7 +195,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
 
   const methodNotAllowed = (res: ServerResponse, allow: string) => {
     res.setHeader('Allow', allow);
-    sendJson(res, 405, { error: 'método não permitido' });
+    sendJson(res, 405, { error: tr('método não permitido') });
   };
 
   const handleDemo = async (req: IncomingMessage, res: ServerResponse) => {
@@ -226,7 +227,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
   const fail = (res: ServerResponse, err: unknown) => {
     if (res.headersSent) return void res.destroy();
     if (err instanceof HttpError) sendJson(res, err.status, { error: err.message });
-    else sendJson(res, 500, { error: 'erro interno' });
+    else sendJson(res, 500, { error: tr('erro interno') });
   };
 
   return (req, res, url) => {
@@ -281,15 +282,15 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     if (terminalMatch) {
       if (method !== 'GET') methodNotAllowed(res, 'GET');
       else if (!terminals) {
-        sendJson(res, 403, { error: 'terminal desligado: ele só funciona com o Habblaud acessível apenas pelo próprio computador' });
+        sendJson(res, 403, { error: tr('terminal desligado: ele só funciona com o Habblaud acessível apenas pelo próprio computador') });
       } else if (!isLoopbackHost(req.headers.host)) {
-        sendJson(res, 403, { error: 'o terminal só abre pelo próprio computador (http://localhost ou http://127.0.0.1)' });
+        sendJson(res, 403, { error: tr('o terminal só abre pelo próprio computador (http://localhost ou http://127.0.0.1)') });
       } else {
         let id: string;
         try {
           id = decodeURIComponent(terminalMatch[1]);
         } catch {
-          sendJson(res, 400, { error: 'id inválido' });
+          sendJson(res, 400, { error: tr('id inválido') });
           return true;
         }
         terminals.attach(req, res, id);
@@ -303,9 +304,9 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     if (path === '/api/permissions' || path.startsWith('/api/permissions/')) {
       // Responder pelo escritório age sobre as sessões: a mesma trava do terminal (bind local + Host local).
       if (!deps.permissions) {
-        sendJson(res, 403, { error: 'responder pelo escritório desligado: só funciona com o Habblaud acessível apenas pelo próprio computador' });
+        sendJson(res, 403, { error: tr('responder pelo escritório desligado: só funciona com o Habblaud acessível apenas pelo próprio computador') });
       } else if (!isLoopbackHost(req.headers.host)) {
-        sendJson(res, 403, { error: 'pedidos de permissão só são respondidos pelo próprio computador (http://localhost ou http://127.0.0.1)' });
+        sendJson(res, 403, { error: tr('pedidos de permissão só são respondidos pelo próprio computador (http://localhost ou http://127.0.0.1)') });
       } else {
         deps.permissions(req, res, path);
       }
@@ -316,15 +317,15 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       // Mudar o personagem age sobre o escritório: a mesma trava do terminal (bind local + Host local).
       if (method !== 'PUT' && method !== 'DELETE') methodNotAllowed(res, 'PUT, DELETE');
       else if (!deps.terminal) {
-        sendJson(res, 403, { error: 'editar o personagem desligado: só funciona com o Habblaud acessível apenas pelo próprio computador' });
+        sendJson(res, 403, { error: tr('editar o personagem desligado: só funciona com o Habblaud acessível apenas pelo próprio computador') });
       } else if (!isLoopbackHost(req.headers.host)) {
-        sendJson(res, 403, { error: 'o personagem só é editado pelo próprio computador (http://localhost ou http://127.0.0.1)' });
+        sendJson(res, 403, { error: tr('o personagem só é editado pelo próprio computador (http://localhost ou http://127.0.0.1)') });
       } else {
         let id: string;
         try {
           id = decodeURIComponent(characterMatch[1]);
         } catch {
-          sendJson(res, 400, { error: 'id inválido' });
+          sendJson(res, 400, { error: tr('id inválido') });
           return true;
         }
         handleCharacter(req, res, id, method).catch((err) => fail(res, err));
@@ -337,7 +338,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       // publicada, com o endereço do gateway.
       if (method !== 'POST') methodNotAllowed(res, 'POST');
       else if (!isLoopbackHost(req.headers.host) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
-        sendJson(res, 403, { error: 'eventos do Codex só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)' });
+        sendJson(res, 403, { error: tr('eventos do Codex só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)') });
       } else handleCodexEvent(req, res, { live: deps.codexLive, entries: () => accounts.entriesOf('codex') }).catch((err) => fail(res, err));
       return true;
     }
@@ -345,10 +346,10 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       // As mensagens entram na sessão como se você as tivesse digitado: a mesma trava (recurso ligado + Host local).
       if (!deps.messages) {
         sendJson(res, 403, {
-          error: 'mensagens pelo escritório desligadas: só funcionam com o Habblaud acessível apenas pelo próprio computador (e sem HABBLAUD_MENSAGENS=0)',
+          error: tr('mensagens pelo escritório desligadas: só funcionam com o Habblaud acessível apenas pelo próprio computador (e sem HABBLAUD_MENSAGENS=0)'),
         });
       } else if (!isLoopbackHost(req.headers.host)) {
-        sendJson(res, 403, { error: 'mensagens só são mandadas pelo próprio computador (http://localhost ou http://127.0.0.1)' });
+        sendJson(res, 403, { error: tr('mensagens só são mandadas pelo próprio computador (http://localhost ou http://127.0.0.1)') });
       } else {
         deps.messages(req, res, path);
       }
@@ -363,19 +364,19 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       try {
         id = decodeURIComponent(path.slice('/api/agents/'.length));
       } catch {
-        sendJson(res, 400, { error: 'id inválido' });
+        sendJson(res, 400, { error: tr('id inválido') });
         return true;
       }
       const detail = office.detail(id);
       if (detail) sendJson(res, 200, detail);
-      else sendJson(res, 404, { error: 'agente não encontrado' });
+      else sendJson(res, 404, { error: tr('agente não encontrado') });
       return true;
     }
     if (path === '/api/rooms/rename') {
       // Como o personagem: a mesma trava do terminal (bind local + Host local).
       if (method !== 'POST') methodNotAllowed(res, 'POST');
-      else if (!deps.terminal) sendJson(res, 403, { error: 'renomear salas desligado: só funciona com o Habblaud acessível apenas pelo próprio computador' });
-      else if (!isLoopbackHost(req.headers.host)) sendJson(res, 403, { error: 'renomear salas só pelo próprio computador (http://localhost)' });
+      else if (!deps.terminal) sendJson(res, 403, { error: tr('renomear salas desligado: só funciona com o Habblaud acessível apenas pelo próprio computador') });
+      else if (!isLoopbackHost(req.headers.host)) sendJson(res, 403, { error: tr('renomear salas só pelo próprio computador (http://localhost)') });
       else
         readJson(req)
           .then((body) => {
@@ -418,7 +419,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       return true;
     }
     if (deps.timeline?.(req, res, url)) return true;
-    sendJson(res, 404, { error: 'rota desconhecida' });
+    sendJson(res, 404, { error: tr('rota desconhecida') });
     return true;
   };
 }

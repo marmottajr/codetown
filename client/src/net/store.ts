@@ -7,6 +7,7 @@
 import type { AppearanceParts } from '../../../shared/appearance';
 import type { Activity, AgentDetail, AgentInfo, FeedItem, Notice, OfficeSnapshot, OutboxMessage, PermissionDecision, PermissionRequestInfo, RoomInfo } from '../../../shared/types';
 import { DemoSimulator } from '../../../shared/demo/simulator';
+import { tr } from '../../../shared/i18n';
 
 export type ConnectionState = 'connecting' | 'open' | 'closed' | 'mock';
 
@@ -250,7 +251,7 @@ export class OfficeStore {
   async decidePermission(id: string, d: PermissionDecision): Promise<string | undefined> {
     if (this.mock) {
       const sim = this.mockSim;
-      if (!sim?.decidePermission(id, d)) return 'Este pedido já foi respondido.';
+      if (!sim?.decidePermission(id, d)) return tr('Este pedido já foi respondido.');
       this.applySnapshot(sim.snapshot());
       return undefined;
     }
@@ -266,7 +267,7 @@ export class OfficeStore {
     } catch {
       // Resposta sem JSON (ex.: guard): usa a mensagem padrão.
     }
-    return `Não foi possível responder (erro ${res.status}).`;
+    return tr('Não foi possível responder (erro {0}).', [res.status]);
   }
 
   /**
@@ -283,7 +284,7 @@ export class OfficeStore {
   }
 
   private async characterRequest(id: string, method: 'PUT' | 'DELETE', body: object): Promise<string | undefined> {
-    if (this.mock || this.replay) return 'Editar o personagem só funciona com o escritório ao vivo.';
+    if (this.mock || this.replay) return tr('Editar o personagem só funciona com o escritório ao vivo.');
     let res: Response;
     try {
       res = await fetch(`/api/agents/${encodeURIComponent(id)}/character`, {
@@ -292,7 +293,7 @@ export class OfficeStore {
         body: JSON.stringify(body),
       });
     } catch {
-      return 'Sem conexão com o Habblaud.';
+      return tr('Sem conexão com o Habblaud.');
     }
     if (res.ok) return undefined;
     try {
@@ -301,7 +302,7 @@ export class OfficeStore {
     } catch {
       // Resposta sem JSON (ex.: guard): usa a mensagem padrão.
     }
-    return `Não foi possível salvar o personagem (erro ${res.status}).`;
+    return tr('Não foi possível salvar o personagem (erro {0}).', [res.status]);
   }
 
   // ---------------------------------------------------------------- mensagens pelo escritório
@@ -343,15 +344,15 @@ export class OfficeStore {
 
   private mockSend(agentId: string, text: string): { message: OutboxMessage } | { error: string } {
     const a = this.agent(agentId);
-    if (!a) return { error: 'agente desconhecido: ele já saiu do escritório?' };
-    if (!a.canMessage || a.kind !== 'main' || a.status === 'offline') return { error: 'este agente não recebe mensagens agora' };
+    if (!a) return { error: tr('agente desconhecido: ele já saiu do escritório?') };
+    if (!a.canMessage || a.kind !== 'main' || a.status === 'offline') return { error: tr('este agente não recebe mensagens agora') };
     const now = Date.now();
     const msg: OutboxMessage = { id: `mock-${now.toString(36)}-${++this.mockSeq}`, agentId, status: 'queued', createdAt: now, updatedAt: now };
     this.mockOutbox.set(msg.id, msg);
     setTimeout(() => {
       const sim = this.mockSim;
       const ok = !!sim?.receiveMessage(agentId, text);
-      Object.assign(msg, { status: ok ? 'delivered' : 'failed', updatedAt: Date.now() }, ok ? {} : { error: 'o agente saiu do escritório' });
+      Object.assign(msg, { status: ok ? 'delivered' : 'failed', updatedAt: Date.now() }, ok ? {} : { error: tr('o agente saiu do escritório') });
       if (ok && sim) this.applySnapshot(sim.snapshot());
     }, 1_000);
     return { message: { ...msg } };

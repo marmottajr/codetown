@@ -44,12 +44,13 @@ import {
 import { formatClock } from './format';
 import { ICONS } from './icons';
 import { accountProvider } from './provider';
+import { tr } from '../../../shared/i18n';
 
 const REFRESH_MS = 30_000;
 const NOTE =
-  'Tempo de agentes é a soma de todos eles: dois agentes trabalhando por 1 hora contam 2 horas. ' +
-  '“Esperando você” é o tempo de mão levantada no escritório (permissão, pergunta ou escolha). ' +
-  'O Habblaud só conta o que acontece enquanto ele está rodando.';
+  tr('Tempo de agentes é a soma de todos eles: dois agentes trabalhando por 1 hora contam 2 horas. ') +
+  tr('“Esperando você” é o tempo de mão levantada no escritório (permissão, pergunta ou escolha). ') +
+  tr('O Habblaud só conta o que acontece enquanto ele está rodando.');
 
 /** De onde vêm os números: o servidor ou, no ?mock=1, o acumulador local. */
 interface DaySource {
@@ -150,15 +151,15 @@ export class DayPanel implements UiComponent {
   ) {
     this.source = ctx.store.mock ? new LocalSource(ctx.store) : httpSource;
 
-    this.select = h('select', { class: 'ui-day__select', attrs: { 'aria-label': 'Dia' }, on: { change: () => this.pickDay(this.select.value) } });
-    this.segDemo = h('button', { class: 'ui-seg__opt', type: 'button', role: 'radio', text: 'Demonstração', on: { click: () => this.pickSource('demo') } });
-    this.segReal = h('button', { class: 'ui-seg__opt', type: 'button', role: 'radio', text: 'Dados reais', on: { click: () => this.pickSource('real') } });
-    this.seg = h('div', { class: 'ui-seg ui-day__source', role: 'radiogroup', hidden: true, attrs: { 'aria-label': 'Dados exibidos' } }, this.segDemo, this.segReal);
-    this.badge = h('span', { class: 'ui-day__badge', text: 'demonstração', title: 'Números fictícios do modo demonstração', hidden: true });
-    const close = iconButton(ICONS.close, 'Fechar (Esc)', () => this.close(), 'ui-icon-btn--sm');
+    this.select = h('select', { class: 'ui-day__select', attrs: { 'aria-label': tr('Dia') }, on: { change: () => this.pickDay(this.select.value) } });
+    this.segDemo = h('button', { class: 'ui-seg__opt', type: 'button', role: 'radio', text: tr('Demonstração'), on: { click: () => this.pickSource('demo') } });
+    this.segReal = h('button', { class: 'ui-seg__opt', type: 'button', role: 'radio', text: tr('Dados reais'), on: { click: () => this.pickSource('real') } });
+    this.seg = h('div', { class: 'ui-seg ui-day__source', role: 'radiogroup', hidden: true, attrs: { 'aria-label': tr('Dados exibidos') } }, this.segDemo, this.segReal);
+    this.badge = h('span', { class: 'ui-day__badge', text: tr('demonstração'), title: tr('Números fictícios do modo demonstração'), hidden: true });
+    const close = iconButton(ICONS.close, tr('Fechar (Esc)'), () => this.close(), 'ui-icon-btn--sm');
 
     this.statusText = h('span', {});
-    this.retry = h('button', { class: 'ui-link-btn', type: 'button', text: 'Tentar de novo', hidden: true, on: { click: () => void this.load(true) } });
+    this.retry = h('button', { class: 'ui-link-btn', type: 'button', text: tr('Tentar de novo'), hidden: true, on: { click: () => void this.load(true) } });
     // Sem aria-live: "atualizado às…" mudaria a cada 30 s; erros são anunciados à parte.
     this.status = h('p', { class: 'ui-day__status' }, this.statusText, this.retry);
     this.content = h('div', { class: 'ui-day__content' });
@@ -170,7 +171,7 @@ export class DayPanel implements UiComponent {
       h(
         'div',
         { class: 'ui-dialog__head ui-day__head' },
-        h('div', { class: 'ui-day__title' }, h('h2', { text: 'Meu dia', attrs: { id: 'ui-day-title' } }), this.badge),
+        h('div', { class: 'ui-day__title' }, h('h2', { text: tr('Meu dia'), attrs: { id: 'ui-day-title' } }), this.badge),
         h('div', { class: 'ui-day__controls' }, this.select, this.seg),
         close,
       ),
@@ -267,7 +268,7 @@ export class DayPanel implements UiComponent {
     } catch (err) {
       if (seq !== this.seq) return;
       this.error = err instanceof Error ? err.message : String(err);
-      this.ctx.announce('Não foi possível carregar as estatísticas do dia.');
+      this.ctx.announce(tr('Não foi possível carregar as estatísticas do dia.'));
       // O seletor volta para o dia que está na tela.
       if (this.data) {
         this.day = this.data.stats.day;
@@ -294,11 +295,11 @@ export class DayPanel implements UiComponent {
   private renderStatus(): void {
     this.el.classList.toggle('is-loading', this.loading && !!this.data);
     setHidden(this.retry, !this.error);
-    if (this.error) setText(this.statusText, `Não foi possível carregar as estatísticas (${this.error}).`);
-    else if (this.loading && !this.data) setText(this.statusText, 'Carregando…');
+    if (this.error) setText(this.statusText, tr('Não foi possível carregar as estatísticas ({0}).', [this.error]));
+    else if (this.loading && !this.data) setText(this.statusText, tr('Carregando…'));
     else if (this.data) {
       const today = this.data.stats.day === this.data.today;
-      setText(this.statusText, today ? `Atualizado às ${formatClock(this.data.serverTime)} · atualiza a cada 30 s` : '');
+      setText(this.statusText, today ? tr('Atualizado às {0} · atualiza a cada 30 s', [formatClock(this.data.serverTime)]) : '');
     }
   }
 
@@ -337,8 +338,8 @@ export class DayPanel implements UiComponent {
         h('p', {
           class: 'ui-day__empty',
           text: today
-            ? 'Ainda não há tempo registrado hoje. Os números aparecem assim que algum agente trabalhar com o Habblaud aberto.'
-            : 'Nada registrado neste dia.',
+            ? tr('Ainda não há tempo registrado hoje. Os números aparecem assim que algum agente trabalhar com o Habblaud aberto.')
+            : tr('Nada registrado neste dia.'),
         }),
       );
       return out;
@@ -357,10 +358,10 @@ export class DayPanel implements UiComponent {
     const hero = h(
       'div',
       { class: 'ui-day__hero' },
-      h('p', { class: 'ui-day__kpi-label' }, swatch, h('span', { text: 'Esperando você' })),
+      h('p', { class: 'ui-day__kpi-label' }, swatch, h('span', { text: tr('Esperando você') })),
       h('p', { class: 'ui-day__hero-value', text: hl.waiting }),
       h('p', { class: 'ui-day__kpi-sub', text: hl.waits }),
-      hl.longest ? h('p', { class: 'ui-day__kpi-sub' }, h('span', { class: 'ui-day__muted', text: 'Maior espera: ' }), h('strong', { text: hl.longest })) : null,
+      hl.longest ? h('p', { class: 'ui-day__kpi-sub' }, h('span', { class: 'ui-day__muted', text: tr('Maior espera: ') }), h('strong', { text: hl.longest })) : null,
       hl.wall ? h('p', { class: 'ui-day__kpi-sub', text: hl.wall }) : null,
     );
     const tile = (label: string, value: string, sub: string, title?: string, status?: TimedStatus) =>
@@ -373,13 +374,13 @@ export class DayPanel implements UiComponent {
       );
     return h(
       'section',
-      { class: 'ui-day__kpis', attrs: { 'aria-label': 'Destaques do dia' } },
+      { class: 'ui-day__kpis', attrs: { 'aria-label': tr('Destaques do dia') } },
       hero,
-      tile('Trabalhando', hl.working, 'soma do tempo de todos os agentes', undefined, 'working'),
-      tile('Sessões', hl.sessions, hl.subagents),
-      tile('Pedidos', hl.prompts, hl.activity),
+      tile(tr('Trabalhando'), hl.working, tr('soma do tempo de todos os agentes'), undefined, 'working'),
+      tile(tr('Sessões'), hl.sessions, hl.subagents),
+      tile(tr('Pedidos'), hl.prompts, hl.activity),
       tile('Tokens', hl.tokens, hl.tokensDetail),
-      tile('Custo', hl.cost, hl.costHint, hl.costHint),
+      tile(tr('Custo'), hl.cost, hl.costHint, hl.costHint),
     );
   }
 
@@ -392,7 +393,7 @@ export class DayPanel implements UiComponent {
         {
           class: `ui-day__key${on ? '' : ' is-off'}`,
           type: 'button',
-          title: on ? `Esconder “${STATUS_TEXT[s]}” dos gráficos` : `Mostrar “${STATUS_TEXT[s]}” nos gráficos`,
+          title: on ? tr('Esconder “{0}” dos gráficos', [STATUS_TEXT[s]]) : tr('Mostrar “{0}” nos gráficos', [STATUS_TEXT[s]]),
           attrs: { 'aria-pressed': String(on), 'data-focus-key': `key:${s}` },
           on: { click: () => this.toggleStatus(s) },
         },
@@ -400,7 +401,7 @@ export class DayPanel implements UiComponent {
         h('span', { text: STATUS_TEXT[s] }),
       );
     });
-    return h('div', { class: 'ui-day__legend', role: 'group', attrs: { 'aria-label': 'Status nos gráficos (clique para mostrar ou esconder)' } }, ...items);
+    return h('div', { class: 'ui-day__legend', role: 'group', attrs: { 'aria-label': tr('Status nos gráficos (clique para mostrar ou esconder)') } }, ...items);
   }
 
   private toggleStatus(s: TimedStatus): void {
@@ -417,7 +418,7 @@ export class DayPanel implements UiComponent {
       ? h('button', {
           class: 'ui-link-btn ui-day__table-btn',
           type: 'button',
-          text: showTable ? 'Ver gráfico' : 'Ver tabela',
+          text: showTable ? tr('Ver gráfico') : tr('Ver tabela'),
           attrs: { 'aria-pressed': String(showTable), 'data-focus-key': `table:${table}` },
           on: {
             click: () => {
@@ -457,10 +458,10 @@ export class DayPanel implements UiComponent {
   private hoursCard(res: DayStatsResponse): HTMLElement {
     const narrow = this.ctx.isNarrow();
     const { columns, axis } = hourColumns(res.stats.hours, this.visible, res.serverTime, narrow ? 6 : 3);
-    const c = this.card('hours', 'Por hora', 'Tempo de agentes em cada hora do dia', 'hours');
+    const c = this.card('hours', tr('Por hora'), tr('Tempo de agentes em cada hora do dia'), 'hours');
     if (c.showTable) {
       const t = statusTable(columns, (col) => col.range, this.visible);
-      c.body.append(this.table(['Hora', ...t.head], t.rows, 'Tempo de agentes por hora'));
+      c.body.append(this.table([tr('Hora'), ...t.head], t.rows, tr('Tempo de agentes por hora')));
       return c.el;
     }
     const grid = h(
@@ -468,7 +469,7 @@ export class DayPanel implements UiComponent {
       { class: 'ui-day__grid', attrs: { 'aria-hidden': 'true' } },
       ...axis.ticks.map((tick) => h('span', { class: 'ui-day__gridline', style: `bottom:${(tick / axis.max) * 100}%` }, h('span', { class: 'ui-day__tick', text: axisLabel(tick) }))),
     );
-    const cols = h('div', { class: 'ui-day__cols', role: 'list', attrs: { 'aria-label': 'Tempo de agentes por hora (setas para navegar)' } });
+    const cols = h('div', { class: 'ui-day__cols', role: 'list', attrs: { 'aria-label': tr('Tempo de agentes por hora (setas para navegar)') } });
     let tabbable = columns.findIndex((col) => col.now);
     if (tabbable < 0) tabbable = 0;
     columns.forEach((col, i) => cols.append(this.column(col, i === tabbable)));
@@ -490,7 +491,7 @@ export class DayPanel implements UiComponent {
         class: `ui-day__col${col.now ? ' is-now' : ''}`,
         role: 'listitem',
         tabIndex: tabbable ? 0 : -1,
-        attrs: { 'aria-label': `${col.label}${col.now ? ' (agora)' : ''}`, 'data-focus-key': `hour:${col.t}` },
+        attrs: { 'aria-label': `${col.label}${col.now ? tr(' (agora)') : ''}`, 'data-focus-key': `hour:${col.t}` },
       },
       stack,
     );
@@ -502,7 +503,7 @@ export class DayPanel implements UiComponent {
             { label: 'Total', value: formatAgentTime(col.total) },
           ];
     // A dica sai do topo da coluna pintada (não do topo do gráfico).
-    this.bindTip(el, () => `${col.range}${col.now ? ' · agora' : col.future ? ' · ainda não chegou' : ''}`, rows, () => stack.lastElementChild ?? stack);
+    this.bindTip(el, () => `${col.range}${col.now ? tr(' · agora') : col.future ? tr(' · ainda não chegou') : ''}`, rows, () => stack.lastElementChild ?? stack);
     return el;
   }
 
@@ -522,14 +523,14 @@ export class DayPanel implements UiComponent {
   // ---------------------------------------------------------------- por projeto
 
   private roomsCard(rows: RoomRow[]): HTMLElement {
-    const c = this.card('rooms', 'Por projeto', 'Ordenado pelo tempo esperando você', 'rooms');
+    const c = this.card('rooms', tr('Por projeto'), tr('Ordenado pelo tempo esperando você'), 'rooms');
     if (!rows.length) {
-      c.body.append(h('p', { class: 'ui-day__muted', text: 'Nenhum projeto com tempo neste dia.' }));
+      c.body.append(h('p', { class: 'ui-day__muted', text: tr('Nenhum projeto com tempo neste dia.') }));
       return c.el;
     }
     if (c.showTable) {
       const t = statusTable(rows, (r) => r.name, this.visible);
-      c.body.append(this.table(['Projeto', ...t.head], t.rows, 'Tempo de agentes por projeto'));
+      c.body.append(this.table([tr('Projeto'), ...t.head], t.rows, tr('Tempo de agentes por projeto')));
       return c.el;
     }
     const list = h('ul', { class: 'ui-day__bars' });
@@ -564,9 +565,9 @@ export class DayPanel implements UiComponent {
   // ---------------------------------------------------------------- maiores esperas
 
   private waitsCard(rows: ReturnType<typeof waitRows>, res: DayStatsResponse): HTMLElement {
-    const c = this.card('waits', 'Maiores esperas', 'Quanto tempo cada agente ficou de mão levantada esperando você');
+    const c = this.card('waits', tr('Maiores esperas'), tr('Quanto tempo cada agente ficou de mão levantada esperando você'));
     if (!rows.length) {
-      c.body.append(h('p', { class: 'ui-day__muted', text: 'Nenhuma espera por você neste dia.' }));
+      c.body.append(h('p', { class: 'ui-day__muted', text: tr('Nenhuma espera por você neste dia.') }));
       return c.el;
     }
     const accounts = new Map(res.stats.accounts.map((a) => [a.id, a]));
@@ -589,7 +590,7 @@ export class DayPanel implements UiComponent {
               { class: 'ui-day__wait-top' },
               h('strong', { class: 'ui-day__wait-dur', text: w.duration }),
               h('span', { class: 'ui-day__wait-bar' }, h('span', { class: 'ui-day__seg is-waiting', style: `width:${w.pct}%` })),
-              w.ongoing ? h('span', { class: 'ui-day__now', text: 'esperando agora' }) : null,
+              w.ongoing ? h('span', { class: 'ui-day__now', text: tr('esperando agora') }) : null,
             ),
             h(
               'span',
@@ -610,9 +611,9 @@ export class DayPanel implements UiComponent {
 
   private accountsCard(res: DayStatsResponse): HTMLElement {
     const cards = accountCards(res.stats.accounts, (id) => this.isCodexAccount(id));
-    const c = this.card('accounts', 'Por conta', 'Cada conta na cor dela, com a fatia do tempo de trabalho do dia');
+    const c = this.card('accounts', tr('Por conta'), tr('Cada conta na cor dela, com a fatia do tempo de trabalho do dia'));
     if (!cards.length) {
-      c.body.append(h('p', { class: 'ui-day__muted', text: 'Nenhuma conta com tempo neste dia.' }));
+      c.body.append(h('p', { class: 'ui-day__muted', text: tr('Nenhuma conta com tempo neste dia.') }));
       return c.el;
     }
     const grid = h('div', { class: 'ui-day__accounts' });
@@ -634,11 +635,11 @@ export class DayPanel implements UiComponent {
         h(
           'dl',
           { class: 'ui-day__account-stats' },
-          ...stat('Trabalhando', a.working),
-          ...stat('Esperando você', a.waiting),
+          ...stat(tr('Trabalhando'), a.working),
+          ...stat(tr('Esperando você'), a.waiting),
           ...stat('Tokens', a.tokens),
           // Codex: não grava custo, só tokens.
-          ...(a.cost !== null ? stat('Custo', a.cost) : [h('dt', { text: 'Custo' }), h('dd', { text: 'só tokens', title: 'O Codex não grava custo, só tokens' })]),
+          ...(a.cost !== null ? stat(tr('Custo'), a.cost) : [h('dt', { text: tr('Custo') }), h('dd', { text: tr('só tokens'), title: tr('O Codex não grava custo, só tokens') })]),
         ),
       );
       setStyleVar(card, '--acc', a.color);

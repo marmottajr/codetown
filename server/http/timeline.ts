@@ -10,6 +10,7 @@ import { pipeline } from 'node:stream';
 import { createGzip } from 'node:zlib';
 import { listTimelineDays, timelineFile } from '../history/timeline';
 import { sendJson } from './app';
+import { tr } from '../../shared/i18n';
 
 const DAYS_PATH = '/api/timeline/days';
 const DAY_ROUTE = /^\/api\/timeline\/([^/]+)$/;
@@ -29,7 +30,7 @@ export function createTimelineHandler(opts: TimelineRoutesOptions): (req: Incomi
     const method = req.method ?? 'GET';
     if (method !== 'GET' && method !== 'HEAD') {
       res.setHeader('Allow', 'GET');
-      sendJson(res, 405, { error: 'método não permitido' });
+      sendJson(res, 405, { error: tr('método não permitido') });
       return true;
     }
     if (path === DAYS_PATH) {
@@ -45,7 +46,7 @@ export function createTimelineHandler(opts: TimelineRoutesOptions): (req: Incomi
     }
     const file = timelineFile(opts.dir, day);
     if (!file) {
-      sendJson(res, 400, { error: 'dia inválido: use AAAA-MM-DD' });
+      sendJson(res, 400, { error: tr('dia inválido: use AAAA-MM-DD') });
       return true;
     }
     let size: number;
@@ -54,7 +55,7 @@ export function createTimelineHandler(opts: TimelineRoutesOptions): (req: Incomi
       if (!st.isFile()) throw new Error('não é arquivo');
       size = st.size;
     } catch {
-      sendJson(res, 404, { error: 'nada gravado neste dia' });
+      sendJson(res, 404, { error: tr('nada gravado neste dia') });
       return true;
     }
     sendDay(req, res, file, size, method === 'HEAD');

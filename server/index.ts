@@ -35,6 +35,7 @@ import { CodexHistory } from './sources/codex/history';
 import { CodexSource } from './sources/codex/source';
 import { createBuildReader } from './build';
 import { UpdateChecker } from './updates/checker';
+import { tr } from '../shared/i18n';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -235,7 +236,7 @@ server.on('request', (req, res) => {
     if (!api(req, res, url)) fallback(req, res, url);
   } catch (err) {
     log.warn(`Erro ao responder ${req.method} ${url.pathname}: ${errMsg(err)}`);
-    if (!res.headersSent) sendJson(res, 500, { error: 'erro interno' });
+    if (!res.headersSent) sendJson(res, 500, { error: tr('erro interno') });
     else res.destroy();
   }
 });

@@ -47,6 +47,7 @@ import {
   type RolloutMeta,
 } from './rollout';
 import { createCodexTerminalParser } from './terminal';
+import { tr } from '../../../shared/i18n';
 
 /** Idade mínima do lock para valer como sessão aberta (os locks de manutenção duram menos). */
 export const LOCK_SETTLE_MS = 3_000;
@@ -70,8 +71,8 @@ const PREFIX_HISTORY = 120;
 const BACKLOG_MAX = 400;
 /** Conta sem sessão aberta ao subir: quantos rollouts recentes tentar até achar um com o uso do plano. */
 const SEED_USAGE_FILES = 8;
-const MAIN_ROLE = 'Agente principal (Codex)';
-const SUB_ROLE = 'Subagente (Codex)';
+const MAIN_ROLE = tr('Agente principal (Codex)');
+const SUB_ROLE = tr('Subagente (Codex)');
 
 const HOOK_EVENTS = new Set([
   'SessionStart',
@@ -856,7 +857,7 @@ export class CodexSource implements AgentSource, CodexLive {
         break;
       }
       case 'PermissionRequest':
-        this.decide(t, 'waiting', now, 'aprovar um comando', true);
+        this.decide(t, 'waiting', now, tr('aprovar um comando'), true);
         break;
       case 'Stop':
       case 'Interrupt':

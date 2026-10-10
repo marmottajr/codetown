@@ -13,6 +13,7 @@ import type { UiComponent, UiContext } from './context';
 import { h, iconButton, setAttr, setHidden, setStyleVar, setText, setTitle } from './dom';
 import { formatClock } from './format';
 import { pixelIcon } from './icons';
+import { intlLocale, tr } from '../../../shared/i18n';
 
 export const SPEEDS = [60, 180, 600] as const;
 export type Speed = (typeof SPEEDS)[number];
@@ -42,13 +43,13 @@ export const TIMELAPSE_ICONS = {
   peak: pixelIcon(['#####', '.###.', '..#..']),
 };
 
-const dayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' });
+const dayFmt = new Intl.DateTimeFormat(intlLocale(), { weekday: 'short', day: 'numeric', month: 'short' });
 const hhmm = (at: number) => formatClock(at, false);
 
 /** "Hoje", "Ontem" ou "ter., 6 de out.". */
 export function dayLabel(day: string, today: string): string {
-  if (day === today) return 'Hoje';
-  if (day === shiftDay(today, -1)) return 'Ontem';
+  if (day === today) return tr('Hoje');
+  if (day === shiftDay(today, -1)) return tr('Ontem');
   return dayFmt.format(dayStart(day));
 }
 
@@ -119,11 +120,11 @@ export class TimelapsePlayer implements UiComponent {
   private badgeNote: HTMLElement;
 
   constructor(private ctx: UiContext) {
-    this.playBtn = iconButton(TIMELAPSE_ICONS.play, 'Reproduzir', () => this.togglePlay(), 'ui-lapse__play');
+    this.playBtn = iconButton(TIMELAPSE_ICONS.play, tr('Reproduzir'), () => this.togglePlay(), 'ui-lapse__play');
     this.timeEl = h('strong', { class: 'ui-lapse__time', text: '--:--' });
     this.spanEl = h('span', { class: 'ui-lapse__span' });
-    this.daySel = h('select', { class: 'ui-lapse__day', attrs: { 'aria-label': 'Dia gravado' }, on: { change: () => void this.loadDay(this.daySel.value) } });
-    const speedGroup = h('div', { class: 'ui-seg ui-lapse__speed', role: 'radiogroup', attrs: { 'aria-label': 'Velocidade' } });
+    this.daySel = h('select', { class: 'ui-lapse__day', attrs: { 'aria-label': tr('Dia gravado') }, on: { change: () => void this.loadDay(this.daySel.value) } });
+    const speedGroup = h('div', { class: 'ui-seg ui-lapse__speed', role: 'radiogroup', attrs: { 'aria-label': tr('Velocidade') } });
     for (const s of SPEEDS) {
       const b = h('button', { class: 'ui-seg__opt', type: 'button', role: 'radio', text: `${s}×`, title: speedHint(s), attrs: { 'aria-checked': 'false' } });
       b.addEventListener('click', () => {
@@ -135,18 +136,18 @@ export class TimelapsePlayer implements UiComponent {
     }
     this.demoBtn = h(
       'button',
-      { class: 'ui-btn ui-btn--sm ui-lapse__demo', type: 'button', text: 'Demonstração', title: 'Mostrar também os agentes do modo demonstração gravados neste dia', hidden: true },
+      { class: 'ui-btn ui-btn--sm ui-lapse__demo', type: 'button', text: tr('Demonstração'), title: tr('Mostrar também os agentes do modo demonstração gravados neste dia'), hidden: true },
     );
     this.demoBtn.addEventListener('click', () => {
       this.includeDemo = !this.includeDemo;
       if (this.active) this.seek(this.t);
       this.ctx.invalidate();
     });
-    const liveBtn = h('button', { class: 'ui-btn ui-btn--sm ui-lapse__live', type: 'button', title: 'Sair do timelapse e voltar ao escritório ao vivo (L)' }, h('span', { class: 'ui-lapse__live-dot', attrs: { 'aria-hidden': 'true' } }), 'Voltar ao vivo');
+    const liveBtn = h('button', { class: 'ui-btn ui-btn--sm ui-lapse__live', type: 'button', title: tr('Sair do timelapse e voltar ao escritório ao vivo (L)') }, h('span', { class: 'ui-lapse__live-dot', attrs: { 'aria-hidden': 'true' } }), tr('Voltar ao vivo'));
     liveBtn.addEventListener('click', () => this.close());
 
     this.chart = h('canvas', { class: 'ui-lapse__chart', attrs: { 'aria-hidden': 'true' } });
-    this.range = h('input', { class: 'ui-lapse__range', type: 'range', attrs: { min: 0, max: 0, step: STEP_S, value: 0, 'aria-label': 'Momento da reprodução' } });
+    this.range = h('input', { class: 'ui-lapse__range', type: 'range', attrs: { min: 0, max: 0, step: STEP_S, value: 0, 'aria-label': tr('Momento da reprodução') } });
     this.range.addEventListener('input', () => this.scrub(this.rangeTime(), false));
     this.range.addEventListener('change', () => this.scrub(this.rangeTime(), true));
     this.range.addEventListener('keydown', (e) => {
@@ -162,7 +163,7 @@ export class TimelapsePlayer implements UiComponent {
 
     this.el = h(
       'section',
-      { class: 'ui-panel ui-lapse', hidden: true, attrs: { 'aria-label': 'Timelapse do dia' } },
+      { class: 'ui-panel ui-lapse', hidden: true, attrs: { 'aria-label': tr('Timelapse do dia') } },
       h(
         'div',
         { class: 'ui-lapse__row' },
@@ -216,7 +217,7 @@ export class TimelapsePlayer implements UiComponent {
     this.open = true;
     this.cache.clear();
     this.status = 'loading';
-    this.message = 'Carregando os dias gravados…';
+    this.message = tr('Carregando os dias gravados…');
     this.ctx.invalidate();
     this.abort?.abort();
     const abort = (this.abort = new AbortController());
@@ -227,8 +228,8 @@ export class TimelapsePlayer implements UiComponent {
       if (!r.days.length) {
         this.status = 'empty';
         this.message = r.recording
-          ? 'Nada gravado ainda: o Habblaud grava o escritório enquanto está ligado. Volte daqui a pouco.'
-          : 'A gravação está desligada neste servidor (HABBLAUD_TIMELINE=0) e não há dias gravados.';
+          ? tr('Nada gravado ainda: o Habblaud grava o escritório enquanto está ligado. Volte daqui a pouco.')
+          : tr('A gravação está desligada neste servidor (HABBLAUD_TIMELINE=0) e não há dias gravados.');
         this.ctx.invalidate();
         return;
       }
@@ -237,7 +238,7 @@ export class TimelapsePlayer implements UiComponent {
     } catch (err) {
       if (abort.signal.aborted) return;
       this.status = 'error';
-      this.message = 'Não foi possível buscar a linha do tempo no servidor.';
+      this.message = tr('Não foi possível buscar a linha do tempo no servidor.');
       console.warn('[timelapse]', err);
       this.ctx.invalidate();
     }
@@ -252,7 +253,7 @@ export class TimelapsePlayer implements UiComponent {
     this.exit();
     this.status = 'idle';
     this.ctx.invalidate();
-    this.ctx.announce('De volta ao escritório ao vivo.');
+    this.ctx.announce(tr('De volta ao escritório ao vivo.'));
   }
 
   render(): void {
@@ -274,9 +275,9 @@ export class TimelapsePlayer implements UiComponent {
     this.daySel.disabled = !this.days.length;
 
     this.playBtn.innerHTML = this.playing ? TIMELAPSE_ICONS.pause : TIMELAPSE_ICONS.play;
-    const playLabel = this.playing ? 'Pausar' : r && this.t >= r.to ? 'Reproduzir de novo' : 'Reproduzir';
+    const playLabel = this.playing ? tr('Pausar') : r && this.t >= r.to ? tr('Reproduzir de novo') : tr('Reproduzir');
     setAttr(this.playBtn, 'aria-label', playLabel);
-    setTitle(this.playBtn, `${playLabel} (espaço na linha do tempo)`);
+    setTitle(this.playBtn, tr('{0} (espaço na linha do tempo)', [playLabel]));
     for (const [s, b] of this.speedBtns) setAttr(b, 'aria-checked', String(s === this.speed));
     setHidden(this.demoBtn, !(r?.hasDemo && r.hasReal));
     this.demoBtn.classList.toggle('is-on', this.includeDemo);
@@ -313,7 +314,7 @@ export class TimelapsePlayer implements UiComponent {
     let replay = this.cache.get(day);
     if (!replay) {
       this.status = 'loading';
-      this.message = 'Carregando o dia…';
+      this.message = tr('Carregando o dia…');
       this.ctx.invalidate();
       const abort = this.abort ?? new AbortController();
       try {
@@ -321,7 +322,7 @@ export class TimelapsePlayer implements UiComponent {
       } catch (err) {
         if (abort.signal.aborted || !this.open || seq !== this.loadSeq) return;
         this.status = 'error';
-        this.message = 'Não foi possível carregar este dia.';
+        this.message = tr('Não foi possível carregar este dia.');
         console.warn('[timelapse]', err);
         this.ctx.invalidate();
         return;
@@ -332,7 +333,7 @@ export class TimelapsePlayer implements UiComponent {
     }
     if (replay.empty) {
       this.status = 'empty';
-      this.message = 'Nada gravado neste dia.';
+      this.message = tr('Nada gravado neste dia.');
       this.ctx.invalidate();
       return;
     }
@@ -390,7 +391,7 @@ export class TimelapsePlayer implements UiComponent {
     this.renderClock();
     if (end) {
       this.playing = false;
-      this.ctx.announce('Fim da gravação deste dia.');
+      this.ctx.announce(tr('Fim da gravação deste dia.'));
       this.ctx.invalidate();
       return;
     }
@@ -468,7 +469,7 @@ export class TimelapsePlayer implements UiComponent {
     const today = dayKey(Date.now());
     setText(this.badgeDay, r.day === today ? '' : dayLabel(r.day, today));
     r.moveTo(this.t);
-    setText(this.badgeNote, r.isOff(this.t) ? (r.limited ? 'gravação pausada (limite do dia)' : 'sem dados (servidor desligado)') : '');
+    setText(this.badgeNote, r.isOff(this.t) ? (r.limited ? tr('gravação pausada (limite do dia)') : tr('sem dados (servidor desligado)')) : '');
     const v = String(Math.round((this.t - r.from) / 1000));
     if (this.range.value !== v && document.activeElement !== this.range) this.range.value = v;
     const p = r.to > r.from ? ((this.t - r.from) / (r.to - r.from)) * 100 : 0;
@@ -523,7 +524,7 @@ export class TimelapsePlayer implements UiComponent {
       }
     }
     for (const p of r.peaks(view)) {
-      const label = `Pico às ${hhmm(p.at)}: ${p.working} ${p.working === 1 ? 'agente trabalhando' : 'agentes trabalhando'}`;
+      const label = tr('Pico às {0}: {1} {2}', [hhmm(p.at), p.working, p.working === 1 ? tr('agente trabalhando') : tr('agentes trabalhando')]);
       const btn = h('button', { class: 'ui-lapse__peak', type: 'button', title: label, attrs: { 'aria-label': label }, style: `left: ${((p.at - r.from) / span) * 100}%` });
       btn.innerHTML = TIMELAPSE_ICONS.peak;
       btn.addEventListener('click', () => {
@@ -540,5 +541,5 @@ export class TimelapsePlayer implements UiComponent {
 
 /** "180× — 1 min de reprodução = 3 h do dia". */
 function speedHint(s: Speed): string {
-  return `${s}× — 1 min de reprodução = ${s / 60} h do dia`;
+  return tr('{0}× — 1 min de reprodução = {1} h do dia', [s, s / 60]);
 }

@@ -35,6 +35,7 @@ import { UpdateToaster } from './version';
 import { TopBar } from './topbar';
 import { UpdateBanner } from './update';
 import { FreeArea } from './viewport';
+import { tr } from '../../../shared/i18n';
 
 /** Relógio dos tempos relativos ("há 5 s"). */
 const CLOCK_MS = 5_000;
@@ -292,7 +293,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
       case 'F':
         e.preventDefault();
         if (selection?.type === 'agent') drawer.toggleFollow();
-        else ctx.announce('Selecione um agente para seguir.');
+        else ctx.announce(tr('Selecione um agente para seguir.'));
         break;
       case 't':
       case 'T':
@@ -311,7 +312,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
         e.preventDefault();
         const next = nextPermissionAgent(store.snapshot?.agents ?? [], selection?.type === 'agent' ? selection.id : undefined);
         if (next) focusPermission(ctx, next.id);
-        else ctx.announce('Nenhum pedido de permissão ou pergunta para responder agora.');
+        else ctx.announce(tr('Nenhum pedido de permissão ou pergunta para responder agora.'));
         break;
       }
       case 'o':
@@ -339,9 +340,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi)
   function toggleTerminal(): void {
     const id = selection?.type === 'agent' ? selection.id : null;
     if (terminal.isOpen && (id === null || terminal.agentId === id)) terminal.close();
-    else if (id === null) ctx.announce('Selecione um agente para abrir o terminal.');
+    else if (id === null) ctx.announce(tr('Selecione um agente para abrir o terminal.'));
     else if (!store.snapshot?.meta.terminal) ctx.announce(`${TERMINAL_UNAVAILABLE_HINT}.`);
-    else if (!ctx.agent(id)) ctx.announce('O agente já saiu do escritório.');
+    else if (!ctx.agent(id)) ctx.announce(tr('O agente já saiu do escritório.'));
     else terminal.open(id);
   }
 

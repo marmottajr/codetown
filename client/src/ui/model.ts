@@ -2,14 +2,15 @@
 // Funções puras (sem DOM), testadas em ui/model.test.ts.
 import type { AccountInfo, Activity, AgentInfo, AgentStatus, OfficeSnapshot, RoomInfo, ShellJob, TaskItem } from '../../../shared/types';
 import { formatElapsed, normalizeSearch } from './format';
+import { tr } from '../../../shared/i18n';
 
 export const STATUS_LABEL: Record<AgentStatus, string> = {
-  working: 'Trabalhando',
-  waiting: 'Precisa de você',
-  shell: 'Esperando o shell',
-  idle: 'Ocioso',
-  done: 'Concluído',
-  offline: 'Saindo',
+  working: tr('Trabalhando'),
+  waiting: tr('Precisa de você'),
+  shell: tr('Esperando o shell'),
+  idle: tr('Ocioso'),
+  done: tr('Concluído'),
+  offline: tr('Saindo'),
 };
 
 /** Ordem de urgência (menor = mais urgente), usada para destacar quem precisa de atenção. */
@@ -23,24 +24,24 @@ export function statusLabel(status: AgentStatus): string {
 export function activityFallback(agent: Pick<AgentInfo, 'status' | 'waitingFor'>): string {
   switch (agent.status) {
     case 'working':
-      return 'Trabalhando…';
+      return tr('Trabalhando…');
     case 'waiting':
-      return agent.waitingFor ? `Precisa de você: ${agent.waitingFor}` : 'Precisa de você';
+      return agent.waitingFor ? tr('Precisa de você: {0}', [agent.waitingFor]) : tr('Precisa de você');
     case 'shell':
-      return 'Esperando o shell terminar';
+      return tr('Esperando o shell terminar');
     case 'done':
-      return 'Concluiu a tarefa';
+      return tr('Concluiu a tarefa');
     case 'offline':
-      return 'Saindo do escritório';
+      return tr('Saindo do escritório');
     default:
-      return 'Aguardando instruções';
+      return tr('Aguardando instruções');
   }
 }
 
 /** Selo de papel: "Agente principal" ou o tipo do subagente ("Explore", "Plan"...). */
 export function roleLabel(agent: Pick<AgentInfo, 'kind' | 'role'>): string {
-  if (agent.kind === 'main') return agent.role || 'Agente principal';
-  return agent.role || 'Subagente';
+  if (agent.kind === 'main') return agent.role || tr('Agente principal');
+  return agent.role || tr('Subagente');
 }
 
 /** Agente ainda "presente" (não está indo embora). */
@@ -176,7 +177,7 @@ export function hasRunningShells(snap: Pick<OfficeSnapshot, 'agents'> | null): b
 /** Selo do tipo de comando. */
 export function shellKindLabel(job: Pick<ShellJob, 'kind' | 'background'>): string {
   if (job.kind === 'monitor') return 'monitor';
-  return job.background ? 'segundo plano' : 'primeiro plano';
+  return job.background ? tr('segundo plano') : tr('primeiro plano');
 }
 
 export interface ShellLine {
@@ -192,7 +193,7 @@ export interface ShellLine {
 
 /** Linha de atividade de quem espera um shell: "⏳ <label> · <tempo>" (e "×N" se vários). */
 export function shellLine(wait: ShellWait, now: number): ShellLine {
-  const label = wait.main?.label?.trim() || (wait.foreground ? 'Esperando o comando terminar' : 'Esperando o shell terminar');
+  const label = wait.main?.label?.trim() || (wait.foreground ? tr('Esperando o comando terminar') : tr('Esperando o shell terminar'));
   const time = formatElapsed(now - wait.since);
   const n = wait.jobs.length;
   const count = n > 1 ? `×${n}` : '';
@@ -201,11 +202,11 @@ export function shellLine(wait: ShellWait, now: number): ShellLine {
 
 /** Texto da caixa "Esperando o shell". */
 export function shellBoxText(wait: Pick<ShellWait, 'foreground' | 'jobs'>): string {
-  if (wait.foreground) return 'Está parado num comando no terminal, esperando ele terminar para continuar o turno.';
+  if (wait.foreground) return tr('Está parado num comando no terminal, esperando ele terminar para continuar o turno.');
   const n = wait.jobs.length;
   return n > 1
-    ? `Terminou o turno e está esperando ${n} shells terminarem. A cada um que termina, o agente recebe o resultado.`
-    : 'Terminou o turno e está esperando o shell terminar. Quando ele terminar, o agente recebe o resultado.';
+    ? tr('Terminou o turno e está esperando {0} shells terminarem. A cada um que termina, o agente recebe o resultado.', [n])
+    : tr('Terminou o turno e está esperando o shell terminar. Quando ele terminar, o agente recebe o resultado.');
 }
 
 export type ShellStage = 'popcorn' | 'spin' | 'cobweb' | 'nap';
@@ -229,29 +230,29 @@ export const SHELL_STAGES: readonly ShellStageInfo[] = [
     stage: 'popcorn',
     from: 0,
     emoji: '🍿',
-    text: 'Comendo pipoca e assistindo ao terminal',
-    help: 'Até 3 min: recosta na cadeira com um balde de pipoca e assiste ao terminal como se fosse um filme.',
+    text: tr('Comendo pipoca e assistindo ao terminal'),
+    help: tr('Até 3 min: recosta na cadeira com um balde de pipoca e assiste ao terminal como se fosse um filme.'),
   },
   {
     stage: 'spin',
     from: 3 * MIN,
     emoji: '🪑',
-    text: 'A pipoca acabou: girando na cadeira',
-    help: 'De 3 a 10 min: a pipoca acaba; braços cruzados, dedos batendo e, de vez em quando, um giro completo na cadeira.',
+    text: tr('A pipoca acabou: girando na cadeira'),
+    help: tr('De 3 a 10 min: a pipoca acaba; braços cruzados, dedos batendo e, de vez em quando, um giro completo na cadeira.'),
   },
   {
     stage: 'cobweb',
     from: 10 * MIN,
     emoji: '🕸️',
-    text: 'Já tem teia de aranha na cadeira',
-    help: 'Depois de 10 min: aparece uma teia de aranha na cadeira (ela cresce depois de 20 min) e escapa um bocejo.',
+    text: tr('Já tem teia de aranha na cadeira'),
+    help: tr('Depois de 10 min: aparece uma teia de aranha na cadeira (ela cresce depois de 20 min) e escapa um bocejo.'),
   },
   {
     stage: 'nap',
     from: 25 * MIN,
     emoji: '😴',
-    text: 'Cochilou esperando o shell',
-    help: 'Depois de 25 min: cochila na mesa, coberto de teia.',
+    text: tr('Cochilou esperando o shell'),
+    help: tr('Depois de 25 min: cochila na mesa, coberto de teia.'),
   },
 ];
 
@@ -422,7 +423,7 @@ export function shortcutHint(accounts: readonly Pick<AccountInfo, 'short'>[]): s
   const keys = accounts.map((a) => a.short.toLowerCase()).filter((s) => /^[a-z0-9]{1,3}$/.test(s));
   if (keys.length === 0) return '';
   if (keys.length === 1) return `atalho ${keys[0]}`;
-  return `atalhos ${keys.slice(0, -1).join(', ')} ou ${keys[keys.length - 1]}`;
+  return tr('atalhos {0} ou {1}', [keys.slice(0, -1).join(', '), keys[keys.length - 1]]);
 }
 
 /** Mescla histórico longo (servidor) com as atividades recentes, sem duplicar, do mais antigo ao mais recente. */

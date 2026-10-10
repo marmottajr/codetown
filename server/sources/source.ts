@@ -16,6 +16,7 @@ import type { Provider, RecentSession, SourceInfo } from '../../shared/types';
 import { errMsg, log } from '../log';
 import { HISTORY_LIMIT } from './history';
 import { createTerminalParser, type TerminalParser } from './terminal';
+import { tr } from '../../shared/i18n';
 
 /** Uma fonte de agentes: observa as sessões abertas de uma ferramenta e alimenta o Office. */
 export interface AgentSource {
@@ -178,6 +179,6 @@ export class HistorySet implements SessionLookup {
 
   resolve(account: string, sessionId: string): HistoryResolveResult {
     const owner = this.list_.find((p) => p.hasAccount(account)) ?? this.list_[0];
-    return owner ? owner.resolve(account, sessionId) : { status: 404, error: 'conta desconhecida' };
+    return owner ? owner.resolve(account, sessionId) : { status: 404, error: tr('conta desconhecida') };
   }
 }

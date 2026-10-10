@@ -7,6 +7,30 @@ import type { UiPrefs } from './prefs';
 import { SoundSettingsGroup } from './settings-sound';
 import type { SoundControl } from './sound';
 import { AboutGroup } from './version';
+import { LOCALE_STORAGE_KEY, LOCALES, normalizeLocale, tr, type Locale } from '../../../shared/i18n';
+
+type LanguageChoice = 'auto' | Locale;
+
+/** Idioma escolhido nas Configurações ("auto" = o do navegador). */
+function savedLanguage(): LanguageChoice {
+  try {
+    return normalizeLocale(localStorage.getItem(LOCALE_STORAGE_KEY)) ?? 'auto';
+  } catch {
+    return 'auto';
+  }
+}
+
+/** Salva a escolha e recarrega: os textos são montados uma vez, ao carregar a página. */
+function pickLanguage(v: LanguageChoice): void {
+  if (v === savedLanguage()) return;
+  try {
+    if (v === 'auto') localStorage.removeItem(LOCALE_STORAGE_KEY);
+    else localStorage.setItem(LOCALE_STORAGE_KEY, v);
+  } catch {
+    return;
+  }
+  location.reload();
+}
 
 type BoolPref = { [K in keyof UiPrefs]: UiPrefs[K] extends boolean ? K : never }[keyof UiPrefs];
 
@@ -61,6 +85,7 @@ export class SettingsPopover implements UiComponent {
   private bubbles: ReturnType<typeof segmented<UiPrefs['bubbles']>>;
   private liveliness: ReturnType<typeof segmented<UiPrefs['liveliness']>>;
   private daylight: ReturnType<typeof segmented<UiPrefs['daylight']>>;
+  private language: ReturnType<typeof segmented<LanguageChoice>>;
   private soundGroup: SoundSettingsGroup;
   private demoGroup: HTMLElement;
   private about: AboutGroup;
@@ -80,54 +105,64 @@ export class SettingsPopover implements UiComponent {
     const flip = (key: BoolPref) => () => ctx.updatePrefs({ [key]: !ctx.prefs[key] } as Partial<UiPrefs>);
 
     this.bubbles = segmented<UiPrefs['bubbles']>(
-      'Balões de atividade',
+      tr('Balões de atividade'),
       [
-        ['all', 'Todos'],
-        ['important', 'Importantes'],
-        ['none', 'Nenhum'],
+        ['all', tr('Todos')],
+        ['important', tr('Importantes')],
+        ['none', tr('Nenhum')],
       ],
       (v) => ctx.updatePrefs({ bubbles: v }),
     );
     this.liveliness = segmented<UiPrefs['liveliness']>(
-      'Movimento pelo escritório',
+      tr('Movimento pelo escritório'),
       [
-        ['calm', 'Calmo'],
-        ['normal', 'Normal'],
-        ['lively', 'Agitado'],
+        ['calm', tr('Calmo')],
+        ['normal', tr('Normal')],
+        ['lively', tr('Agitado')],
       ],
       (v) => ctx.updatePrefs({ liveliness: v }),
     );
     this.daylight = segmented<UiPrefs['daylight']>(
-      'Ciclo dia/noite',
+      tr('Ciclo dia/noite'),
       [
-        ['auto', 'Automático'],
-        ['day', 'Sempre dia'],
-        ['night', 'Sempre noite'],
+        ['auto', tr('Automático')],
+        ['day', tr('Sempre dia')],
+        ['night', tr('Sempre noite')],
       ],
       (v) => ctx.updatePrefs({ daylight: v }),
     );
-    this.daylight.row.append(h('span', { class: 'ui-set__hint', text: 'Automático: céu, luzes e sol nas janelas seguem a hora local.' }));
+    this.daylight.row.append(h('span', { class: 'ui-set__hint', text: tr('Automático: céu, luzes e sol nas janelas seguem a hora local.') }));
     this.soundGroup = new SoundSettingsGroup(ctx, sound);
+
+    // Nomes dos idiomas sempre na própria língua, para quem não entende o idioma atual achar o seu.
+    this.language = segmented<LanguageChoice>(
+      tr('Idioma da interface'),
+      [['auto', tr('Automático')], ...LOCALES.map((l): [LanguageChoice, string] => [l.id, l.name])],
+      (v) => pickLanguage(v),
+    );
+    this.language.row.append(
+      h('span', { class: 'ui-set__hint', text: tr('Os textos de atividade seguem o idioma do computador onde o Habblaud roda (ou HABBLAUD_LANG).') }),
+    );
 
     this.demoGroup = h(
       'div',
       { class: 'ui-set-group' },
-      h('h3', { text: 'Dados' }),
-      sw('demo', 'Modo demonstração', 'Coloca agentes fictícios no escritório, junto com os reais.', () => void this.toggleDemo()),
+      h('h3', { text: tr('Dados') }),
+      sw('demo', tr('Modo demonstração'), tr('Coloca agentes fictícios no escritório, junto com os reais.'), () => void this.toggleDemo()),
     );
 
     this.about = new AboutGroup(ctx);
 
-    const close = iconButton(ICONS.close, 'Fechar configurações', () => this.hide(), 'ui-icon-btn--sm');
+    const close = iconButton(ICONS.close, tr('Fechar configurações'), () => this.hide(), 'ui-icon-btn--sm');
     this.el = h(
       'div',
-      { class: 'ui-popover ui-settings', role: 'dialog', tabIndex: -1, attrs: { 'aria-label': 'Configurações', id: 'ui-settings', popover: 'auto' } },
-      h('div', { class: 'ui-popover__head' }, h('h2', { text: 'Configurações' }), close),
+      { class: 'ui-popover ui-settings', role: 'dialog', tabIndex: -1, attrs: { 'aria-label': tr('Configurações'), id: 'ui-settings', popover: 'auto' } },
+      h('div', { class: 'ui-popover__head' }, h('h2', { text: tr('Configurações') }), close),
       h(
         'div',
         { class: 'ui-set-group' },
-        h('h3', { text: 'Escritório' }),
-        sw('showNames', 'Mostrar nomes', 'Etiqueta com o nome acima de cada personagem.', flip('showNames')),
+        h('h3', { text: tr('Escritório') }),
+        sw('showNames', tr('Mostrar nomes'), tr('Etiqueta com o nome acima de cada personagem.'), flip('showNames')),
         this.bubbles.row,
         this.liveliness.row,
         this.daylight.row,
@@ -135,10 +170,11 @@ export class SettingsPopover implements UiComponent {
       h(
         'div',
         { class: 'ui-set-group' },
-        h('h3', { text: 'Avisos' }),
-        sw('browserNotifications', 'Notificações do navegador', 'Avisa quando alguém precisa de você e a aba está em segundo plano.', () => void this.toggleNotifications()),
+        h('h3', { text: tr('Avisos') }),
+        sw('browserNotifications', tr('Notificações do navegador'), tr('Avisa quando alguém precisa de você e a aba está em segundo plano.'), () => void this.toggleNotifications()),
       ),
       this.soundGroup.el,
+      h('div', { class: 'ui-set-group' }, h('h3', { text: tr('Idioma') }), this.language.row),
       this.demoGroup,
       this.about.el,
     );
@@ -200,6 +236,7 @@ export class SettingsPopover implements UiComponent {
     this.bubbles.set(p.bubbles);
     this.liveliness.set(p.liveliness);
     this.daylight.set(p.daylight);
+    this.language.set(savedLanguage());
     this.soundGroup.render();
     setHidden(this.demoGroup, this.ctx.store.mock);
     this.about.render();
@@ -208,10 +245,10 @@ export class SettingsPopover implements UiComponent {
     const state = notificationState();
     const hint =
       state === 'unsupported'
-        ? 'Este navegador não oferece notificações.'
+        ? tr('Este navegador não oferece notificações.')
         : state === 'denied'
-          ? 'Bloqueadas pelo navegador: libere nas permissões do site.'
-          : 'Avisa quando alguém precisa de você e a aba está em segundo plano.';
+          ? tr('Bloqueadas pelo navegador: libere nas permissões do site.')
+          : tr('Avisa quando alguém precisa de você e a aba está em segundo plano.');
     setText(notif.hint, hint);
     notif.btn.disabled = state === 'unsupported';
   }
@@ -223,7 +260,7 @@ export class SettingsPopover implements UiComponent {
     }
     const state = await this.notifier.enableBrowserNotifications();
     this.ctx.updatePrefs({ browserNotifications: state === 'granted' });
-    if (state === 'denied') this.ctx.announce('Notificações bloqueadas pelo navegador.');
+    if (state === 'denied') this.ctx.announce(tr('Notificações bloqueadas pelo navegador.'));
   }
 
   private async toggleDemo(): Promise<void> {
@@ -233,9 +270,9 @@ export class SettingsPopover implements UiComponent {
     const enable = !this.ctx.store.snapshot?.meta.demo;
     try {
       const ok = await this.ctx.store.setDemo(enable);
-      this.ctx.announce(ok ? (enable ? 'Modo demonstração ligado.' : 'Modo demonstração desligado.') : 'Não foi possível mudar o modo demonstração.');
+      this.ctx.announce(ok ? (enable ? tr('Modo demonstração ligado.') : tr('Modo demonstração desligado.')) : tr('Não foi possível mudar o modo demonstração.'));
     } catch {
-      this.ctx.announce('Não foi possível falar com o servidor.');
+      this.ctx.announce(tr('Não foi possível falar com o servidor.'));
     } finally {
       this.demoBusy = false;
       this.ctx.invalidate();

@@ -14,6 +14,7 @@ import { sessionDirOf } from './subagents';
 import { createTerminalParser } from './terminal';
 import { createTranscriptState, parseLine, titleOf } from './transcript';
 import { readCustomTitleFile } from './watcher';
+import { tr } from '../../shared/i18n';
 
 /** Janela da listagem: sessões com o transcript modificado nos últimos 7 dias. */
 export const HISTORY_DAYS = 7;
@@ -139,11 +140,11 @@ export class SessionHistory implements HistoryProvider {
    * ter formato de UUID e o arquivo (com links resolvidos) precisa ficar dentro da pasta projects/ da conta.
    */
   resolve(account: string, sessionId: string): ResolveResult {
-    if (!isSessionId(sessionId)) return { status: 400, error: 'id de sessão inválido' };
+    if (!isSessionId(sessionId)) return { status: 400, error: tr('id de sessão inválido') };
     const acc = this.opts.accounts().find((a) => a.id === account);
-    if (!acc) return { status: 404, error: 'conta desconhecida' };
+    if (!acc) return { status: 404, error: tr('conta desconhecida') };
     const projects = join(acc.dir, 'projects');
-    const notFound: ResolveResult = { status: 404, error: 'sessão não encontrada' };
+    const notFound: ResolveResult = { status: 404, error: tr('sessão não encontrada') };
     let root: string;
     let dirs: string[];
     try {

@@ -56,6 +56,7 @@ import {
   updateProviderTag,
   updateStatusDot,
 } from './widgets';
+import { tr } from '../../../shared/i18n';
 
 /** Itens da linha do tempo mostrados de início; "Mostrar mais" acrescenta outro tanto. */
 const TIMELINE_STEP = 15;
@@ -75,7 +76,7 @@ function copyButton(getText: () => string, label: string): HTMLButtonElement {
     const ok = await copyText(getText());
     b.classList.toggle('is-done', ok);
     b.innerHTML = ok ? ICONS.check : ICONS.copy;
-    setTitle(b, ok ? 'Copiado!' : 'Não foi possível copiar');
+    setTitle(b, ok ? tr('Copiado!') : tr('Não foi possível copiar'));
     setTimeout(() => {
       b.classList.remove('is-done');
       b.innerHTML = ICONS.copy;
@@ -86,7 +87,7 @@ function copyButton(getText: () => string, label: string): HTMLButtonElement {
 }
 
 const TASK_MARK: Record<TaskItem['status'], string> = { completed: '✓', in_progress: '◐', pending: '○' };
-const TASK_STATE: Record<TaskItem['status'], string> = { completed: 'concluída', in_progress: 'em andamento', pending: 'pendente' };
+const TASK_STATE: Record<TaskItem['status'], string> = { completed: tr('concluída'), in_progress: tr('em andamento'), pending: 'pendente' };
 
 function createTaskItem(): HTMLElement {
   return h('li', { class: 'ui-task' }, h('span', { class: 'ui-task__mark', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'ui-task__text' }), h('span', { class: 'ui-task__owner' }));
@@ -151,8 +152,8 @@ function createShellItem(): HTMLElement {
   const details = h(
     'details',
     { class: 'ui-shell__cmd' },
-    h('summary', { text: 'Comando' }),
-    h('div', { class: 'ui-shell__cmd-body' }, command, copyButton(() => command.textContent ?? '', 'Copiar comando')),
+    h('summary', { text: tr('Comando') }),
+    h('div', { class: 'ui-shell__cmd-body' }, command, copyButton(() => command.textContent ?? '', tr('Copiar comando'))),
   );
   const li = h('li', { class: 'ui-shell' }, h('div', { class: 'ui-shell__head' }, icon, label, time), h('div', { class: 'ui-shell__meta' }, badge, since), details);
   shellRefs.set(li, { icon, label, time, badge, since, details, command });
@@ -167,14 +168,14 @@ function updateShellItem(li: HTMLElement, j: ShellJob, now: number): void {
   const elapsed = Math.max(0, now - j.startedAt);
   setText(r.time, formatElapsed(elapsed));
   setAttr(r.time, 'datetime', new Date(j.startedAt).toISOString());
-  setTitle(r.time, `Rodando há ${formatDuration(elapsed)} (desde ${formatClock(j.startedAt)})`);
+  setTitle(r.time, tr('Rodando há {0} (desde {1})', [formatDuration(elapsed), formatClock(j.startedAt)]));
   setText(r.badge, shellKindLabel(j));
   setVariant(r.badge, 'ui-shell__badge--', SHELL_KIND_VARIANT(j));
   setText(r.since, `desde ${formatClock(j.startedAt, false)}`);
-  setTitle(r.since, `Iniciado em ${formatDateTime(j.startedAt)} · id ${j.id}`);
+  setTitle(r.since, tr('Iniciado em {0} · id {1}', [formatDateTime(j.startedAt), j.id]));
   setHidden(r.details, !j.command);
   setText(r.command, j.command ?? '');
-  setAttr(li, 'aria-label', `${j.label}, ${shellKindLabel(j)}, rodando há ${formatDuration(elapsed)}`);
+  setAttr(li, 'aria-label', tr('{0}, {1}, rodando há {2}', [j.label, shellKindLabel(j), formatDuration(elapsed)]));
 }
 
 
@@ -271,19 +272,19 @@ class AgentView {
       { class: 'ui-hero__text' },
       h('div', { class: 'ui-hero__line' }, this.name, this.character.button, this.role),
       h('div', { class: 'ui-hero__acc' }, this.accChip, this.accName, this.accProv, this.accEmail),
-      h('div', { class: 'ui-hero__where' }, h('span', { class: 'ui-muted', text: 'Sala' }), this.roomBtn),
+      h('div', { class: 'ui-hero__where' }, h('span', { class: 'ui-muted', text: tr('Sala') }), this.roomBtn),
     );
-    this.gone = h('p', { class: 'ui-gone', text: 'Este agente já saiu do escritório.', hidden: true });
+    this.gone = h('p', { class: 'ui-gone', text: tr('Este agente já saiu do escritório.'), hidden: true });
 
     this.dot = createStatusDot();
     this.statusText = h('span', { class: 'ui-status__text' });
     this.statusSince = h('span', { class: 'ui-status__since' });
-    this.followBtn = h('button', { class: 'ui-btn', type: 'button', attrs: { 'aria-pressed': 'false' }, title: 'Câmera acompanha o agente (F)', on: { click: () => this.toggleFollow() } });
+    this.followBtn = h('button', { class: 'ui-btn', type: 'button', attrs: { 'aria-pressed': 'false' }, title: tr('Câmera acompanha o agente (F)'), on: { click: () => this.toggleFollow() } });
     this.followBtn.innerHTML = ICONS.follow;
-    this.followBtn.append(h('span', { text: 'Seguir' }));
-    const centerBtn = h('button', { class: 'ui-btn', type: 'button', title: 'Levar a câmera até o agente', on: { click: () => ctx.focusSelection() } });
+    this.followBtn.append(h('span', { text: tr('Seguir') }));
+    const centerBtn = h('button', { class: 'ui-btn', type: 'button', title: tr('Levar a câmera até o agente'), on: { click: () => ctx.focusSelection() } });
     centerBtn.innerHTML = ICONS.center;
-    centerBtn.append(h('span', { text: 'Centralizar' }));
+    centerBtn.append(h('span', { text: tr('Centralizar') }));
     const statusRow = h(
       'div',
       { class: 'ui-status' },
@@ -292,7 +293,7 @@ class AgentView {
     );
 
     // Terminal: a conversa da sessão como o Claude Code mostra, ao vivo (só com acesso local).
-    this.termLabel = h('span', { class: 'ui-term-cta__label', text: 'Abrir terminal' });
+    this.termLabel = h('span', { class: 'ui-term-cta__label', text: tr('Abrir terminal') });
     const termIcon = h('span', { class: 'ui-term-cta__icon', attrs: { 'aria-hidden': 'true' } });
     termIcon.innerHTML = ICONS.terminal;
     this.termBtn = h(
@@ -305,14 +306,14 @@ class AgentView {
 
     this.alertText = h('p', { class: 'ui-alert__text' });
     this.alertQuestions = h('div', { class: 'ui-ask', hidden: true });
-    this.alertAnswerHint = h('p', { class: 'ui-ask__answer-hint', hidden: true, text: 'Com o plugin habblaud-permissoes (npm run mod:install), dá para responder as perguntas por aqui.' });
+    this.alertAnswerHint = h('p', { class: 'ui-ask__answer-hint', hidden: true, text: tr('Com o plugin habblaud-permissoes (npm run mod:install), dá para responder as perguntas por aqui.') });
     const alertIcon = h('span', { class: 'ui-alert__icon', attrs: { 'aria-hidden': 'true' } });
     alertIcon.innerHTML = ICONS.hand;
     this.alert = h(
       'div',
       { class: 'ui-alert', role: 'alert', hidden: true },
       alertIcon,
-      h('div', {}, h('strong', { class: 'ui-alert__title', text: 'Precisa de você' }), this.alertText, this.alertQuestions, this.alertAnswerHint),
+      h('div', {}, h('strong', { class: 'ui-alert__title', text: tr('Precisa de você') }), this.alertText, this.alertQuestions, this.alertAnswerHint),
     );
 
     // Esperando o shell: caixa de status (com a fase da espera no escritório) e a lista de comandos rodando.
@@ -325,31 +326,31 @@ class AgentView {
       'div',
       { class: 'ui-alert ui-alert--shell', hidden: true },
       shellIcon,
-      h('div', {}, h('strong', { class: 'ui-alert__title', text: 'Esperando o shell' }), this.shellText, h('p', { class: 'ui-shell-mood' }, this.shellMood, this.shellNext)),
+      h('div', {}, h('strong', { class: 'ui-alert__title', text: tr('Esperando o shell') }), this.shellText, h('p', { class: 'ui-shell-mood' }, this.shellMood, this.shellNext)),
     );
     const shellList = h('ul', { class: 'ui-shells' });
-    this.shellsSec = section('Shells rodando', shellList);
+    this.shellsSec = section(tr('Shells rodando'), shellList);
     this.shells = new KeyedList<ShellJob>(shellList, { key: (j) => j.id, create: createShellItem, update: (li, j) => updateShellItem(li, j, ctx.now()) });
 
     this.actIcon = h('span', { class: 'ui-now__icon', attrs: { 'aria-hidden': 'true' } });
     this.actText = h('span', { class: 'ui-now__text' });
     this.actTime = h('span', { class: 'ui-now__time' });
     this.actDetail = h('pre', { class: 'ui-mono' });
-    this.actDetails = h('details', { class: 'ui-now__details' }, h('summary', { text: 'Detalhes' }), this.actDetail);
-    const nowSec = section('Agora', h('div', { class: 'ui-now' }, this.actIcon, h('div', { class: 'ui-now__body' }, this.actText, this.actTime)), this.actDetails);
+    this.actDetails = h('details', { class: 'ui-now__details' }, h('summary', { text: tr('Detalhes') }), this.actDetail);
+    const nowSec = section(tr('Agora'), h('div', { class: 'ui-now' }, this.actIcon, h('div', { class: 'ui-now__body' }, this.actText, this.actTime)), this.actDetails);
     this.composer = new MessageComposer(ctx, 'drawer');
-    this.msgSec = section('Mandar mensagem', this.composer.el);
+    this.msgSec = section(tr('Mandar mensagem'), this.composer.el);
     this.social = new SocialSection(ctx);
     this.perm = new PermissionCard(ctx);
 
-    this.tasksBar = createProgress('Progresso das tarefas');
+    this.tasksBar = createProgress(tr('Progresso das tarefas'));
     const tasksList = h('ul', { class: 'ui-tasks' });
-    this.tasksSec = section('Tarefas', this.tasksBar, tasksList);
+    this.tasksSec = section(tr('Tarefas'), this.tasksBar, tasksList);
     this.tasks = new KeyedList<TaskItem>(tasksList, { key: (t) => t.id, create: createTaskItem, update: (li, t) => updateTaskItem(li, t) });
 
     const teamList = h('div', { class: 'ui-team' });
-    this.teamEmpty = h('p', { class: 'ui-muted ui-small', text: 'Nenhum subagente no momento.' });
-    this.teamSec = section('Subagentes', teamList, this.teamEmpty);
+    this.teamEmpty = h('p', { class: 'ui-muted ui-small', text: tr('Nenhum subagente no momento.') });
+    this.teamSec = section(tr('Subagentes'), teamList, this.teamEmpty);
     this.team = new KeyedList<AgentInfo>(teamList, {
       key: (a) => a.id,
       create: (a) => createAgentRow(a, (id) => ctx.select({ type: 'agent', id }, { focus: true }), 'sm'),
@@ -358,29 +359,29 @@ class AgentView {
 
     const tl = h('ol', { class: 'ui-timeline' });
     this.timelineMore = h('button', { class: 'ui-btn ui-btn--sm', type: 'button', on: { click: () => this.showTimeline(this.timelineShown + TIMELINE_STEP) } });
-    this.timelineLess = h('button', { class: 'ui-btn ui-btn--sm', type: 'button', text: 'Mostrar menos', on: { click: () => this.showTimeline(TIMELINE_STEP) } });
-    this.timelineSec = section('Linha do tempo', tl, h('div', { class: 'ui-timeline__more' }, this.timelineMore, this.timelineLess));
+    this.timelineLess = h('button', { class: 'ui-btn ui-btn--sm', type: 'button', text: tr('Mostrar menos'), on: { click: () => this.showTimeline(TIMELINE_STEP) } });
+    this.timelineSec = section(tr('Linha do tempo'), tl, h('div', { class: 'ui-timeline__more' }, this.timelineMore, this.timelineLess));
     this.timeline = new KeyedList<Activity>(tl, { key: (a) => a.id, create: createTimelineItem, update: (li, a) => updateTimelineItem(li, a, ctx.now()) });
 
     this.sessionValue = h('span', { class: 'ui-mono-inline' });
     this.linesPlus = h('span', { class: 'ui-plus' });
     this.linesMinus = h('span', { class: 'ui-minus' });
     this.stats = new KvList<StatKey>([
-      ['tools', 'Chamadas de ferramenta'],
-      ['tokensIn', 'Tokens de entrada'],
-      ['tokensOut', 'Tokens de saída'],
-      ['cost', 'Custo estimado'],
-      ['lines', 'Linhas', h('span', { class: 'ui-lines' }, this.linesPlus, this.linesMinus)],
-      ['subs', 'Subagentes disparados'],
-      ['model', 'Modelo'],
+      ['tools', tr('Chamadas de ferramenta')],
+      ['tokensIn', tr('Tokens de entrada')],
+      ['tokensOut', tr('Tokens de saída')],
+      ['cost', tr('Custo estimado')],
+      ['lines', tr('Linhas'), h('span', { class: 'ui-lines' }, this.linesPlus, this.linesMinus)],
+      ['subs', tr('Subagentes disparados')],
+      ['model', tr('Modelo')],
       ['branch', 'Branch'],
-      ['perm', 'Permissões'],
-      ['session', 'Sessão', h('span', { class: 'ui-copy-row' }, this.sessionValue, copyButton(() => this.last?.sessionId ?? '', 'Copiar id da sessão'))],
-      ['start', 'Início'],
-      ['duration', 'Duração'],
-      ['bg', 'Execução'],
+      ['perm', tr('Permissões')],
+      ['session', tr('Sessão'), h('span', { class: 'ui-copy-row' }, this.sessionValue, copyButton(() => this.last?.sessionId ?? '', tr('Copiar id da sessão')))],
+      ['start', tr('Início')],
+      ['duration', tr('Duração')],
+      ['bg', tr('Execução')],
     ]);
-    const statsSec = section('Estatísticas', this.stats.el);
+    const statsSec = section(tr('Estatísticas'), this.stats.el);
     this.codexHint = h('p', { class: 'ui-codex-hint', hidden: true }, ...richText(CODEX_LIVE_HINT));
 
     this.el = h(
@@ -483,7 +484,7 @@ class AgentView {
     setText(this.accEmail, accSub);
     setHidden(this.accEmail, !accSub);
     setText(this.roomName, room?.name ?? a.roomId);
-    setTitle(this.roomBtn, room ? `${room.path}\nClique para ver a sala` : '');
+    setTitle(this.roomBtn, room ? tr('{0}\nClique para ver a sala', [room.path]) : '');
     setHidden(this.gone, !!live);
     this.el.classList.toggle('is-gone', !live);
 
@@ -495,7 +496,7 @@ class AgentView {
     // Parado num comando longo: o "desde" é o início do comando (o status do servidor continua 'working').
     const since = wait?.foreground ? wait.since : a.statusSince;
     setText(this.statusSince, relativeTime(since, now));
-    setTitle(this.statusSince, `Desde ${formatClock(since)}`);
+    setTitle(this.statusSince, tr('Desde {0}', [formatClock(since)]));
     const following = this.ctx.world.getOptions().followSelected;
     setAttr(this.followBtn, 'aria-pressed', String(following));
     this.followBtn.classList.toggle('is-on', following);
@@ -508,8 +509,8 @@ class AgentView {
     if (waiting) {
       const accName = account?.name ?? a.account;
       // Codex: "Vá ao Codex (Conta X)"; sem repetir quando a conta já se chama "Codex".
-      const where = codex ? `ao Codex${/codex/i.test(accName) ? '' : ` (${accName})`}` : `ao terminal da ${accName}`;
-      setText(this.alertText, `Vá ${where} em ${room?.name ?? 'seu projeto'} para responder${a.waitingFor ? `: ${a.waitingFor}` : '.'}`);
+      const where = codex ? tr('ao Codex{0}', [/codex/i.test(accName) ? '' : ` (${accName})`]) : tr('ao terminal da {0}', [accName]);
+      setText(this.alertText, tr('Vá {0} em {1} para responder{2}', [where, room?.name ?? tr('seu projeto'), a.waitingFor ? `: ${a.waitingFor}` : '.']));
     }
     // Perguntas do AskUserQuestion (só leitura): o Codex não pergunta pelo escritório.
     const asking = waiting && !codex && a.activity?.kind === 'ask' ? a.activity : undefined;
@@ -526,9 +527,9 @@ class AgentView {
       setText(this.shellText, shellBoxText(wait));
       const stage = shellStage(now - wait.since);
       setText(this.shellMood, `${stage.emoji} ${stage.text}`);
-      setText(this.shellNext, stage.nextIn !== null ? `Próxima fase em ${formatDuration(Math.max(1_000, stage.nextIn))}` : '');
+      setText(this.shellNext, stage.nextIn !== null ? tr('Próxima fase em {0}', [formatDuration(Math.max(1_000, stage.nextIn))]) : '');
       setHidden(this.shellNext, stage.nextIn === null);
-      setTitle(this.shellNext, 'Quanto falta para o personagem mudar o que faz enquanto espera (veja a Ajuda)');
+      setTitle(this.shellNext, tr('Quanto falta para o personagem mudar o que faz enquanto espera (veja a Ajuda)'));
     }
     // Sem shells próprios, mostra os que ele espera de um subagente.
     const own = live ? visibleShells(a, now) : [];
@@ -566,16 +567,16 @@ class AgentView {
     // Equipe: subagentes (principal) ou responsável (sub).
     if (a.kind === 'main') {
       const subs = sortByUrgency((this.ctx.store.snapshot?.agents ?? []).filter((s) => s.parentId === a.id));
-      setText(this.teamSec.title, 'Subagentes');
+      setText(this.teamSec.title, tr('Subagentes'));
       setText(this.teamSec.extra, subs.length ? String(subs.length) : '');
-      setText(this.teamEmpty, a.stats.subagents ? `Nenhum ativo agora (${plural(a.stats.subagents, 'disparado', 'disparados')} nesta sessão).` : 'Nenhum subagente disparado ainda.');
+      setText(this.teamEmpty, a.stats.subagents ? tr('Nenhum ativo agora ({0} nesta sessão).', [plural(a.stats.subagents, tr('disparado'), tr('disparados'))]) : tr('Nenhum subagente disparado ainda.'));
       setHidden(this.teamEmpty, subs.length > 0);
       this.team.sync(subs);
     } else {
       const parent = a.parentId ? this.ctx.agent(a.parentId) : undefined;
-      setText(this.teamSec.title, 'Responsável');
+      setText(this.teamSec.title, tr('Responsável'));
       setText(this.teamSec.extra, '');
-      setText(this.teamEmpty, 'O agente principal já não está no escritório.');
+      setText(this.teamEmpty, tr('O agente principal já não está no escritório.'));
       setHidden(this.teamEmpty, !!parent);
       this.team.sync(parent ? [parent] : []);
     }
@@ -585,7 +586,7 @@ class AgentView {
     const items = this.history.slice(-this.timelineShown).reverse();
     const hiddenCount = Math.max(0, this.history.length - this.timelineShown);
     setHidden(this.timelineMore, hiddenCount === 0);
-    setText(this.timelineMore, `Mostrar mais ${Math.min(TIMELINE_STEP, hiddenCount)}`);
+    setText(this.timelineMore, tr('Mostrar mais {0}', [Math.min(TIMELINE_STEP, hiddenCount)]));
     setHidden(this.timelineLess, this.timelineShown <= TIMELINE_STEP || this.history.length <= TIMELINE_STEP);
     this.timeline.sync(items);
     setText(this.timelineSec.extra, this.history.length ? String(this.history.length) : '');
@@ -610,7 +611,7 @@ class AgentView {
           { class: 'ui-ask__q' },
           q.header ? h('span', { class: 'ui-ask__tag', text: q.header }) : null,
           h('p', { class: 'ui-ask__question', text: q.question }),
-          q.multiSelect ? h('p', { class: 'ui-ask__hint', text: 'Pode escolher mais de uma' }) : null,
+          q.multiSelect ? h('p', { class: 'ui-ask__hint', text: tr('Pode escolher mais de uma') }) : null,
           h(
             'ol',
             { class: 'ui-ask__opts' },
@@ -632,18 +633,18 @@ class AgentView {
     this.termBtn.classList.toggle('is-disabled', !enabled);
     setAttr(this.termBtn, 'aria-pressed', String(open));
     this.termBtn.classList.toggle('is-on', open);
-    setText(this.termLabel, open ? 'Fechar terminal' : 'Abrir terminal');
+    setText(this.termLabel, open ? tr('Fechar terminal') : tr('Abrir terminal'));
     setTitle(
       this.termBtn,
       open
-        ? 'Fechar o terminal (T)'
+        ? tr('Fechar o terminal (T)')
         : !available
           ? this.ctx.store.replaying
-            ? 'Sem terminal no timelapse: a conversa é a de agora, não a do momento reproduzido.'
+            ? tr('Sem terminal no timelapse: a conversa é a de agora, não a do momento reproduzido.')
             : TERMINAL_UNAVAILABLE_HINT
           : !live
-            ? 'O agente já saiu do escritório.'
-            : `Ver a conversa desta sessão como no ${provider === 'codex' ? 'Codex' : 'terminal do Claude Code'}, ao vivo (T)`,
+            ? tr('O agente já saiu do escritório.')
+            : tr('Ver a conversa desta sessão como no {0}, ao vivo (T)', [provider === 'codex' ? 'Codex' : tr('terminal do Claude Code')]),
     );
   }
 
@@ -663,14 +664,14 @@ class AgentView {
     st.set('model', prettyModel(a.model));
     st.set('branch', a.gitBranch ?? null);
     // Codex: a política de aprovação (quando o servidor a manda) no lugar do modo de permissão do Claude Code.
-    st.label('perm', codex ? 'Aprovações' : 'Permissões');
+    st.label('perm', codex ? tr('Aprovações') : tr('Permissões'));
     st.set('perm', a.kind !== 'main' ? null : codex ? (a.permissionMode ? codexApprovalLabel(a.permissionMode) : null) : permissionLabel(a.permissionMode));
 
     setText(this.sessionValue, a.sessionId);
     setTitle(this.sessionValue, a.sessionId);
     st.set('start', formatDateTime(a.startedAt));
     st.set('duration', formatDuration(now - a.startedAt));
-    st.set('bg', a.background ? 'Em segundo plano' : null);
+    st.set('bg', a.background ? tr('Em segundo plano') : null);
   }
 }
 
@@ -738,7 +739,7 @@ class RoomView {
     // Lápis: o mesmo campo do botão direito na sala (ui/roomrename.ts), aberto embaixo do nome.
     this.renameBtn = iconButton(
       ICONS.pencil,
-      'Renomear sala',
+      tr('Renomear sala'),
       () => {
         const r = this.name.getBoundingClientRect();
         ctx.renameRoom?.(this.id, { x: r.left, y: r.bottom + 6 });
@@ -746,10 +747,10 @@ class RoomView {
       'ui-icon-btn--sm ui-room-hero__rename',
     );
     this.path = h('span', { class: 'ui-room-hero__path' });
-    const centerBtn = h('button', { class: 'ui-btn', type: 'button', title: 'Levar a câmera até a sala', on: { click: () => ctx.focusSelection() } });
+    const centerBtn = h('button', { class: 'ui-btn', type: 'button', title: tr('Levar a câmera até a sala'), on: { click: () => ctx.focusSelection() } });
     centerBtn.innerHTML = ICONS.center;
-    centerBtn.append(h('span', { text: 'Centralizar' }));
-    this.gone = h('p', { class: 'ui-gone', text: 'Esta sala foi fechada: todos os agentes saíram.', hidden: true });
+    centerBtn.append(h('span', { text: tr('Centralizar') }));
+    this.gone = h('p', { class: 'ui-gone', text: tr('Esta sala foi fechada: todos os agentes saíram.'), hidden: true });
 
     const accsEl = h('div', { class: 'ui-acc-list' });
     this.accs = new KeyedList<string>(accsEl, {
@@ -765,21 +766,21 @@ class RoomView {
     });
 
     const agentsList = h('div', { class: 'ui-team' });
-    this.agentsEmpty = h('p', { class: 'ui-muted ui-small', text: 'Ninguém na sala agora.' });
-    this.agentsSec = section('Agentes', agentsList, this.agentsEmpty);
+    this.agentsEmpty = h('p', { class: 'ui-muted ui-small', text: tr('Ninguém na sala agora.') });
+    this.agentsSec = section(tr('Agentes'), agentsList, this.agentsEmpty);
     this.agents = new KeyedList<AgentInfo>(agentsList, {
       key: (a) => a.id,
       create: (a) => createAgentRow(a, (id) => ctx.select({ type: 'agent', id }, { focus: true }), 'sm'),
       update: (row, a) => updateAgentRow(row, a, ctx.account(a.account), false, ctx.now(), ctx.store.snapshot?.agents),
     });
 
-    this.tasksBar = createProgress('Progresso das tarefas da sala');
+    this.tasksBar = createProgress(tr('Progresso das tarefas da sala'));
     const tasksList = h('ul', { class: 'ui-tasks' });
-    this.tasksSec = section('Tarefas', this.tasksBar, tasksList);
+    this.tasksSec = section(tr('Tarefas'), this.tasksBar, tasksList);
     this.tasks = new KeyedList(tasksList, { key: (t) => t.key, create: createTaskItem, update: (li, t) => updateTaskItem(li, t.task, t.owner) });
 
     const feedList = h('ol', { class: 'ui-timeline' });
-    this.feedSec = section('Atividade recente', feedList);
+    this.feedSec = section(tr('Atividade recente'), feedList);
     this.feed = new KeyedList<FeedItem>(feedList, { key: (f) => f.id, create: createTimelineItem, update: (li, f) => updateTimelineItem(li, f.activity, ctx.now(), f.agentName) });
 
     this.el = h(
@@ -789,7 +790,7 @@ class RoomView {
         'div',
         { class: 'ui-room-hero' },
         this.swatch,
-        h('div', { class: 'ui-hero__text' }, h('div', { class: 'ui-room-hero__title' }, this.name, this.renameBtn), h('span', { class: 'ui-copy-row' }, this.path, copyButton(() => this.last?.path ?? '', 'Copiar caminho'))),
+        h('div', { class: 'ui-hero__text' }, h('div', { class: 'ui-room-hero__title' }, this.name, this.renameBtn), h('span', { class: 'ui-copy-row' }, this.path, copyButton(() => this.last?.path ?? '', tr('Copiar caminho')))),
       ),
       this.gone,
       h('div', { class: 'ui-status' }, accsEl, h('span', { class: 'ui-status__actions' }, centerBtn)),
@@ -868,12 +869,12 @@ export class Drawer implements UiComponent {
     this.agentView = new AgentView(ctx, terminal);
     this.roomView = new RoomView(ctx);
     this.heading = h('span', { class: 'ui-drawer__kind' });
-    const close = iconButton(ICONS.close, 'Fechar detalhes (Esc)', () => ctx.select(null));
+    const close = iconButton(ICONS.close, tr('Fechar detalhes (Esc)'), () => ctx.select(null));
     this.body = h('div', { class: 'ui-drawer__body' });
     const bar = h('div', { class: 'ui-drawer__bar' }, this.heading, close);
     this.el = h(
       'aside',
-      { class: 'ui-panel ui-drawer', attrs: { 'aria-label': 'Detalhes', id: 'ui-drawer', 'aria-hidden': 'true' } },
+      { class: 'ui-panel ui-drawer', attrs: { 'aria-label': tr('Detalhes'), id: 'ui-drawer', 'aria-hidden': 'true' } },
       bar,
       this.body,
     );
@@ -911,12 +912,12 @@ export class Drawer implements UiComponent {
     if (sel?.type === 'agent') {
       if (this.agentView.agentId !== sel.id) this.body.scrollTop = 0;
       this.agentView.open(sel.id);
-      setText(this.heading, this.ctx.agent(sel.id)?.kind === 'sub' ? 'Subagente' : 'Agente');
+      setText(this.heading, this.ctx.agent(sel.id)?.kind === 'sub' ? tr('Subagente') : tr('Agente'));
       this.agentView.render();
     } else if (sel?.type === 'room') {
       if (this.roomView.roomId !== sel.id) this.body.scrollTop = 0;
       this.roomView.open(sel.id);
-      setText(this.heading, 'Sala');
+      setText(this.heading, tr('Sala'));
       this.roomView.render();
     }
   }

@@ -10,6 +10,7 @@ import type { UiContext } from './context';
 import { h, iconButton, setAttr, setHidden, setText } from './dom';
 import { ICONS } from './icons';
 import { isLocalHostname } from './permission';
+import { tr } from '../../../shared/i18n';
 
 /** Pixels de tela por pixel do personagem na prévia. */
 const PREVIEW_SCALE = 4;
@@ -40,28 +41,28 @@ export class CharacterEditor {
   private readonly resetBtn: HTMLButtonElement;
 
   constructor(private ctx: UiContext) {
-    this.button = iconButton(ICONS.pencil, 'Editar personagem', () => (this.editing ? this.cancel() : this.start()), 'ui-icon-btn--sm ui-char-edit');
+    this.button = iconButton(ICONS.pencil, tr('Editar personagem'), () => (this.editing ? this.cancel() : this.start()), 'ui-icon-btn--sm ui-char-edit');
     setAttr(this.button, 'aria-expanded', 'false');
     this.button.hidden = true;
 
     this.nameInput = h('input', { class: 'ui-char__name', type: 'text', attrs: { maxlength: NAME_MAX, autocomplete: 'off', spellcheck: 'false' } });
-    this.preview = h('canvas', { class: 'ui-char__preview', role: 'img', attrs: { 'aria-label': 'Prévia do personagem' } });
-    const roll = h('button', { class: 'ui-btn ui-btn--sm', type: 'button', text: 'Sortear', title: 'Sortear outra aparência (desfaz as peças escolhidas)', on: { click: () => this.roll() } });
+    this.preview = h('canvas', { class: 'ui-char__preview', role: 'img', attrs: { 'aria-label': tr('Prévia do personagem') } });
+    const roll = h('button', { class: 'ui-btn ui-btn--sm', type: 'button', text: tr('Sortear'), title: tr('Sortear outra aparência (desfaz as peças escolhidas)'), on: { click: () => this.roll() } });
     this.groups = h('div', { class: 'ui-char__groups' });
     this.error = h('p', { class: 'ui-char__error', role: 'alert', hidden: true });
-    this.saveBtn = h('button', { class: 'ui-btn ui-btn--primary', type: 'button', text: 'Salvar', on: { click: () => void this.save() } });
-    const cancel = h('button', { class: 'ui-btn', type: 'button', text: 'Cancelar', on: { click: () => this.cancel() } });
-    this.resetBtn = h('button', { class: 'ui-link-btn ui-char__reset', type: 'button', text: 'Voltar ao sorteio', on: { click: () => void this.reset() } });
+    this.saveBtn = h('button', { class: 'ui-btn ui-btn--primary', type: 'button', text: tr('Salvar'), on: { click: () => void this.save() } });
+    const cancel = h('button', { class: 'ui-btn', type: 'button', text: tr('Cancelar'), on: { click: () => this.cancel() } });
+    this.resetBtn = h('button', { class: 'ui-link-btn ui-char__reset', type: 'button', text: tr('Voltar ao sorteio'), on: { click: () => void this.reset() } });
     this.el = h(
       'section',
-      { class: 'ui-char', hidden: true, attrs: { 'aria-label': 'Editar personagem' }, on: { keydown: (ev) => this.onKey(ev) } },
+      { class: 'ui-char', hidden: true, attrs: { 'aria-label': tr('Editar personagem') }, on: { keydown: (ev) => this.onKey(ev) } },
       h(
         'div',
         { class: 'ui-char__top' },
         this.preview,
-        h('div', { class: 'ui-char__head' }, h('label', { class: 'ui-char__label' }, h('span', { text: 'Nome' }), this.nameInput), roll),
+        h('div', { class: 'ui-char__head' }, h('label', { class: 'ui-char__label' }, h('span', { text: tr('Nome') }), this.nameInput), roll),
       ),
-      h('p', { class: 'ui-muted ui-small', text: 'Vale para o projeto: a próxima sessão nesta sala chega com este personagem.' }),
+      h('p', { class: 'ui-muted ui-small', text: tr('Vale para o projeto: a próxima sessão nesta sala chega com este personagem.') }),
       this.groups,
       this.error,
       h('div', { class: 'ui-char__actions' }, this.saveBtn, cancel, this.resetBtn),
@@ -87,7 +88,7 @@ export class CharacterEditor {
     setHidden(this.button, !allowed);
     if (this.editing && !allowed) {
       this.close();
-      if (!live || a.status === 'offline') this.ctx.announce('O agente saiu do escritório.');
+      if (!live || a.status === 'offline') this.ctx.announce(tr('O agente saiu do escritório.'));
     }
     if (this.editing && !this.confirmingReset) setHidden(this.resetBtn, !a.custom);
   }
@@ -101,7 +102,7 @@ export class CharacterEditor {
     this.draft = { ...this.base, ...a.parts };
     this.nameInput.value = a.name;
     this.confirmingReset = false;
-    setText(this.resetBtn, 'Voltar ao sorteio');
+    setText(this.resetBtn, tr('Voltar ao sorteio'));
     setHidden(this.resetBtn, !a.custom);
     this.showError(null);
     this.editing = true;
@@ -143,7 +144,7 @@ export class CharacterEditor {
   private async save(): Promise<void> {
     if (this.busy || !this.base || !this.draft) return;
     const name = this.nameInput.value.trim();
-    if (!name) return this.showError('Dê um nome ao personagem.');
+    if (!name) return this.showError(tr('Dê um nome ao personagem.'));
     this.busy = true;
     this.saveBtn.disabled = true;
     const err = await this.ctx.store.saveCharacter(this.agentId, { name, seed: this.seed, parts: changedParts(this.base, this.draft) });
@@ -152,14 +153,14 @@ export class CharacterEditor {
     if (err) return this.showError(err);
     this.close();
     this.button.focus();
-    this.ctx.announce(`Personagem salvo: ${name}.`);
+    this.ctx.announce(tr('Personagem salvo: {0}.', [name]));
   }
 
   private async reset(): Promise<void> {
     if (this.busy) return;
     if (!this.confirmingReset) {
       this.confirmingReset = true;
-      setText(this.resetBtn, 'Confirmar: voltar ao sorteio');
+      setText(this.resetBtn, tr('Confirmar: voltar ao sorteio'));
       return;
     }
     this.busy = true;
@@ -168,7 +169,7 @@ export class CharacterEditor {
     if (err) return this.showError(err);
     this.close();
     this.button.focus();
-    this.ctx.announce('O personagem voltou ao sorteio.');
+    this.ctx.announce(tr('O personagem voltou ao sorteio.'));
   }
 
   private showError(message: string | null): void {

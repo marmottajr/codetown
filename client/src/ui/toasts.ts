@@ -5,6 +5,7 @@ import type { UiComponent, UiContext } from './context';
 import { h, iconButton, prefersReducedMotion, setHidden, setText } from './dom';
 import { ICONS } from './icons';
 import { focusPermission } from './permission';
+import { tr } from '../../../shared/i18n';
 
 const MAX_VISIBLE = 4;
 /** Avisos iguais dentro desta janela viram um só (com contador). */
@@ -29,7 +30,7 @@ export class Toasts implements UiComponent {
   private toasts: Toast[] = [];
 
   constructor(private ctx: UiContext) {
-    this.el = h('div', { class: 'ui-toasts', attrs: { 'aria-live': 'polite', 'aria-relevant': 'additions', 'aria-label': 'Avisos' } });
+    this.el = h('div', { class: 'ui-toasts', attrs: { 'aria-live': 'polite', 'aria-relevant': 'additions', 'aria-label': tr('Avisos') } });
     ctx.store.on('notice', (n) => this.push(n));
   }
 
@@ -81,7 +82,7 @@ export class Toasts implements UiComponent {
     const count = h('span', { class: 'ui-toast__count', hidden: true });
     const body = h(
       'button',
-      { class: 'ui-toast__body', type: 'button', title: n.agentId || n.roomId ? 'Mostrar no escritório' : '' },
+      { class: 'ui-toast__body', type: 'button', title: n.agentId || n.roomId ? tr('Mostrar no escritório') : '' },
       agent ? createAvatar(agent, 'xs') : null,
       h('span', { class: 'ui-toast__text', text: n.text }),
       count,
@@ -94,10 +95,10 @@ export class Toasts implements UiComponent {
     const toast: Toast = { key, notice: n, el, count, repeats: 1, timer: null, remaining: 0, startedAt: 0 };
     if (n.level === 'alert' && n.agentId) {
       const id = n.agentId;
-      toast.answer = h('button', { class: 'ui-toast__answer', type: 'button', text: 'Responder', title: 'Responder pelo escritório (aprovar, recusar ou responder a pergunta)', hidden: !agent?.permission, on: { click: () => focusPermission(this.ctx, id) } });
+      toast.answer = h('button', { class: 'ui-toast__answer', type: 'button', text: tr('Responder'), title: tr('Responder pelo escritório (aprovar, recusar ou responder a pergunta)'), hidden: !agent?.permission, on: { click: () => focusPermission(this.ctx, id) } });
       el.append(toast.answer);
     }
-    el.append(iconButton(ICONS.close, 'Fechar aviso', () => this.dismiss(toast), 'ui-icon-btn--sm ui-toast__close'));
+    el.append(iconButton(ICONS.close, tr('Fechar aviso'), () => this.dismiss(toast), 'ui-icon-btn--sm ui-toast__close'));
     // Pausa o tempo de vida com o mouse em cima.
     el.addEventListener('mouseenter', () => this.pause(toast));
     el.addEventListener('mouseleave', () => this.arm(toast, toast.remaining));

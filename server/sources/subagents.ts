@@ -3,6 +3,7 @@
 //   <projeto>/<sessionId>/subagents/workflows/<runId>/agent-<agentId>.jsonl (+ .meta.json, journal.jsonl)
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tr } from '../../shared/i18n';
 
 export interface SubagentFile {
   agentId: string;
@@ -129,7 +130,7 @@ export function parseJournal(text: string): Map<string, JournalAgent> {
 /** Papel exibido para o subagente. */
 export function subagentRole(meta: SubagentMeta | undefined, spawnType?: string): string {
   const t = meta?.agentType ?? spawnType;
-  if (!t) return 'Subagente';
+  if (!t) return tr('Subagente');
   if (t === 'workflow-subagent') return 'Workflow';
   return t;
 }

@@ -15,6 +15,15 @@ import { SHELL_DONE_TOOL, SHELL_WAIT_TOOL } from '../activity';
 import { hash32 } from '../hash';
 import { MESSAGE_TOOL } from '../messages';
 import { demoPatchText } from './permission';
+import { tr } from '../i18n';
+
+/**
+ * O texto da atividade vem de describeTool, no idioma ativo: compara pelo começo do texto em PT ou da
+ * tradução (o que vem antes da primeira lacuna), para a demonstração funcionar em qualquer idioma.
+ */
+function startsWithText(text: string, key: string): boolean {
+  return text.startsWith(key.split('{0}')[0]) || text.startsWith(tr(key, ['\u0000']).split('\u0000')[0]);
+}
 
 type ToolEntry = Extract<TerminalEntry, { kind: 'tool' }>;
 
@@ -256,7 +265,7 @@ function entriesFor(a: Activity, i: number, ctx: Ctx, out: TerminalEntry[]): voi
       out.push({ kind: 'user', id: `${a.id}:u`, at: a.at, text: detail ?? quoted(a.text) ?? a.text });
       return;
     case 'think': {
-      const text = a.text.startsWith('Pensando') ? (seed % 3 === 0 ? undefined : pick(THOUGHTS, seed >>> 3)) : 'Os subagentes terminaram; vou juntar o que cada um encontrou.';
+      const text = startsWithText(a.text, 'Pensando') ? (seed % 3 === 0 ? undefined : pick(THOUGHTS, seed >>> 3)) : 'Os subagentes terminaram; vou juntar o que cada um encontrou.';
       out.push(text ? { kind: 'thinking', id: `${a.id}:k`, at: a.at, text } : { kind: 'thinking', id: `${a.id}:k`, at: a.at });
       return;
     }
@@ -291,7 +300,7 @@ function entriesFor(a: Activity, i: number, ctx: Ctx, out: TerminalEntry[]): voi
     case 'search': {
       const pattern = detail ?? quoted(a.text);
       if (!pattern) break;
-      if (a.text.startsWith('Procurando')) {
+      if (startsWithText(a.text, 'Procurando {0}')) {
         const ext = /\*\.(\w+)$/.exec(pattern)?.[1];
         const known = ctx.pool.filter((f) => !ext || f.endsWith(`.${ext}`));
         const found = known.length ? known : [`src/index.${ext}`, `src/app.${ext}`];
@@ -313,7 +322,7 @@ function entriesFor(a: Activity, i: number, ctx: Ctx, out: TerminalEntry[]): voi
       return;
     case 'web': {
       if (!detail) break;
-      if (a.text.startsWith('Pesquisando')) {
+      if (startsWithText(a.text, 'Pesquisando “{0}”')) {
         const slug = detail
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '')
@@ -362,9 +371,9 @@ function entriesFor(a: Activity, i: number, ctx: Ctx, out: TerminalEntry[]): voi
         kind: 'system',
         id: `${a.id}:s`,
         at: a.at,
-        text: a.text.startsWith('Precisa de você')
+        text: startsWithText(a.text, 'Precisa de você')
           ? `Aguardando você: ${a.text.includes(':') ? afterColon(a.text) : 'responder no terminal'}`
-          : a.text.startsWith('Interrompido')
+          : startsWithText(a.text, 'Interrompido por você')
             ? 'Interrompido pelo usuário'
             : a.text,
         level: 'warn',

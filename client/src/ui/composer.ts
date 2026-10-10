@@ -25,6 +25,7 @@ import {
 import type { UiContext } from './context';
 import { h, setAttr, setHidden, setText, setTitle } from './dom';
 import { isLocalHostname } from './permission';
+import { tr } from '../../../shared/i18n';
 
 export type ComposerVariant = 'drawer' | 'terminal';
 
@@ -78,11 +79,11 @@ export class MessageComposer {
       {
         class: term ? 'ui-msg__send' : 'ui-btn ui-msg__send',
         type: 'button',
-        title: 'Mandar (Enter)',
-        attrs: { 'aria-label': 'Mandar a mensagem' },
+        title: tr('Mandar (Enter)'),
+        attrs: { 'aria-label': tr('Mandar a mensagem') },
         on: { click: () => void this.send() },
       },
-      term ? '↵' : 'Enviar',
+      term ? '↵' : tr('Enviar'),
     );
     this.row = h('div', { class: `ui-msg__row${term ? ' ui-term__prompt' : ''}` });
     if (term) this.row.append(h('span', { class: 'ui-term__caret', text: '>', attrs: { 'aria-hidden': 'true' } }));
@@ -127,9 +128,9 @@ export class MessageComposer {
     }
     this.box.disabled = !ready;
     const name = agent?.name ?? 'o agente';
-    const placeholder = ready ? (term ? `Mensagem para ${name} (Enter manda, Shift+Enter quebra a linha)` : `Mensagem para ${name}…`) : mode.text;
+    const placeholder = ready ? (term ? tr('Mensagem para {0} (Enter manda, Shift+Enter quebra a linha)', [name]) : tr('Mensagem para {0}…', [name])) : mode.text;
     setAttr(this.box, 'placeholder', placeholder);
-    setAttr(this.box, 'aria-label', ready ? `Mensagem para ${name}` : mode.text);
+    setAttr(this.box, 'aria-label', ready ? tr('Mensagem para {0}', [name]) : mode.text);
     setTitle(this.box, ready ? '' : mode.text);
     this.row.classList.toggle('is-disabled', !ready);
     setHidden(this.sendBtn, !ready);

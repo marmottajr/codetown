@@ -17,6 +17,7 @@ import type { GitHubEvent } from '../../../shared/github';
 import type { AccountUsage, Activity, AgentStats, TaskItem, TaskStatus, UsageWindow } from '../../../shared/types';
 import { detectGitHubResult, githubCallOf } from '../github';
 import type { ParsedActivity } from '../transcript';
+import { tr } from '../../../shared/i18n';
 
 type Rec = Record<string, unknown>;
 
@@ -314,7 +315,7 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
       return { desc: describeTool('Bash', { command, description: input.description }), tool: 'Bash' };
     }
     case 'write_stdin':
-      return { desc: { kind: 'run', icon: '⌨️', text: 'Interagindo com um comando' }, tool: name };
+      return { desc: { kind: 'run', icon: '⌨️', text: tr('Interagindo com um comando') }, tool: name };
     case 'apply_patch': {
       const patch = typeof input.command === 'string' ? input.command : typeof input.input === 'string' ? input.input : typeof input.patch === 'string' ? input.patch : '';
       const files = patchFiles(patch);
@@ -327,9 +328,9 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
     }
     case 'exec':
       // Code mode do app: o argumento é JavaScript; o comando legível só aparece no CommandExecution ao concluir.
-      return { desc: { kind: 'run', icon: '⚙️', text: 'Executando código' }, tool: name };
+      return { desc: { kind: 'run', icon: '⚙️', text: tr('Executando código') }, tool: name };
     case 'update_plan':
-      return { desc: { kind: 'plan', icon: '🗒️', text: 'Atualizando o plano' }, tool: name };
+      return { desc: { kind: 'plan', icon: '🗒️', text: tr('Atualizando o plano') }, tool: name };
     case 'view_image': {
       const path = str(input.path);
       return { desc: describeTool('Read', { file_path: path ?? 'imagem.png' }), tool: 'Read' };
@@ -344,15 +345,15 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
     }
     case 'wait':
     case 'wait_agent':
-      return { desc: { kind: 'delegate', icon: '⏳', text: 'Esperando os subagentes' }, tool: name };
+      return { desc: { kind: 'delegate', icon: '⏳', text: tr('Esperando os subagentes') }, tool: name };
     case 'send_input':
     case 'send_message':
     case 'followup_task':
-      return { desc: { kind: 'communicate', icon: '💬', text: 'Mensagem para um subagente' }, tool: name };
+      return { desc: { kind: 'communicate', icon: '💬', text: tr('Mensagem para um subagente') }, tool: name };
     case 'close_agent':
-      return { desc: { kind: 'delegate', icon: '👥', text: 'Encerrando um subagente' }, tool: name };
+      return { desc: { kind: 'delegate', icon: '👥', text: tr('Encerrando um subagente') }, tool: name };
     case 'request_permissions':
-      return { desc: { kind: 'wait', icon: '🔐', text: 'Pedindo permissões' }, tool: name };
+      return { desc: { kind: 'wait', icon: '🔐', text: tr('Pedindo permissões') }, tool: name };
     default:
       return { desc: describeTool(name, input), tool: name };
   }
@@ -772,7 +773,7 @@ class RolloutLineParser {
       return;
     }
     const failed = c.status === 'failed' || (c.exitCode !== undefined && c.exitCode !== 0);
-    if (failed) this.push(SPECIAL.error('Bash', firstLine(c.output) ?? (c.exitCode !== undefined ? `Código de saída ${c.exitCode}` : undefined)), { key: `${key}:e`, tool: 'Bash' });
+    if (failed) this.push(SPECIAL.error('Bash', firstLine(c.output) ?? (c.exitCode !== undefined ? tr('Código de saída {0}', [c.exitCode]) : undefined)), { key: `${key}:e`, tool: 'Bash' });
     // GitHub: a mesma detecção do Claude Code, com o comando, a saída e o código de saída.
     const gh = command ? githubCallOf('Bash', { command }) : undefined;
     if (gh && c.status !== 'declined') {

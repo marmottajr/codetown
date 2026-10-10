@@ -23,6 +23,7 @@ import { errMsg, log } from '../log';
 import { toolView } from '../sources/terminal';
 import { codexToolView } from './codex';
 import { callSignature, scanToolCall } from './transcript';
+import { tr } from '../../shared/i18n';
 
 /** Tempo que o hook espera por padrão (ele manda o próprio em `timeout_ms`). */
 export const DEFAULT_TIMEOUT_MS = 300_000;
@@ -245,7 +246,7 @@ export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefin
     a.status = 'waiting';
     a.statusSince = p.createdAt;
   }
-  a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : p.provider === 'codex' ? 'aprovar um comando' : 'aprovar uma permissão';
+  a.waitingFor ??= isQuestion(p) ? tr('responder uma pergunta') : p.provider === 'codex' ? tr('aprovar um comando') : tr('aprovar uma permissão');
   return a;
 }
 
@@ -270,7 +271,7 @@ export function parseHookInput(raw: unknown): {
   const r = rec(raw);
   const sessionId = shortStr(r?.session_id, 200);
   const tool = shortStr(r?.tool_name, 200);
-  if (!r || !sessionId || !tool) throw new InvalidRequest('esperado o JSON do hook PermissionRequest (session_id e tool_name)');
+  if (!r || !sessionId || !tool) throw new InvalidRequest(tr('esperado o JSON do hook PermissionRequest (session_id e tool_name)'));
   const t = typeof r.timeout_ms === 'number' && Number.isFinite(r.timeout_ms) ? r.timeout_ms : DEFAULT_TIMEOUT_MS;
   const codex = r.provider === 'codex';
   return {
@@ -429,7 +430,7 @@ export class PermissionRegistry {
       this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '❓', text: truncate(`Pergunta: ${first}`, 46), detail: truncate(all, 300), tool: 'PermissionRequest' }, false);
       this.opts.office.noticePermission(target.id, `${truncate(first, 120)}${by}`, 'question');
     } else {
-      this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(`Pede permissão: ${desc.text}`, 46), detail: view.title, tool: 'PermissionRequest' }, false);
+      this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(tr('Pede permissão: {0}', [desc.text]), 46), detail: view.title, tool: 'PermissionRequest' }, false);
       this.opts.office.noticePermission(target.id, `${desc.text}${by}`);
     }
     this.opts.office.markDirty();
@@ -513,8 +514,8 @@ export class PermissionRegistry {
     const now = this.now();
     const act: Activity =
       d.behavior === 'allow'
-        ? { id: `${p.agentId}#perm-ok:${id}`, at: now, kind: 'other', icon: '✅', text: d.suggestion !== undefined ? 'Aprovado no Habblaud (sempre permitir)' : 'Aprovado no Habblaud', detail: p.info.title, tool: 'PermissionRequest' }
-        : { id: `${p.agentId}#perm-no:${id}`, at: now, kind: 'wait', icon: '🚫', text: 'Recusado no Habblaud', detail: d.message ? `${p.info.title} — ${d.message}` : p.info.title, tool: 'PermissionRequest' };
+        ? { id: `${p.agentId}#perm-ok:${id}`, at: now, kind: 'other', icon: '✅', text: d.suggestion !== undefined ? tr('Aprovado no Habblaud (sempre permitir)') : tr('Aprovado no Habblaud'), detail: p.info.title, tool: 'PermissionRequest' }
+        : { id: `${p.agentId}#perm-no:${id}`, at: now, kind: 'wait', icon: '🚫', text: tr('Recusado no Habblaud'), detail: d.message ? `${p.info.title} — ${d.message}` : p.info.title, tool: 'PermissionRequest' };
     this.opts.office.addActivity(p.agentId, act, false);
     return 'ok';
   }
@@ -528,7 +529,7 @@ export class PermissionRegistry {
     const answers = checkAnswers(questions, raw);
     if (!answers || answers.some((a) => !fitsFormat(p.askFormat?.[a.question], a))) return 'invalid-answer';
     this.resolve(p, { status: 'decided', behavior: 'answer', answers });
-    const act: Activity = { id: `${p.agentId}#perm-answer:${p.info.id}`, at: this.now(), kind: 'other', icon: '💬', text: 'Respondido no Habblaud', detail: answerSummary(questions, answers), tool: 'PermissionRequest' };
+    const act: Activity = { id: `${p.agentId}#perm-answer:${p.info.id}`, at: this.now(), kind: 'other', icon: '💬', text: tr('Respondido no Habblaud'), detail: answerSummary(questions, answers), tool: 'PermissionRequest' };
     this.opts.office.addActivity(p.agentId, act, false);
     return 'ok';
   }

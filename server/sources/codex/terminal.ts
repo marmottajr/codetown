@@ -22,6 +22,7 @@ import {
   userMessagingText,
   type HistoryMode,
 } from './rollout';
+import { tr } from '../../../shared/i18n';
 
 type Rec = Record<string, unknown>;
 type ToolEntry = Extract<TerminalEntry, { kind: 'tool' }>;
@@ -132,7 +133,7 @@ class CodexTerminalParser implements TerminalParser {
         return;
       }
       case 'compacted':
-        if (this.mode === 'legacy') this.sys(key, at, 'Conversa compactada');
+        if (this.mode === 'legacy') this.sys(key, at, tr('Conversa compactada'));
         return;
       default:
         return;
@@ -178,7 +179,7 @@ class CodexTerminalParser implements TerminalParser {
 
   private result(toolId: string, at: number, raw: string, error: boolean): void {
     const p = prepare(raw, RESULT_MAX, RESULT_MAX_LINES);
-    const e: ResultEntry = { kind: 'result', id: `${toolId}:r`, at, toolUseId: toolId, text: p.text || '(sem saída)' };
+    const e: ResultEntry = { kind: 'result', id: `${toolId}:r`, at, toolUseId: toolId, text: p.text || tr('(sem saída)') };
     if (error) e.error = true;
     if (p.truncated) e.truncated = true;
     this.emit(e);
@@ -194,12 +195,12 @@ class CodexTerminalParser implements TerminalParser {
       case 'turn_complete': {
         const ms = num(p.duration_ms);
         const err = rec(p.error);
-        if (err) this.sys(`${str(p.turn_id) ?? key}:err`, at, `Erro: ${oneLine(str(err.message) ?? 'desconhecido', 160)}`, { level: 'error' });
-        if (ms !== undefined && ms >= 0) this.sys(`${str(p.turn_id) ?? key}:done`, at, `Turno concluído em ${formatDuration(ms)}`);
+        if (err) this.sys(`${str(p.turn_id) ?? key}:err`, at, tr('Erro: {0}', [oneLine(str(err.message) ?? tr('desconhecido'), 160)]), { level: 'error' });
+        if (ms !== undefined && ms >= 0) this.sys(`${str(p.turn_id) ?? key}:done`, at, tr('Turno concluído em {0}', [formatDuration(ms)]));
         return;
       }
       case 'turn_aborted':
-        if (p.reason === 'interrupted' || p.reason === undefined) this.sys(`${str(p.turn_id) ?? key}:int`, at, 'Interrompido pelo usuário', { level: 'warn' });
+        if (p.reason === 'interrupted' || p.reason === undefined) this.sys(`${str(p.turn_id) ?? key}:int`, at, tr('Interrompido pelo usuário'), { level: 'warn' });
         return;
       // ---- legacy
       case 'user_message':
@@ -218,7 +219,7 @@ class CodexTerminalParser implements TerminalParser {
         return this.command(str(p.call_id) ?? key, at, p.command, str(p.aggregated_output) ?? str(p.formatted_output) ?? str(p.stdout) ?? '', num(p.exit_code), str(p.status));
       case 'context_compacted':
         if (this.mode === 'paginated') return;
-        return this.sys(key, at, 'Conversa compactada');
+        return this.sys(key, at, tr('Conversa compactada'));
       default:
         return;
     }
@@ -263,7 +264,7 @@ class CodexTerminalParser implements TerminalParser {
       case 'ImageView':
         return this.tool(id, at, 'view_image', toolView('Read', { file_path: pathFromUri(item.path) ?? '' }, this.cwd));
       case 'ContextCompaction':
-        return this.sys(id, at, 'Conversa compactada');
+        return this.sys(id, at, tr('Conversa compactada'));
       case 'CollabAgentToolCall': {
         const tool = str(item.tool) ?? 'spawn_agent';
         return this.tool(id, at, tool, toolView(tool, str(item.prompt) ? { prompt: item.prompt } : {}, this.cwd));
@@ -278,9 +279,9 @@ class CodexTerminalParser implements TerminalParser {
   private command(id: string, at: number, cmd: unknown, output: string, exitCode: number | undefined, status: string | undefined): void {
     const command = commandText(cmd);
     this.tool(id, at, 'Bash', toolView('Bash', { command }, this.cwd));
-    if (status === 'declined') return this.result(id, at, 'Recusado pelo usuário', true);
+    if (status === 'declined') return this.result(id, at, tr('Recusado pelo usuário'), true);
     const failed = status === 'failed' || (exitCode !== undefined && exitCode !== 0);
-    const text = failed && exitCode !== undefined && exitCode !== 0 ? `Código de saída ${exitCode}\n${output}` : output;
+    const text = failed && exitCode !== undefined && exitCode !== 0 ? tr('Código de saída {0}\n{1}', [exitCode, output]) : output;
     this.result(id, at, text, failed);
   }
 
@@ -293,15 +294,15 @@ class CodexTerminalParser implements TerminalParser {
     const diff = changes
       .slice(0, 12)
       .map((c) => {
-        const head = `*** ${c.kind === 'add' ? 'Novo' : c.kind === 'delete' ? 'Apagado' : 'Alterado'}: ${rel(c.path)}${c.movePath ? ` → ${rel(c.movePath)}` : ''}`;
+        const head = `*** ${c.kind === 'add' ? tr('Novo') : c.kind === 'delete' ? tr('Apagado') : tr('Alterado')}: ${rel(c.path)}${c.movePath ? ` → ${rel(c.movePath)}` : ''}`;
         const body = c.kind === 'update' ? c.text : c.text.replace(/\n$/, '').split('\n').map((l) => `${c.kind === 'add' ? '+' : '-'} ${l}`).join('\n');
         return `${head}\n${body}`;
       })
       .join('\n');
     const input = diff.trim() ? marked(prepare(diff, INPUT_MAX, Infinity, false)) : '';
     this.tool(id, at, tool, input ? { title: arg ? `${tool}(${arg})` : tool, input, inputKind: 'diff' } : { title: arg ? `${tool}(${arg})` : tool });
-    if (status === 'declined') this.result(id, at, 'Recusado pelo usuário', true);
-    else if (status === 'failed') this.result(id, at, 'A mudança não foi aplicada', true);
+    if (status === 'declined') this.result(id, at, tr('Recusado pelo usuário'), true);
+    else if (status === 'failed') this.result(id, at, tr('A mudança não foi aplicada'), true);
   }
 
   // ---------------------------------------------------------------- response_item (só no legacy)

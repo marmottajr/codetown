@@ -19,6 +19,7 @@ import { FileTail } from '../sources/tail';
 import { createTerminalParser, type TerminalParser } from '../sources/terminal';
 import { sendJson } from './app';
 import { frame } from './sse';
+import { tr } from '../../shared/i18n';
 
 /** Terminais abertos ao mesmo tempo (cada um lê o transcript por conta própria). */
 export const MAX_STREAMS = 8;
@@ -247,14 +248,14 @@ export class TerminalStreams {
   /** Limite de terminais, `init` e o stream SSE de uma fonte já escolhida. */
   private serve(req: IncomingMessage, res: ServerResponse, id: string, source: ConversationSource): void {
     if (this.streams.size >= this.maxStreams) {
-      return sendJson(res, 429, { error: `terminais abertos demais (máximo de ${this.maxStreams}); feche algum e tente de novo` });
+      return sendJson(res, 429, { error: tr('terminais abertos demais (máximo de {0}); feche algum e tente de novo', [this.maxStreams]) });
     }
     let init: TerminalInit;
     try {
       init = source.load();
     } catch (err) {
       log.warnOnce(`terminal-load:${id}:${errMsg(err)}`, `Terminal de ${id}: não foi possível ler o transcript (${errMsg(err)}).`);
-      return sendJson(res, 500, { error: 'não foi possível ler o transcript' });
+      return sendJson(res, 500, { error: tr('não foi possível ler o transcript') });
     }
     req.socket.setTimeout(0);
     req.socket.setNoDelay(true);

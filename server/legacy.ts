@@ -2,6 +2,7 @@
 // nome antigo fica aqui, para sair de uma vez quando ninguém mais vier de uma instalação da 0.3.
 import { existsSync, readdirSync, renameSync, rmdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { tr } from '../shared/i18n';
 
 /** Nome antigo em minúsculas: pasta de estado, plugins, marketplace, projeto e volume do Docker. */
 export const LEGACY_NAME = 'codetown';
@@ -77,7 +78,7 @@ export function migrateLegacyStateDir(home: string): { moved: string[]; error?: 
       renameSync(from, to);
       moved.push('.');
     } else if (isDir(to)) mergeInto(from, to, moved, '');
-    else return { moved, error: `${to} existe e não é uma pasta` };
+    else return { moved, error: tr('{0} existe e não é uma pasta', [to]) };
     return { moved };
   } catch (err) {
     return { moved, error: (err as Error).message };
