@@ -15,7 +15,18 @@ import { NameStore } from '../../../model/names';
 import { Office } from '../../../model/office';
 import { PermissionRegistry, type ParallelRequestInput } from '../../../permissions/registry';
 import { FakeAppServer, rpcFail, until } from '../../../test/codex-fixtures-appserver';
-import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, CodexAppServerService, daemonRunning, DISCOVERY_MS, RESUME_RETRY_MS, spawnCodexProxy, UNSUBSCRIBE_AFTER_MS, type CodexProxy } from './service';
+import {
+  BACKOFF_MAX_MS,
+  BACKOFF_MIN_MS,
+  CodexAppServerService,
+  daemonRunning,
+  DISCOVERY_MS,
+  RESUME_RETRY_MS,
+  spawnCodexProxy,
+  UNSUBSCRIBE_AFTER_MS,
+  type CodexAppServerServiceOptions,
+  type CodexProxy,
+} from './service';
 
 setQuiet(true);
 
@@ -66,7 +77,7 @@ interface FakeProxy extends CodexProxy {
   die(): void;
 }
 
-function setup(opts: { daemon?: boolean; control?: boolean; threads?: string[]; codexBin?: string | null } = {}) {
+function setup(opts: { daemon?: boolean; control?: boolean; threads?: string[]; codexBin?: string | null; service?: Partial<CodexAppServerServiceOptions> } = {}) {
   let now = 5_000_000;
   const clock = { now: () => now, advance: (ms: number) => (now += ms) };
   let registry: PermissionRegistry | undefined;
@@ -132,6 +143,7 @@ function setup(opts: { daemon?: boolean; control?: boolean; threads?: string[]; 
       proxies.push(proxy);
       return proxy;
     },
+    ...opts.service,
   });
   registry.setParallelSink(svc);
   cleanups.push(() => svc.stop());
@@ -269,6 +281,69 @@ describe('CodexAppServerService: daemon e conexão', () => {
     await flush();
     expect(s.proxies).toHaveLength(1);
     expect(s.daemon.checks).toHaveLength(1);
+  });
+
+  it('handshake recusado: a queda antes de ficar pronta deixa uma linha no log com o motivo (não "caiu") e tenta de novo', async () => {
+    // Arrange
+    const calls = warnings();
+    const s = setup();
+    s.queue.push(new FakeAppServer({ handshake: 'refuse' }));
+
+    // Act
+    s.svc.tick();
+    await until(() => s.proxies.length === 1 && s.proxies[0].killed);
+
+    // Assert
+    const refused = calls.filter(([key]) => key.startsWith(`codex-appserver-refused:${ACCOUNT}:`));
+    expect(refused).toHaveLength(1);
+    expect(refused[0][1]).toBe(`Codex (${ACCOUNT}): o app-server não ficou pronto (handshake recusado: HTTP/1.1 403 Forbidden); os pedidos seguem com o hook e tento de novo.`);
+    expect(s.logs.join('\n')).not.toMatch(/caiu/);
+    s.clock.advance(BACKOFF_MIN_MS);
+    s.svc.tick();
+    await until(() => s.proxies.length === 2 && s.svc.owns(ACCOUNT, THREAD));
+  });
+
+  it('proxy vivo sem o 101: cai no prazo do handshake (proxy morto, linha no log) e a próxima conexão, pronta, não cai', async () => {
+    // Arrange
+    const calls = warnings();
+    const s = setup({ service: { handshakeTimeoutMs: 60 } });
+    s.queue.push(new FakeAppServer({ handshake: 'manual' }));
+
+    // Act
+    s.svc.tick();
+    await until(() => s.proxies.length === 1);
+
+    // Assert
+    expect(s.proxies[0].killed).toBe(false);
+    await until(() => s.proxies[0].killed);
+    expect(calls).toContainEqual([`codex-appserver-refused:${ACCOUNT}:sem handshake em 0.06 s`, `Codex (${ACCOUNT}): o app-server não ficou pronto (sem handshake em 0.06 s); os pedidos seguem com o hook e tento de novo.`]);
+    s.clock.advance(BACKOFF_MIN_MS);
+    s.svc.tick();
+    await until(() => s.proxies.length === 2 && s.svc.owns(ACCOUNT, THREAD));
+    await new Promise((ok) => setTimeout(ok, 120));
+    expect(s.proxies[1].killed).toBe(false);
+    expect(s.svc.owns(ACCOUNT, THREAD)).toBe(true);
+  });
+
+  it('stop ou conta que sai da lista antes de a conexão ficar pronta: nenhuma linha de "não ficou pronto"', async () => {
+    // Arrange
+    const calls = warnings();
+    const s = setup();
+    s.queue.push(new FakeAppServer({ handshake: 'manual' }), new FakeAppServer({ handshake: 'manual' }));
+    s.svc.tick();
+    await until(() => s.proxies.length === 1);
+
+    // Act: a conta sai da lista; volta; e o Habblaud para.
+    s.accounts.splice(0);
+    s.svc.tick();
+    s.accounts.push({ id: ACCOUNT, home: s.home });
+    s.svc.tick();
+    await until(() => s.proxies.length === 2);
+    s.svc.stop();
+
+    // Assert
+    expect(s.proxies.map((p) => p.killed)).toEqual([true, true]);
+    expect(calls.filter(([key]) => key.startsWith('codex-appserver-refused:'))).toEqual([]);
   });
 });
 

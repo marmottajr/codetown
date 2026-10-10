@@ -9,7 +9,8 @@
 //   ambiente; nada é escrito em CODEX_HOME.
 // - Sem daemon: confere de novo a cada DISCOVERY_MS. Queda da conexão (o proxy saiu, o daemon reiniciou): os pedidos
 //   abertos daquela conexão fecham (o resolved deles não vem mais), owns() fica falso (o próximo pedido da thread volta ao
-//   hook) e a reconexão espera de BACKOFF_MIN_MS a BACKOFF_MAX_MS.
+//   hook) e a reconexão espera de BACKOFF_MIN_MS a BACKOFF_MAX_MS. Proxy aberto sem a conexão ficar pronta em
+//   HANDSHAKE_TIMEOUT_MS também cai; a queda antes de ficar pronta deixa uma linha no log com o motivo.
 // - owns(): a thread foi assinada nesta conexão (resume 'ok', ou um pedido dela chegou: o app-server só manda pedidos a
 //   quem assina a thread, e assina sozinho os subagentes que nascem com a conexão aberta). 'not-daemon' (outro escritor,
 //   ou guardian) fica com o hook; 'no-rollout' (antes do 1º turno) tenta de novo depois de RESUME_RETRY_MS.
@@ -35,6 +36,8 @@ export const BACKOFF_MAX_MS = 30_000;
 export const RESUME_RETRY_MS = 5_000;
 /** Turno fechado (setTurnOpen false): desassina a thread depois disto, se o turno não reabrir antes. */
 export const UNSUBSCRIBE_AFTER_MS = 60_000;
+/** Proxy aberto sem a conexão ficar pronta (101 + initialize) até aqui: cai e tenta de novo com backoff. */
+export const HANDSHAKE_TIMEOUT_MS = 15_000;
 const DAEMON_CHECK_TIMEOUT_MS = 5_000;
 const TICK_MS = 1_000;
 /** Pedido sem `availableDecisions`: o escritório oferece as quatro. */
@@ -65,6 +68,8 @@ export interface CodexAppServerServiceOptions {
   now?: () => number;
   /** Intervalo do relógio interno (start). */
   tickMs?: number;
+  /** Prazo para a conexão ficar pronta (testes); padrão: HANDSHAKE_TIMEOUT_MS. Relógio de verdade, não o `now`. */
+  handshakeTimeoutMs?: number;
 }
 
 function isDir(p: string): boolean {
@@ -145,6 +150,8 @@ interface Conn {
   listAt: number;
   /** A falha do thread/loaded/list já foi para o log nesta conexão. */
   listWarned: boolean;
+  /** Prazo do handshake (até o onReady). */
+  handshakeTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface AccountState {
@@ -200,9 +207,10 @@ export class CodexAppServerService implements ParallelSink {
       const ids = new Set(accounts.map((a) => a.id));
       for (const st of [...this.states.values()]) {
         if (ids.has(st.id)) continue;
-        if (st.conn) this.drop(st, st.conn, 'a conta saiu da lista');
+        // Sai do mapa antes da queda: o drop não avisa "não ficou pronto" de uma conexão que o Habblaud mesmo fechou.
         this.states.delete(st.id);
         this.closedTurns.delete(st.id);
+        if (st.conn) this.drop(st, st.conn, 'a conta saiu da lista');
       }
       for (const a of accounts) {
         let st = this.states.get(a.id);
@@ -311,6 +319,10 @@ export class CodexAppServerService implements ParallelSink {
       listWarned: false,
     };
     st.conn = conn;
+    // Antes dos eventos (um proxy que já saiu chama o 'exit' na hora): o drop limpa o prazo.
+    const handshakeMs = this.opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
+    conn.handshakeTimer = setTimeout(() => this.guard(() => this.drop(st, conn, `sem handshake em ${handshakeMs / 1000} s`)), handshakeMs);
+    conn.handshakeTimer.unref?.();
     proxy.on('exit', () => this.drop(st, conn, 'o proxy do app-server saiu'));
     client.on('close', (reason: string) => this.drop(st, conn, reason));
     client.on('approval', (req: ApprovalRequest) => this.guard(() => this.onApproval(st, conn, req)));
@@ -335,6 +347,7 @@ export class CodexAppServerService implements ParallelSink {
 
   private onReady(st: AccountState, conn: Conn): void {
     if (st.conn !== conn || conn.closed) return;
+    clearTimeout(conn.handshakeTimer);
     conn.ready = true;
     st.backoffMs = BACKOFF_MIN_MS;
     this.say(`Codex (${st.id}): ligado ao daemon do app-server; os pedidos de aprovação do codex no terminal também podem ser respondidos pelo escritório.`);
@@ -387,10 +400,15 @@ export class CodexAppServerService implements ParallelSink {
     );
   }
 
-  /** Fim de uma conexão (uma vez só): fecha os pedidos dela, mata o proxy e agenda a reconexão. */
+  /**
+   * Fim de uma conexão (uma vez só): fecha os pedidos dela, mata o proxy e agenda a reconexão. Queda antes de ficar pronta
+   * (proxy que saiu, handshake ou initialize recusado, prazo do handshake) vai para o log uma vez por conta e motivo,
+   * menos quando o próprio Habblaud fechou (stop, conta que saiu da lista).
+   */
   private drop(st: AccountState, conn: Conn, reason: string): void {
     if (conn.closed) return;
     conn.closed = true;
+    clearTimeout(conn.handshakeTimer);
     const wasReady = conn.ready;
     conn.ready = false;
     // O cliente esquece os pedidos sem emitir o resolved: os cartões desta conexão fecham aqui.
@@ -402,7 +420,9 @@ export class CodexAppServerService implements ParallelSink {
     if (st.conn !== conn) return;
     st.conn = undefined;
     this.backoff(st);
-    if (wasReady && !this.stopped) this.say(`Codex (${st.id}): a conexão com o app-server caiu (${reason}); os pedidos voltam ao hook até reconectar.`);
+    if (this.stopped) return;
+    if (wasReady) this.say(`Codex (${st.id}): a conexão com o app-server caiu (${reason}); os pedidos voltam ao hook até reconectar.`);
+    else if (this.states.get(st.id) === st) log.warnOnce(`codex-appserver-refused:${st.id}:${reason}`, `Codex (${st.id}): o app-server não ficou pronto (${reason}); os pedidos seguem com o hook e tento de novo.`);
   }
 
   private backoff(st: AccountState): void {
