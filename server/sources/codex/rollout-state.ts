@@ -1,6 +1,7 @@
 // Estado de um thread do Codex (CodexState), os tipos que o parser devolve (sinais, resultado, contexto) e os helpers de
-// texto que ele usa: título, resumo de pergunta, tarefa do filho, instrução de verdade, saída de ferramenta e 1ª linha
-// de erro. Tudo mascarado ANTES de qualquer corte (ver `maskedCut`).
+// texto do parser, das descrições de ferramenta e do shells.ts: título, resumo de pergunta, tarefa do filho, instrução de
+// verdade, saída de ferramenta e 1ª linha de erro. Só os que cortam (askSummary, titleText, firstLine) mascaram ANTES do
+// corte (ver `maskedCut`); contentText, promptText e outputOf entregam o texto cru a quem mascara adiante.
 import type { GitHubEvent } from '../../../shared/github';
 import type { AccountUsage, Activity, AgentStats, TaskItem } from '../../../shared/types';
 import type { ParsedActivity } from '../transcript';
