@@ -7,7 +7,7 @@ import { join, posix } from 'node:path';
 import type { DetectedAccount } from '../server/accounts/detect';
 import { HOOK_KEY_FILE } from '../server/codex/key';
 
-/** Onde essa pasta aparece no container. */
+/** Onde a pasta do uso (USAGE_DIR, em docker-up.ts) aparece no container. */
 export const CONTAINER_USAGE_DIR = '/usage';
 const SERVICE = 'habblaud';
 /** Raiz das montagens dentro do container: /claude/<conta>/{projects,sessions}. */
