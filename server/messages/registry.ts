@@ -353,6 +353,7 @@ export class MessageRegistry {
     for (const e of this.messages.values()) {
       if (out.length >= INBOX_BATCH) break;
       if (!e.codex || e.msg.status !== 'queued' || busy.has(e.msg.agentId)) continue;
+      busy.add(e.msg.agentId);
       const target = this.codexTarget(e, now);
       if (!target) continue;
       this.setStatus(e, 'sent', now);

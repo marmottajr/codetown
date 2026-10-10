@@ -118,6 +118,31 @@ describe('rotas do auxiliar do Codex', () => {
     expect(await round(httpPost(s.port), run)).toMatchObject({ state: 'refused', status: 403 });
   });
 
+  it('confirma cada resultado antes de rodar a próxima mensagem do lote', async () => {
+    const s = await serve();
+    const thread = '0199b0c0-0000-7abc-8def-0123456789ab';
+    const other = `.codex:${thread}`;
+    s.office.addMain({ id: other, provider: 'codex', account: '.codex', sessionId: thread, cwd: '/p/api', role: 'Agente principal', startedAt: Date.now(), status: 'idle' });
+    const post = httpPost(s.port);
+    await round(post, async () => ({ ok: true }));
+    const a = await request(s.base, '/api/messages', { method: 'POST', body: { agentId: MAIN, text: 'um' } });
+    const b = await request(s.base, '/api/messages', { method: 'POST', body: { agentId: other, text: 'dois' } });
+    const idA = (a.json as { id: string }).id;
+    const idB = (b.json as { id: string }).id;
+    const before: string[] = [];
+    const result = await round(post, async (job) => {
+      if (job.thread === thread) {
+        const message = await request(s.base, `/api/messages/${idA}`);
+        before.push((message.json as { status: string }).status);
+        return { ok: false, error: 'Error: recusado' };
+      }
+      return { ok: true };
+    });
+    expect(before).toEqual(['delivered']);
+    expect(result).toEqual({ state: 'ok', results: [{ id: idA, ok: true }, { id: idB, ok: false, error: 'Error: recusado' }] });
+    expect((await request(s.base, `/api/messages/${idB}`)).json).toMatchObject({ status: 'failed', error: 'Error: recusado' });
+  });
+
   it('checkMessage: thread, texto e uma pasta do Codex que existe (nunca uma do Claude Code)', () => {
     const ok = { id: 'm1', account: '.codex', codexHome, thread: THREAD, text: 'oi' };
     expect(checkMessage(ok)).toEqual(ok);

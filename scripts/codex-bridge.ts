@@ -127,7 +127,7 @@ export type RoundResult =
   | { state: 'refused'; status: number; error?: string }
   | { state: 'ok'; results: BridgeResult[] };
 
-/** Uma rodada: busca as mensagens, roda `codex queue` para cada uma (na ordem) e confirma. Nunca lança. */
+/** Uma rodada: busca as mensagens, roda `codex queue` para cada uma (na ordem) e confirma cada resultado. Nunca lança. */
 export async function round(post: Post, run: CodexQueueRunner, log: (line: string) => void = () => {}): Promise<RoundResult> {
   const polled = await post('/api/codex/bridge/poll', {});
   if (!polled) return { state: 'down' };
@@ -140,7 +140,11 @@ export async function round(post: Post, run: CodexQueueRunner, log: (line: strin
   for (const raw of list) {
     const m = checkMessage(raw);
     if ('error' in m) {
-      if (m.id) results.push({ id: m.id, ok: false, error: m.error });
+      if (m.id) {
+        const result = { id: m.id, ok: false, error: m.error };
+        results.push(result);
+        await post('/api/codex/bridge/ack', { results: [result] });
+      }
       log(`✗ mensagem recusada: ${m.error}`);
       continue;
     }
@@ -150,10 +154,11 @@ export async function round(post: Post, run: CodexQueueRunner, log: (line: strin
     } catch (err) {
       r = { ok: false, error: String(err) };
     }
-    results.push(r.ok ? { id: m.id, ok: true } : { id: m.id, ok: false, error: r.error });
+    const result = r.ok ? { id: m.id, ok: true } : { id: m.id, ok: false, error: r.error };
+    results.push(result);
+    await post('/api/codex/bridge/ack', { results: [result] });
     log(r.ok ? `✓ mensagem na fila do thread ${m.thread.slice(0, 8)}… (${m.account || 'Codex'})` : `✗ thread ${m.thread.slice(0, 8)}…: ${r.error}`);
   }
-  if (results.length) await post('/api/codex/bridge/ack', { results });
   return { state: 'ok', results };
 }
 
