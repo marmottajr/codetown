@@ -20,6 +20,7 @@ export class FeedPanel implements UiComponent {
   private rows: KeyedList<FeedItem>;
   private items: FeedItem[] = [];
   private pending: FeedItem[] = [];
+  private pendingCounts = new Map<string | undefined, number>();
   private hovering = false;
   private scrolledUp = false;
   private newPill: HTMLButtonElement;
@@ -27,7 +28,7 @@ export class FeedPanel implements UiComponent {
   private toggleBtn: HTMLButtonElement;
   private empty: HTMLElement;
   private filterNote: HTMLElement;
-  /** Aparência/conta de cada agente que já apareceu (o feed sobrevive à saída do agente). */
+  /** Aparência/conta dos agentes com eventos guardados (o feed sobrevive à saída do agente). */
   private meta = new Map<string, AgentMeta>();
 
   constructor(private ctx: UiContext) {
@@ -67,15 +68,15 @@ export class FeedPanel implements UiComponent {
     });
 
     ctx.store.on('feed', (fresh) => {
-      this.pending.push(...fresh);
+      this.appendPending(fresh);
       ctx.invalidate();
     });
-    this.pending.push(...ctx.store.feed.slice(-VISIBLE));
+    this.appendPending(ctx.store.feed.slice(-VISIBLE));
     // Partidas e apostas resolvidas no escritório (vida social) entram no feed como eventos locais.
     ctx.world.onSocialEvent?.((e) => {
       const a = ctx.agent(e.agentId);
       if (!a) return;
-      this.pending.push({
+      this.appendPending([{
         id: e.id,
         agentId: a.id,
         roomId: a.roomId,
@@ -83,7 +84,7 @@ export class FeedPanel implements UiComponent {
         roomName: e.place,
         account: a.account,
         activity: { id: e.id, kind: 'other', icon: e.icon, text: e.text, at: e.at },
-      });
+      }]);
       ctx.invalidate();
     });
   }
@@ -98,14 +99,17 @@ export class FeedPanel implements UiComponent {
     const open = this.ctx.isPanelOpen('feed');
     const paused = this.hovering || this.scrolledUp;
     if (this.pending.length && (!paused || !open)) this.flush();
+    this.pruneMeta();
 
     // Filtro por conta da barra lateral: também vale para o feed.
     const hidden = this.ctx.prefs.hiddenAccounts;
     const filtering = hidden.length > 0;
     const visible = filtering ? this.items.filter((f) => this.visible(f)) : this.items;
     const pending = filtering ? this.pending.filter((f) => this.visible(f)) : this.pending;
-    setHidden(this.newPill, !(paused && pending.length > 0 && open));
-    if (pending.length) setText(this.newPill, pending.length === 1 ? '1 nova' : `${Math.min(pending.length, 99)} novas`);
+    let newCount = 0;
+    for (const [account, count] of this.pendingCounts) if (!account || !hidden.includes(account)) newCount += count;
+    setHidden(this.newPill, !(paused && newCount > 0 && open));
+    if (newCount) setText(this.newPill, newCount === 1 ? '1 nova' : `${Math.min(newCount, 99)} novas`);
     // Escritório vazio: o cartão central já explica; o feed só mostra o que houver de antes.
     setHidden(this.empty, visible.length > 0 || officeIsEmpty(this.ctx));
     setText(
@@ -141,11 +145,31 @@ export class FeedPanel implements UiComponent {
     return !acc || !this.ctx.prefs.hiddenAccounts.includes(acc);
   }
 
+  private appendPending(fresh: FeedItem[]): void {
+    // A contagem por conta sobrevive ao descarte das pendências mais antigas.
+    for (const f of fresh) {
+      const account = this.accountOf(f);
+      this.pendingCounts.set(account, (this.pendingCounts.get(account) ?? 0) + 1);
+    }
+    this.pending.push(...fresh.slice(-VISIBLE));
+    this.pending = this.pending.slice(-VISIBLE);
+    this.pruneMeta();
+  }
+
+  /** Esquece quem saiu do escritório e não tem mais evento guardado. */
+  private pruneMeta(): void {
+    const needed = new Set([...this.items, ...this.pending].map((f) => f.agentId));
+    for (const a of this.ctx.store.snapshot?.agents ?? []) needed.add(a.id);
+    for (const id of this.meta.keys()) if (!needed.has(id)) this.meta.delete(id);
+  }
+
   private flush(): void {
     const known = new Set(this.items.map((f) => f.id));
     for (const f of this.pending) if (!known.has(f.id)) this.items.push(f);
     this.pending = [];
+    this.pendingCounts.clear();
     this.items = this.items.slice(-VISIBLE);
+    this.pruneMeta();
     this.rows.sync(this.ctx.prefs.hiddenAccounts.length ? this.items.filter((f) => this.visible(f)) : this.items);
     const scroller = this.list.parentElement!;
     requestAnimationFrame(() => {
