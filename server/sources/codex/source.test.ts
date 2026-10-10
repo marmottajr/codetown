@@ -1538,6 +1538,29 @@ describe('fonte do Codex: corte de inatividade (C3)', () => {
     expect(ctx.office.detail(SUB)!.history.filter((a) => a.id.includes('#done:'))).toHaveLength(1);
   });
 
+  it('SubagentStop do hook antes da linha task_complete do rollout: o "Concluiu" do rollout troca o sintetizado, um só no balão e no histórico', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const SUB = `.codex:${C}`;
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue', at)]);
+    const sub = ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), R.user(C, 's1', 'su', 'Revise', at)]);
+    ctx.home.lock(T, at);
+    ctx.home.lock(C, at);
+    ctx.source.boot();
+    ctx.advance(1_000);
+    ctx.hook({ hook_event_name: 'SubagentStop', session_id: T, agent_id: C, agent_type: 'worker', cwd: '/projetos/loja', turn_id: 's1' });
+    ctx.poll();
+    expect(ctx.agent(SUB)?.status).toBe('done');
+    expect(ctx.agent(SUB)?.recent.filter((a) => a.kind === 'done')).toHaveLength(1);
+    ctx.advance(10);
+    ctx.home.append(sub, [R.agent(C, 's1', 'sa', 'Revisado.', ctx.now()), R.taskComplete('s1', ctx.now() + 1, 61_000)]);
+    ctx.poll();
+    const done = ctx.agent(SUB)!.recent.filter((a) => a.kind === 'done');
+    expect(done.map((a) => a.text)).toEqual(['Concluiu em 1min 1s']);
+    expect(ctx.office.detail(SUB)!.history.filter((a) => a.kind === 'done')).toHaveLength(1);
+    expect(ctx.agent(SUB)?.activity?.text).toBe('Concluiu em 1min 1s');
+  });
+
   it('só existência: subagente 31 min sem escrita → idle (entrega); voltou a escrever no mesmo turno → working', () => {
     const ctx = setup({ locks: 'exists' });
     const at = ctx.now() - 60_000;

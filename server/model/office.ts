@@ -619,6 +619,7 @@ export class Office {
     if (!this.booting && info.activity?.kind !== 'done') {
       const act: Activity = { id: `${id}#done:${++this.seq}`, at: now, ...SPECIAL.turnDone(now - info.startedAt), durationMs: now - info.startedAt };
       this.addActivity(id, act, true);
+      rec.synthDone = { id: act.id, at: now };
     }
     if (opts.notify !== false) {
       const parent = info.parentId ? this.agents.get(info.parentId)?.info : undefined;
@@ -637,6 +638,7 @@ export class Office {
     rec.info.status = 'working';
     rec.info.statusSince = this.now();
     delete rec.removeAt;
+    delete rec.synthDone;
     this.markDirty();
   }
 
@@ -691,7 +693,8 @@ export class Office {
       const swap = (list: Activity[]) => list.map((a) => (a.id === synthId ? replaced : a));
       info.recent = swap(info.recent);
       rec.history = swap(rec.history);
-      if (info.activity?.id === synthId) info.activity = replaced;
+      // Subagente entregue: a resposta final (lida depois do "Concluiu" sintetizado) é a atividade atual; o balão volta ao "Concluiu".
+      if (info.activity?.id === synthId || (current && info.status === 'done')) info.activity = replaced;
       delete rec.synthDone;
       this.markDirty();
       return;
@@ -710,7 +713,8 @@ export class Office {
       this.markDirty();
       return;
     }
-    if (activity.kind !== 'done') delete rec.synthDone;
+    // Subagente entregue ('done' só existe nele): o que chega até ele voltar é do mesmo turno, e o sintetizado vale.
+    if (activity.kind !== 'done' && info.status !== 'done') delete rec.synthDone;
     info.recent = [...info.recent, activity].slice(-RECENT_LIMIT);
     rec.history.push(activity);
     if (rec.history.length > HISTORY_LIMIT) rec.history.splice(0, rec.history.length - HISTORY_LIMIT);

@@ -436,6 +436,68 @@ describe('Office', () => {
     expect(a.recent.filter((x) => x.kind === 'done')).toHaveLength(1);
   });
 
+  it('subagente: o "Concluiu" do transcript que chega depois do completeSub substitui o sintetizado, sem duplicar', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    office.addActivity('s1:x', act('a1', now()), true);
+    advance(30_000);
+    office.completeSub('s1:x');
+    const synth = office.get('s1:x')!.activity!;
+    expect(synth).toMatchObject({ kind: 'done', durationMs: 30_000 });
+    advance(10);
+    office.addActivity('s1:x', { ...act('real', now(), 'done'), text: 'Concluiu em 29s', durationMs: 29_000 }, true);
+    const sub = office.get('s1:x')!;
+    expect(sub.activity).toMatchObject({ id: synth.id, text: 'Concluiu em 29s' });
+    expect(sub.recent.filter((x) => x.kind === 'done')).toHaveLength(1);
+    expect(office.detail('s1:x')!.history.filter((x) => x.kind === 'done')).toHaveLength(1);
+  });
+
+  it('subagente: a resposta final chega entre o completeSub e o "Concluiu" do transcript: um "Concluiu" só, e o balão termina nele', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    office.addActivity('s1:x', act('a1', now()), true);
+    advance(30_000);
+    office.completeSub('s1:x');
+    advance(10);
+    office.addActivity('s1:x', { ...act('resp', now(), 'respond'), text: 'Escrevendo a resposta' }, true);
+    advance(1);
+    office.addActivity('s1:x', { ...act('real', now(), 'done'), text: 'Concluiu em 29s', durationMs: 29_000 }, true);
+    const sub = office.get('s1:x')!;
+    expect(sub.recent.filter((x) => x.kind === 'done')).toHaveLength(1);
+    expect(office.detail('s1:x')!.history.filter((x) => x.kind === 'done')).toHaveLength(1);
+    expect(sub.activity).toMatchObject({ kind: 'done', text: 'Concluiu em 29s' });
+    expect(sub.recent.some((x) => x.text === 'Escrevendo a resposta')).toBe(true);
+  });
+
+  it('subagente: reativado depois de entregar, o "Concluiu" do turno seguinte entra como um item novo (não troca o do turno anterior)', () => {
+    const { office, advance, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    office.addActivity('s1:x', act('a1', now()), true);
+    advance(5_000);
+    office.completeSub('s1:x');
+    advance(5_000);
+    office.addActivity('s1:x', { ...act('resp', now(), 'respond'), text: 'Escrevendo a resposta' }, true);
+    office.reactivateSub('s1:x');
+    expect(office.get('s1:x')!.status).toBe('working');
+    advance(1_000);
+    office.addActivity('s1:x', { ...act('fim2', now(), 'done'), text: 'Concluiu em 2s' }, true);
+    const done = office.get('s1:x')!.recent.filter((x) => x.kind === 'done');
+    expect(done).toHaveLength(2);
+    expect(done[1]).toMatchObject({ id: 'fim2', text: 'Concluiu em 2s' });
+  });
+
+  it('subagente: com o "Concluiu" já na tela, o completeSub não sintetiza outro', () => {
+    const { office, now } = makeOffice();
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
+    office.addSub({ id: 's1:x', parentId: 'acc:1', sessionId: 's1', role: 'Explore', background: false, startedAt: now() });
+    office.addActivity('s1:x', { ...act('fim', now(), 'done'), text: 'Concluiu em 3s' }, true);
+    office.completeSub('s1:x');
+    expect(office.get('s1:x')!.recent.map((x) => x.id)).toEqual(['fim']);
+  });
+
   it('mesmo id: sem replace fica a 1ª; com replace troca no lugar (mesmo horário), sem item novo no feed', () => {
     const { office, advance, now } = makeOffice();
     office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/a', role: 'x', startedAt: now(), status: 'working' });
