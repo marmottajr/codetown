@@ -162,7 +162,8 @@ export function attachInput(canvas: HTMLCanvasElement, camera: Camera, h: InputH
   const onKey = (e: KeyboardEvent) => {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
-    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    // Campo ou rádio em foco (velocidade do replay): as setas são do controle, não da câmera.
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.getAttribute?.('role') === 'radio')) return;
     // modal/popover aberto (ajuda, configurações...): o teclado é dele, não da câmera
     if (modalOpen(t)) return;
     let dx = 0;
