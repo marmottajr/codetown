@@ -1,4 +1,4 @@
-// Cartões de USO POR CONTA na barra superior: sessão de 5 horas e semanal, com reinício e origem dos números.
+// Cartões de USO POR CONTA na barra superior: as janelas do plano, com reinício e origem dos números.
 // Regras de apresentação:
 // - número velho nunca passa por atual: janela que já renovou depois da leitura mostra "—" e "renovada";
 //   números antigos ficam acinzentados com a idade ("há 6 d") no cabeçalho ou, no celular, um selo no chip;

@@ -24,8 +24,9 @@ mudou.
   comando de dentro, sem o `pwsh.exe -Command` em volta. Funciona sem os hooks, com o Habblaud no modo Node e o
   terminal ligado; o Habblaud só se junta a um daemon que já está rodando e às conversas que ele já tem carregadas,
   nunca inicia nem configura o daemon nem carrega uma conversa, e solta cada uma 60 s depois de o turno fechar (assina
-  de novo quando um turno abre), para não segurar a sessão de um terminal que você fechou (o Codex a descarrega 30
-  minutos depois de ficar ociosa e sem ninguém inscrito, e a trava some). No Windows, ele usa o
+  de novo quando um turno abre), para não segurar a sessão de um terminal que você fechou (o Codex a descarrega num
+  prazo dele depois de ficar ociosa e sem ninguém inscrito, de 1 a 2 minutos no teste com o 0.160.1 e de até 30 no
+  código do Codex, e a trava some). No Windows, ele usa o
   `codex.exe` do PATH (com o Codex instalado só pelo npm, aponte `HABBLAUD_CODEX_BIN` para o executável nativo).
   `HABBLAUD_CODEX_APPSERVER=0` desliga. Nos demais clientes do Codex (o app, a extensão do VS Code e a CLI fora do
   daemon), vale o hook, com os 25 s de espera.
@@ -33,14 +34,15 @@ mudou.
   com as perguntas; o plano do code mode atualiza as tarefas; os subagentes do multiagente novo contam e chegam com a
   tarefa como título; busca na web, espera e geração de imagem viram atividades; um comando que continua rodando
   depois do turno deixa o personagem "esperando um shell". O terminal mostra também o comando em andamento, o plano,
-  as perguntas e os subagentes disparados, e o histórico traz o nome que a conversa tem no Codex.
+  as perguntas e os subagentes disparados, e o escritório e o histórico trazem o nome que a conversa tem no Codex.
 
 ### Corrigido
 
 - Uma sessão do Codex aberta e parada sumia do escritório depois de 12 horas, e uma que fechou à força ficava até lá.
   Agora o Habblaud confere se o Codex ainda segura a trava da sessão (sem nunca travá-la): no Windows e no Linux, a
-  sessão fica enquanto estiver aberta e sai segundos depois de o processo que segura a trava fechar, mesmo à força; no
-  macOS e no Docker, continua o prazo de 12 h.
+  sessão fica enquanto estiver aberta e sai segundos depois de o processo que segura a trava fechar, mesmo à força
+  (com o `codex` do terminal no daemon, quando o daemon descarrega a conversa, num prazo do próprio Codex); no macOS e
+  no Docker, continua o prazo de 12 h.
 - Um subagente do Codex que ainda não tinha concluído saía do escritório, entregando no meio do trabalho, quando a
   trava dele sumia: o Codex a solta e a retoma com o mesmo id quando o pai manda um `followup_task`. Agora ele espera 2
   minutos antes de sair.
@@ -67,6 +69,21 @@ mudou.
   era montada, e os nomes das conversas (`session_index.jsonl`) não eram.
 - No Windows, a mesma pasta escrita de outro jeito (`\\?\C:\…`, `file:///…` ou com o drive minúsculo) virava outra sala
   entre o Claude Code e o Codex. As salas e os personagens atuais continuam.
+- O canal paralelo não percebia um daemon do Codex morto ou travado: o cartão ficava aberto e o proxy do Habblaud
+  seguia vivo, impedindo ligar a um daemon novo. Agora o Habblaud confere o daemon a cada 15 s e, sem resposta em 10 s,
+  derruba a ligação: os cartões fecham, os pedidos novos vão pelo hook e ele se liga de novo logo depois. Uma ligação
+  que não fica pronta cai em 15 s, e uma recusa do daemon (no handshake, no `initialize` ou no `thread/resume`) deixa
+  uma linha no log.
+- Depois do prazo do hook do Codex, o cartão ainda aceitava **Aprovar** e registrava "Aprovado no Habblaud" sem que o
+  Codex recebesse nada. Agora os botões desligam no prazo, e uma decisão atrasada é recusada.
+- Um pedido do canal paralelo que só oferecia `cancel` abria um cartão sem nenhum botão. Agora ele fica só no terminal.
+- No Codex 0.160.1, a mensagem do multiagente vem cifrada, e o título, a atividade e o terminal do subagente mostravam
+  o texto cifrado ou o cabeçalho do envelope ("Message Type: …"). Agora vale o nome da tarefa, e o terminal mostra
+  "(mensagem cifrada)".
+- O subagente disparado por outro subagente do Codex sumia da barra lateral, e os detalhes do subagente não listavam
+  os filhos dele. Agora ele aparece logo depois do pai, e os detalhes do pai trazem a seção **Subagentes**.
+- Um comando do code mode do Codex encerrado no fim do turno virava "Erro em Bash [Código de saída -1]" depois do
+  "Concluiu", e um subagente mostrava "Concluiu" duas vezes.
 
 ### Segurança
 

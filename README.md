@@ -475,7 +475,7 @@ terminal: o lápis só aparece com o terminal ligado (sem `HABBLAUD_TERMINAL=0`)
 ### Codex
 
 As sessões do Codex (CLI ou app) aparecem como as do Claude Code: personagem, sala do projeto, atividade, tarefas,
-subagentes, terminal e histórico, uso de 5 horas e semanal e o **Meu dia** (só tokens: o Codex não informa custo). O
+subagentes, terminal e histórico, uso das janelas do plano e o **Meu dia** (só tokens: o Codex não informa custo). O
 chip da conta do Codex é vazado e leva o selo **CODEX**.
 
 - **Sem instalar nada**, o Habblaud lê os arquivos que o próprio Codex grava (as conversas em `~/.codex/sessions`, as
@@ -494,14 +494,17 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
     Node (no Docker, o container não alcança o daemon) e com o terminal do Habblaud ligado (mesma trava). O Habblaud só
     se junta a um daemon que já está rodando: nunca o inicia nem muda a configuração dele. Também só se junta às
     conversas que o daemon já tem carregadas (nunca carrega uma), solta cada uma 60 segundos depois de o turno fechar e a
-    assina de novo quando um turno abre, para não segurar a sessão de um terminal que você fechou. No Windows, o canal
-    paralelo e as mensagens usam o `codex.exe` do PATH; com o Codex instalado só pelo npm (que só põe um `codex.cmd`),
-    aponte `HABBLAUD_CODEX_BIN` para o executável nativo. `HABBLAUD_CODEX_APPSERVER=0` desliga.
+    assina de novo quando um turno abre, para não segurar a sessão de um terminal que você fechou. A cada 15 segundos
+    ele confere se o daemon responde; sem resposta em 10 segundos (um daemon travado por mais que isso conta como
+    morto), a ligação cai, os cartões abertos fecham, os pedidos novos vão pelo hook e ele tenta se ligar de novo logo
+    depois. No Windows, o canal paralelo e as mensagens usam o `codex.exe` do PATH; com o Codex instalado só pelo npm
+    (que põe no PATH só os atalhos `codex.cmd`/`codex.ps1`, sem o `codex.exe`), aponte `HABBLAUD_CODEX_BIN` para o
+    executável nativo. `HABBLAUD_CODEX_APPSERVER=0` desliga.
   - **Nos demais** (o app do Codex, a extensão do VS Code e a CLI fora do daemon): pelo hook. Com alguma página do
     Habblaud aberta, o pedido espera a sua resposta por até **25 segundos** (`npm run codex:install -- --espera <s>`,
     de 5 a 120): **Aprovar** ou **Recusar** (com o motivo). Diferente do Claude Code, o Codex só mostra a aprovação no
     terminal **depois** que o escritório responde ou o prazo acaba — nesse meio-tempo o terminal mostra "Aguardando
-    resposta no Habblaud…".
+    resposta no Habblaud…". Passado o prazo, os botões do cartão desligam: a decisão já não chegaria ao Codex.
 
   Não há "sempre permitir" nem "interromper", e o Codex não deixa responder as perguntas dele por fora. O hook só
   aceita a decisão de um Habblaud que prove ser o desta máquina, com a chave local `~/.habblaud/codex-hook.key` (o
@@ -522,10 +525,12 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
   há 12 horas sai, e um turno sem nenhuma escrita há 30 minutos fica ocioso (e volta a trabalhar quando o arquivo volta
   a crescer). Reiniciado no meio de um turno, o Habblaud lê a conversa de trás para frente até o começo dele.
 - **Quando a sessão sai do escritório:** a CLI do Codex roda as sessões num servidor em segundo plano, que só
-  descarrega a conversa 30 minutos depois de ela ficar ociosa e sem ninguém inscrito (o padrão do Codex,
-  `thread_unload_delay_secs`, 1800 s); até lá a trava continua presa, e o personagem pode continuar no escritório
-  mesmo com o terminal fechado. O Habblaud não prolonga isso: ele solta a conversa 60 segundos depois de o turno
-  fechar, então um terminal fechado sai no tempo normal do Codex (no pior caso, esses 60 segundos mais os 30 minutos).
+  descarrega a conversa depois de ela ficar ociosa e sem ninguém inscrito, num prazo do próprio Codex (no teste com o
+  0.160.1, cerca de 1 a 2 minutos; o código do Codex prevê até 30 minutos, `thread_unload_delay_secs`); até lá a trava
+  continua presa, e o personagem pode continuar no escritório mesmo com o terminal fechado. O Habblaud segura a
+  conversa só 60 segundos depois de o turno fechar (e de novo por uns 60 segundos quando é reiniciado ou se liga de
+  novo ao daemon, o que recomeça a contagem do Codex), então um terminal fechado sai no tempo do Codex: no pior caso,
+  esses 60 segundos mais o prazo do Codex.
   No Windows e no Linux (fora do Docker), a sessão sai segundos depois de o processo que segura a trava dela fechar (o
   app, a CLI fora do daemon ou o próprio daemon, ao descarregar a conversa), mesmo que ele tenha caído sem avisar. O
   subagente que ainda não concluiu espera 2 minutos antes de sair, porque volta com o mesmo id quando o pai manda um
@@ -967,14 +972,18 @@ Codex não diz em que pasta ela está (só cria a trava da sessão), e sem a pas
 
 No `codex` do terminal ligado ao daemon, o log de inicialização tem a linha "Aprovação do codex no terminal pelo
 escritório": ela diz se o canal paralelo está ligado e, se não estiver, por quê (Docker, `HABBLAUD_CODEX_APPSERVER=0`,
-terminal desligado). Sem o binário do Codex, o log avisa; no Windows, ele precisa ser o `codex.exe` (o `codex.cmd` do
-npm não serve): aponte `HABBLAUD_CODEX_BIN` para o executável nativo. Um pedido em que o Codex não oferece nenhuma
-resposta que o escritório saiba dar (aprovar, aprovar na sessão, recusar) fica só no terminal, e o log diz isso. Nos
-demais clientes do Codex, o pedido passa pelo hook: confira com `npm run codex:status`, aprove os hooks em `/hooks`
-(no Windows, de novo depois de um `codex:install` que trocou o comando) e deixe uma página do Habblaud aberta por
-`http://localhost`. Depois de atualizar o Habblaud, reinicie-o: o hook novo só decide com a prova da chave
-`~/.habblaud/codex-hook.key`, que um servidor antigo não manda. No Docker, rode `npm run docker:up` de novo (ele cria a
-chave e a monta no container); com `HABBLAUD_HOOK_DEBUG=1`, o hook conta no stderr o que fez.
+terminal desligado). Sem o binário do Codex, o log avisa; no Windows, ele precisa ser o `codex.exe` (os atalhos
+`codex.cmd`/`codex.ps1` do npm não servem): aponte `HABBLAUD_CODEX_BIN` para o executável nativo. "O app-server não
+ficou pronto" no log quer dizer que a ligação ao daemon não ficou pronta em 15 segundos ou foi recusada; "a conexão
+com o app-server caiu (o daemon não responde)", que o daemon passou mais de 10 segundos sem responder. Nos dois casos
+os pedidos vão pelo hook e o Habblaud tenta de novo; um `thread/resume` que falha também deixa uma linha, uma por
+conversa. Um pedido em que o Codex não oferece nenhuma resposta que o escritório saiba dar (aprovar, aprovar na
+sessão, recusar; por exemplo, só `cancel`) fica só no terminal, e o log diz isso. Nos demais clientes do Codex, o
+pedido passa pelo hook: confira com `npm run codex:status`, aprove os hooks em `/hooks` (no Windows, de novo depois de
+um `codex:install` que trocou o comando) e deixe uma página do Habblaud aberta por `http://localhost`; passado o prazo
+do hook, o cartão desliga os botões. Depois de atualizar o Habblaud, reinicie-o: o hook novo só decide com a prova da
+chave `~/.habblaud/codex-hook.key`, que um servidor antigo não manda. No Docker, rode `npm run docker:up` de novo (ele
+cria a chave e a monta no container); com `HABBLAUD_HOOK_DEBUG=1`, o hook conta no stderr o que fez.
 
 </details>
 

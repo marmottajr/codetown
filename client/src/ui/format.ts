@@ -104,7 +104,7 @@ export function compactDuration(ms: number): string {
 export const FIVE_HOURS_MS = 5 * HOUR;
 export const WEEK_MS = 7 * DAY;
 
-/** Apresentação de uma janela de uso (5 h ou semana), já considerando a idade dos números. */
+/** Apresentação de uma janela de uso do plano, já considerando a idade dos números. */
 export interface UsageWindowView {
   /** Percentual 0–100; null quando a janela renovou depois da leitura (o uso atual é desconhecido). */
   pct: number | null;
@@ -119,7 +119,7 @@ export interface UsageWindowView {
 }
 
 /**
- * `windowMs` é a duração da janela (5 h ou 7 d): sem horário de reinício, números lidos há mais que isso
+ * `windowMs` é a duração da janela do plano: sem horário de reinício, números lidos há mais que isso
  * já não valem (a janela certamente renovou).
  */
 export function usageWindowView(win: { utilization: number; resetsAt?: number } | undefined, fetchedAt: number, now: number, windowMs: number): UsageWindowView | null {

@@ -356,7 +356,12 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
     do turno encerram; com duas abertas, responder uma não tira a espera); `tools.update_plan` no JS do `exec` do code
     mode vira as tarefas (o literal é lido, nunca executado); `SubAgentActivity` do multiagente v2 conta o filho, e a
     tarefa do `spawn_agent` vira o título dele; extensões (`web.search`, `web::run`, `clock.sleep`, `image_gen`) viram
-    atividades.
+    atividades. Mensagem cifrada do multiagente (token Fernet, `gAAAAA…`, como no 0.160.1) nunca aparece: o título
+    cai no `task_name`, a atividade vira "Delegando ao subagente <tarefa>" e o terminal mostra "(mensagem cifrada)"; do
+    envelope "Message Type: …" do filho vale o `Payload` em claro ou o `Task name`. `CommandExecution` com código -1
+    depois do fim do turno (comando encerrado pelo Codex) é ignorado.
+  - Título do principal: o nome da thread no `session_index.jsonl` (o mesmo leitor do histórico, relido quando o tamanho
+    muda), senão a primeira instrução.
   - Uso do plano por `token_count.rate_limits`: `windows` = os medidores que o plano tem, na ordem `primary`/
     `secondary`, um por duração, mais `fiveHour`/`sevenDay` para as janelas de 300 e 10080 min (formatos antigos
     valem; `primary` nulo com `rate_limit_reached_type` = `noQuota`), empurrado com `accounts.setUsage`. Conta sem
@@ -388,12 +393,17 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
 - **Chave do hook** (`codex/key.ts`): 32 bytes em `~/.habblaud/codex-hook.key`, fora do `CODEX_HOME`. Fora do Docker o
   servidor a cria se faltar (com o Codex no escritório); no Docker, o `docker:up` a cria no host e a monta somente
   leitura em `/keys/codex-hook.key` (`HABBLAUD_CODEX_HOOK_KEY`). Um arquivo com outro tamanho nunca é sobrescrito.
+  Limite da prova do servidor: ela amarra só o nonce (não o status nem o corpo da resposta), então não protege contra
+  um impostor na porta que repasse a chamada do hook a uma segunda instância do Habblaud com a mesma chave (dev ou
+  teste com o mesmo `HOME`).
 - **Aprovar pelo hook** (`permissions/*`, `permissions/codex.ts`): o mesmo `POST /api/permissions` com
   `provider: 'codex'`, `account` e `codexHome`; sem sugestões, sem perguntas, sem a busca no transcript; `interrupt` ou
   `suggestion` num pedido do Codex = 400. O registro e a espera de um pedido do Codex passam pela mesma guarda
   `verifyHookCall` (as do hook do Claude nunca), e o hook só aceita uma decisão que venha com a prova do servidor. Ele
   espera até `permissionTimeoutS` de `~/.habblaud/codex-hook.json` (padrão 25 s) e imprime só `allow` ou `deny`
-  (+`message`). O Codex só mostra a aprovação no terminal depois que o hook termina.
+  (+`message`). O Codex só mostra a aprovação no terminal depois que o hook termina. Passado o prazo do pedido
+  (`expiresAt`), o cartão desliga os botões e uma decisão num pedido do Codex dá 404, sem gravar "Aprovado no
+  Habblaud".
 - **Canal paralelo** (`sources/codex/appserver/`: `ws.ts`, `rpc.ts`, `client.ts`, `service.ts`): para o `codex` no
   terminal ligado ao daemon do app-server. Por conta, pré-filtro pela pasta `<CODEX_HOME>/app-server-control/` (o
   socket AF_UNIX não aparece para o Node no Windows; a pasta sim), confirmação por `codex app-server daemon version`
@@ -402,22 +412,30 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   JSON-RPC: assina só as threads que o daemon já tem carregadas (`thread/loaded/list` na descoberta e `thread/started`
   das que outro cliente carrega; o `thread/resume` é sem overrides e nunca vai a uma thread descarregada, porque faria
   o daemon carregá-la) e repassa os pedidos de aprovação de comando e de arquivo ao registro (`registerParallel`, modo
-  `'parallel'`): sem prazo, sem página aberta, com as `decisions` que o Codex oferece (ausentes = as quatro; presentes
-  sem nenhuma das quatro = nenhum cartão, vale o terminal); o comando do cartão é o de dentro do invólucro do shell
+  `'parallel'`): sem prazo, sem página aberta, com as `decisions` que o Codex oferece (ausentes = as quatro; sem
+  `accept`, `acceptForSession` nem `decline`, como só `cancel` = nenhum cartão, vale o terminal, com uma linha no log;
+  o escritório nunca manda `cancel`); o comando do cartão é o de dentro do invólucro do shell
   (`unwrapCommand`); vale a 1ª resposta, do escritório ou do terminal, e o `serverRequest/resolved` fecha o cartão. A
   decisão do escritório vai ao app-server (503 com o canal fora); recusar não leva motivo; "nesta sessão" =
   `acceptForSession`. Numa thread assinada, o hook recebe `{skip: 'parallel'}`. Assinada, a thread fica carregada no
   daemon com a trava de escritor presa, então a fonte avisa o turno de cada uma (`onTurn` → `setTurnOpen`): 60 s depois
   de o turno fechar (`UNSUBSCRIBE_AFTER_MS`) o serviço a desassina (`thread/unsubscribe`; os cartões dela fecham e os
-  pedidos novos voltam ao hook) e a assina de novo quando um turno abre, se ela ainda estiver carregada. O daemon só
-  descarrega a thread `thread_unload_delay_secs` (padrão 1800 s) depois de ela ficar ociosa e sem inscritos, e é aí
-  que a trava some e o TUI fechado sai do escritório: o tempo normal do Codex, no pior caso 60 s mais 30 min. Sem daemon,
-  confere de novo a cada 30 s; um `thread/loaded/list` que falha com a conexão de pé avisa uma vez e lista de novo em
-  30 s; na queda, os cartões daquela conexão fecham, a thread volta ao hook e a reconexão espera de 1 a 30 s. Liga só
+  pedidos novos voltam ao hook) e a assina de novo quando um turno abre, se ela ainda estiver carregada. No boot e a
+  cada reconexão, a thread carregada de turno fechado é assinada de novo e solta 60 s depois. O daemon só descarrega a
+  thread depois de ela ficar ociosa e sem inscritos, num prazo do próprio Codex (`thread_unload_delay_secs`: cerca de
+  1 a 2 min no teste com o 0.160.1; o código do Codex prevê até 30 min), e é aí que a trava some e o TUI fechado sai
+  do escritório: no pior caso, 60 s mais o prazo do Codex, contados de novo a cada reinício ou reconexão do Habblaud.
+  Sem daemon, confere de novo a cada 30 s; um `thread/loaded/list` que falha com a conexão de pé avisa uma vez e lista
+  de novo em 30 s; um `thread/resume` com erro avisa uma vez por conta e thread e é tentado de novo a cada 30 s. A
+  conexão que não fica pronta em 15 s (`HANDSHAKE_TIMEOUT_MS`) cai, e ela ou um handshake/`initialize` recusado deixa
+  "não ficou pronto" no log. Pronta, um batimento (`thread/loaded/list` com `{limit: 1}`, só leitura) a cada 15 s
+  (`HEARTBEAT_MS`) sem resposta em 10 s (`HEARTBEAT_TIMEOUT_MS`) derruba a conexão ("caiu (o daemon não responde)") e
+  encerra o proxy filho: um daemon travado por mais que o prazo conta como morto. Na queda, os cartões daquela conexão
+  fecham, a thread volta ao hook e a reconexão espera de 1 a 30 s. Liga só
   fora do Docker (o container não alcança o socket do host), com a trava do terminal e o Codex ligado;
   `HABBLAUD_CODEX_APPSERVER` com valor falso desliga. Binário: `HABBLAUD_CODEX_BIN` ou o `codex` do PATH, o mesmo das
-  mensagens (no Windows, só um `codex.exe`: com o Codex instalado só pelo npm, que põe um `codex.cmd`, aponte
-  `HABBLAUD_CODEX_BIN` para o executável nativo).
+  mensagens (no Windows, só um `codex.exe`: com o Codex instalado só pelo npm, que põe no PATH só os atalhos
+  `codex.cmd`/`codex.ps1`, aponte `HABBLAUD_CODEX_BIN` para o executável nativo).
 - **Mensagens** (`messages/*`, `messages/codex.ts`): para agentes do Codex, `codex queue --thread=<id> --message=<texto>`
   com `CODEX_HOME` = pasta da conta (no host). Fora do Docker o servidor roda o comando (`HABBLAUD_CODEX_BIN` ou `codex`
   do PATH); no Docker, o auxiliar do host (`npm run codex:bridge`) busca em `POST /api/codex/bridge/poll` e confirma em
