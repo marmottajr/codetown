@@ -53,7 +53,7 @@ const BLANK = /\s/;
  * blocos enormes: acima do teto vai no último espaço em branco antes dele (não deixa um token pela metade no fim);
  * sem nenhum espaço, corta no próprio teto.
  */
-function maskedCut(text: string, max?: number): string {
+export function maskedCut(text: string, max?: number): string {
   let head = text;
   if (text.length > MASK_CEILING) {
     let end = MASK_CEILING;

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { describeShellJob } from '../../../shared/activity';
 import { threadId } from '../../test/codex-fixtures';
 import { B, withOrdinal } from '../../test/codex-fixtures-source-ii';
+import { maskedCut } from './rollout';
 import { createShellScan, scanShellLine, type CodexShellEvent } from './shells';
 
 const T = threadId(1);
@@ -26,7 +27,7 @@ describe('scanShellLine: unified exec', () => {
       B.stdin('call_end', 7, AT + 40_000),
       B.exited('call_end', 1, AT + 41_000),
     ]);
-    const job = describeShellJob('Bash', { command: cmd });
+    const job = describeShellJob('Bash', { command: maskedCut(cmd) });
     expect(out[1]).toEqual([{ type: 'start', callId: 'call_dev', taskId: 'proc:7', label: job.label, command: job.command }]);
     expect(JSON.stringify(out[1])).not.toContain(token);
     expect(out.slice(2, 4)).toEqual([[], []]);
@@ -46,6 +47,17 @@ describe('scanShellLine: unified exec', () => {
     expect(out[1]).toEqual([{ type: 'start', callId: 'call_ps', taskId: 'proc:8', label, command }]);
     expect(out[3]).toEqual([]);
     expect(out[4]).toEqual([{ type: 'end', callId: 'call_ps', taskId: 'proc:8', status: 'completed', summary: 'exit code 0' }]);
+  });
+
+  it('rg com um token no padrão de busca: nem o rótulo (cortado em 24 caracteres) nem o comando mostram o começo do token', () => {
+    const token = 'gh' + 'p_' + 'Z9'.repeat(18);
+    const out = feed([B.exec('call_rg', `rg "uso de ${token}" src`, AT), B.running('call_rg', 11, AT + 10_000)]);
+    const ev = out[1][0];
+    expect(ev).toMatchObject({ type: 'start', callId: 'call_rg', taskId: 'proc:11' });
+    if (ev?.type !== 'start') throw new Error('sem início');
+    expect(ev.label).not.toMatch(/ghp_\S/);
+    expect(ev.command ?? '').not.toMatch(/ghp_\S/);
+    expect(JSON.stringify(out[1])).not.toContain('Z9Z9');
   });
 });
 

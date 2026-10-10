@@ -15,7 +15,7 @@
 //
 // As linhas herdadas de um fork (ordinal < subagent_history_start_ordinal) não contam: o processo é do pai.
 import { describeShellJob } from '../../../shared/activity';
-import { commandText, contentText, parseArguments } from './rollout';
+import { commandText, contentText, maskedCut, parseArguments } from './rollout';
 
 export type CodexShellStatus = 'completed' | 'failed' | 'killed';
 
@@ -110,7 +110,8 @@ function onCall(scan: CodexShellScan, p: Rec): void {
   if (name !== 'exec_command' && name !== 'write_stdin' && name !== 'wait') return;
   const args = parseArguments(p.arguments);
   if (name === 'exec_command') {
-    const command = commandText(args.cmd);
+    // Mascarado ANTES do describeShellJob: o rótulo dele corta o padrão de busca em 24 caracteres antes de mascarar.
+    const command = maskedCut(commandText(args.cmd));
     remember(scan, callId, command ? { name, command } : { name });
     return;
   }
