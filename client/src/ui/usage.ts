@@ -424,7 +424,7 @@ export class UsageCards {
     }
     // OpenCode: vários provedores e contas, sem cota única; a dica não manda instalar nada.
     if (isOpencode(a)) {
-      setText(r.tipNote, 'O OpenCode usa vários provedores e contas, sem uma cota única para mostrar aqui.');
+      setText(r.tipNote, 'O OpenCode usa vários provedores e contas, sem uma cota única para mostrar aqui. Além disso, o OpenCode não informa cota ao Habblaud: não há número de uso para ler.');
       setHidden(r.tipNote, false);
       setHidden(r.tipSetup, !usageSetupVisible(a));
       return;
