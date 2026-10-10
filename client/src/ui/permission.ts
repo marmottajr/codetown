@@ -45,6 +45,15 @@ export function expiryText(expiresAt: number, now: number, seconds = false): str
   return `volta ao terminal em ${formatDuration(left)}`;
 }
 
+/**
+ * Pedido do hook do Codex com o prazo vencido ("voltando ao terminal…"): o hook já desistiu e o terminal pede a
+ * aprovação, então o cartão não responde mais (o servidor recusaria). Claude Code (o hook dele pode voltar a esperar) e
+ * canal paralelo (sem prazo): nunca.
+ */
+export function codexHookExpired(p: Pick<PermissionRequestInfo, 'provider' | 'mode' | 'expiresAt'>, now: number): boolean {
+  return p.provider === 'codex' && p.mode !== 'parallel' && now >= p.expiresAt;
+}
+
 /** Aviso do cartão de um pedido do Codex. */
 export const CODEX_PERMISSION_NOTE = 'No Codex, a aprovação só aparece no terminal depois que você responder aqui ou o prazo acabar.';
 
@@ -244,6 +253,8 @@ export class PermissionCard {
   private opts: PermissionOptions = { always: false, interrupt: true, reasonRequired: false, seconds: false, note: '' };
   /** Pedido do canal paralelo do Codex (undefined = os outros). */
   private par: ParallelOptions | undefined;
+  /** Pedido do hook do Codex com o prazo vencido (codexHookExpired): os botões ficam desligados. */
+  private late = false;
   private status: HTMLElement;
   private remote: HTMLElement;
   /** Perguntas do AskUserQuestion, montadas uma vez por pedido (a seleção sobrevive aos snapshots). */
@@ -370,6 +381,7 @@ export class PermissionCard {
     if (p.id !== this.id || agent.id !== this.agentId) this.reset(p.id, agent.id);
     setHidden(this.el, false);
     const now = this.ctx.now();
+    this.late = codexHookExpired(p, now);
     const opts = (this.opts = permissionOptions(p, agent));
     const par = (this.par = parallelOptions(p));
     const codex = p.provider === 'codex';
@@ -554,9 +566,9 @@ export class PermissionCard {
     return this.ctx.store.mock || isLocalHostname(location.hostname);
   }
 
-  /** Sem como responder agora: enviando, já respondido ou página aberta de fora do computador. */
+  /** Sem como responder agora: enviando, já respondido, prazo do hook do Codex vencido ou página aberta de fora do computador. */
   private isBusy(): boolean {
-    return this.phase === 'sending' || this.phase === 'sent' || !this.isLocal();
+    return this.phase === 'sending' || this.phase === 'sent' || this.late || !this.isLocal();
   }
 
   // ---------------------------------------------------------------- perguntas (AskUserQuestion)

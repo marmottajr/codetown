@@ -4,6 +4,7 @@ import {
   answerFor,
   buildAnswers,
   CODEX_PERMISSION_NOTE,
+  codexHookExpired,
   destinationLabel,
   expiryText,
   isLocalHostname,
@@ -67,6 +68,19 @@ describe('responder pelo escritório (peças puras)', () => {
     expect(permissionOptions({ suggestions }, { kind: 'main' })).toEqual({ always: true, interrupt: true, reasonRequired: false, seconds: false, note: '' });
     expect(permissionOptions({}, { kind: 'main' }).always).toBe(false);
     expect(permissionOptions({}, { kind: 'sub', background: true }).note).toMatch(/^Este subagente roda em segundo plano/);
+  });
+
+  it('hook do Codex com o prazo vencido ("voltando ao terminal…"): o cartão não responde mais; Claude Code e canal paralelo, nunca', () => {
+    const p = { expiresAt: 25_000 };
+    expect(codexHookExpired({ ...p, provider: 'codex' }, 24_999)).toBe(false);
+    expect(codexHookExpired({ ...p, provider: 'codex' }, 25_000)).toBe(true);
+    expect(codexHookExpired({ ...p, provider: 'codex', mode: 'blocking' }, 30_000)).toBe(true);
+    // O mesmo instante em que o prazo diz "voltando ao terminal…".
+    expect(expiryText(25_000, 25_000, true)).toBe('voltando ao terminal…');
+    // Claude Code: o hook dele pode voltar a esperar.
+    expect(codexHookExpired(p, 30_000)).toBe(false);
+    // Canal paralelo: sem prazo.
+    expect(codexHookExpired({ provider: 'codex', mode: 'parallel', expiresAt: 1 }, 30_000)).toBe(false);
   });
 
   it('destinationLabel', () => {

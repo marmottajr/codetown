@@ -640,6 +640,10 @@ export class PermissionRegistry {
     }
     if (p.outcome) return 'conflict';
     if (p.parallel) return this.decideParallel(p, p.parallel, d);
+    // Hook do Codex com o prazo vencido: ele já desistiu (não volta a esperar) e o terminal pede a aprovação; a decisão
+    // não chegaria a ninguém. Vale como pedido vencido (o cartão fecha na folga). O hook do Claude Code pode voltar a
+    // esperar: lá nada muda.
+    if (p.codex && this.now() > p.info.expiresAt) return 'not-found';
     if (unsupportedByCodex(p.info, d)) return 'unsupported';
     if (d.forSession) return 'invalid';
     if (d.suggestion !== undefined && !p.info.suggestions?.some((s) => s.index === d.suggestion)) return 'invalid';

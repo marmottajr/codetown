@@ -122,6 +122,27 @@ describe('PermissionRegistry: pedidos do Codex', () => {
     expect(await w2.result).toEqual({ status: 'released', reason: 'terminal' });
   });
 
+  it('prazo do hook vencido (o hook do Codex já desistiu e o terminal pede): a decisão é recusada como pedido vencido, sem atividade; no Claude Code, nada muda', () => {
+    const { office, registry, clock } = setup();
+    office.commit();
+    const id = registered(registry.register(codexInput()));
+    const claude = registered(registry.register({ session_id: 'sess-1', tool_name: 'Bash', tool_input: { command: 'ls' }, timeout_ms: 25_000 }));
+    office.commit();
+
+    // Até o prazo, ainda vale.
+    clock.advance(25_000);
+    expect(registry.detail(id)).toBeDefined();
+    clock.advance(1);
+    for (const d of [{ behavior: 'allow' }, { behavior: 'deny', message: 'não' }, { behavior: 'terminal' }] as const) expect(registry.decide(id, d)).toBe('not-found');
+    expect(office.commit().feed.map((f) => f.activity.text)).not.toContain('Aprovado no Habblaud');
+    // O cartão segue até a folga (o relógio o fecha), sem ninguém para receber.
+    expect(registry.detail(id)).toBeDefined();
+
+    // Claude Code: o hook dele pode voltar a esperar; a decisão tardia continua valendo.
+    expect(registry.decide(claude, { behavior: 'allow' })).toBe('ok');
+    expect(office.commit().feed.map((f) => f.activity.text)).toContain('Aprovado no Habblaud');
+  });
+
   it('AskUserQuestion vindo do Codex não é pergunta: aprova-se como os outros pedidos', () => {
     const { registry } = setup();
     const id = registered(registry.register(codexInput({ tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Qual?', options: [{ label: 'A' }] }] } })));
