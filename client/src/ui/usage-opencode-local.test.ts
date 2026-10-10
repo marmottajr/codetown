@@ -1,6 +1,7 @@
 // Cartão do OpenCode com o uso local (custo e tokens dos últimos 7 dias, do opencode.db): texto, sem barra nem
 // porcentagem. Spec: .specs/features/opencode-uso (OCU-01, OCU-02, OCU-03).
 import { afterAll, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { AccountInfo } from '../../../shared/types';
 import { installFakeDom, renderCards, restoreFakeDom, tipRows } from './usage-dom-fixture';
 import { usageMessage } from './usage';
@@ -57,6 +58,30 @@ describe('cartão do OpenCode com uso local', () => {
     const [long, short] = usageMessage(withUse);
     expect(long).toMatch(/^US\$.1,75 · 7 dias · 1,5 k ent\. · 300 saída$/);
     expect(short).toMatch(/^US\$.1,75 · 7 d$/);
+  });
+});
+
+describe('cartão do OpenCode com uso local: modo estreito (4 cartões em 1000px, corpo ~79px)', () => {
+  const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+  // Corpo do container query mais estreito (max-width: 112px), onde o texto da mensagem some.
+  const narrow = css.match(/@container usage-card \(max-width: 112px\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
+  const hidden = [...narrow.matchAll(/([^{}]+)\{[^}]*display:\s*none[^}]*\}/g)].map((m) => m[1]!.trim());
+  it('o texto de custo (forma curta, com o valor) fica no cartão e visível', () => {
+    const [card] = renderCards([withUse], NOW);
+    const short = card!.one('ui-usage-card__msg-short');
+    expect(short.textContent).toMatch(/^US\$.1,75 · 7 d$/);
+    expect(short.visible).toBe(true);
+    expect(card!.one('ui-usage-card__msg').classList.contains('has-cost')).toBe(true);
+  });
+  it('no modo estreito a regra que esconde o texto da mensagem não alcança o cartão com custo', () => {
+    expect(narrow).not.toBe('');
+    expect(hidden).toContain('.ui-usage-card__msg:not(.has-cost) .ui-usage-card__msg-text');
+    expect(hidden).not.toContain('.ui-usage-card__msg-text');
+    expect(narrow).toMatch(/\.ui-usage-card__msg\.has-cost\s*\{[^}]*font-size:\s*10px/);
+  });
+  it('os outros cartões (sem custo) seguem sem a classe e continuam sujeitos à regra do modo estreito', () => {
+    const [semUso] = renderCards([oc({ usageStatus: 'disabled' })], NOW);
+    expect(semUso!.one('ui-usage-card__msg').classList.contains('has-cost')).toBe(false);
   });
 });
 

@@ -368,6 +368,8 @@ export class UsageCards {
     setHidden(r.msg, state !== 'empty' && state !== 'noquota');
     setHidden(r.how, !usageHowVisible(a));
     r.msg.classList.toggle('is-noquota', state === 'noquota');
+    // Custo do OpenCode em texto: é a única informação do cartão, então a forma curta fica visível mesmo no modo estreito.
+    r.msg.classList.toggle('has-cost', isOpencode(a) && !!a.usage?.local);
     setTitle(r.msg, state === 'noquota' ? codexUsageNote(a, now) : '');
     setText(r.howLong, codex ? 'Como funciona' : 'Como ativar');
     setText(r.howShort, codex ? 'Saber' : 'Ativar');
@@ -439,7 +441,7 @@ export class UsageCards {
     }
     // OpenCode: vários provedores e contas, sem cota única; a dica não manda instalar nada.
     if (isOpencode(a)) {
-      setText(r.tipNote, 'O OpenCode usa vários provedores e contas, sem uma cota única para mostrar aqui. Além disso, o OpenCode não informa cota ao Habblaud: não há um número único para ler. O uso (tokens e custo, do banco local) aparece em `opencode stats`. Já os limites do OpenCode Go (5 horas, semanal e mensal, em dólares, por modelo) ficam no console do OpenCode, não em arquivo local. Por isso o cartão não mostra barra.');
+      setText(r.tipNote, 'O uso do OpenCode (tokens e custo, do banco local) aparece em `opencode stats`; já os limites do OpenCode Go (5 horas, semanal e mensal, em dólares, por modelo) são definidos pelo OpenCode; o Habblaud não os lê, e por isso o cartão não mostra barra.');
       setHidden(r.tipNote, false);
       setHidden(r.tipSetup, !usageSetupVisible(a));
       return;

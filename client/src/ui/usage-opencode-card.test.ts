@@ -16,14 +16,13 @@ describe('cartão de uso do OpenCode', () => {
     expect(card!.one('ui-usage-card__msg').visible).toBe(true);
     expect(card!.one('ui-usage-card__how').visible).toBe(false);
   });
-  it('a dica explica que o OpenCode não informa cota ao Habblaud (e que há vários provedores), sem passo a passo', () => {
+  it('a dica diz onde ver o uso e os limites e por que não há barra, sem passo a passo', () => {
     const note = card!.one('ui-usage-tip__note');
     expect(note.visible).toBe(true);
-    expect(note.textContent).toContain('o OpenCode não informa cota ao Habblaud');
-    expect(note.textContent).toContain('vários provedores');
+    expect(note.textContent).not.toMatch(/cota única|número único|vários provedores|console|Zen/);
     expect(note.textContent).toContain('opencode stats');
     expect(note.textContent).toContain('OpenCode Go (5 horas, semanal e mensal, em dólares, por modelo)');
-    expect(note.textContent).toContain('console do OpenCode, não em arquivo local');
+    expect(note.textContent).toContain('são definidos pelo OpenCode; o Habblaud não os lê');
     expect(note.textContent).toContain('o cartão não mostra barra');
     expect(card!.one('ui-usage-tip__setup').visible).toBe(false);
   });

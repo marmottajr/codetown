@@ -1288,10 +1288,16 @@
   }
 }
 
-/* Cartão minúsculo (3 contas no celular): fica só o botão, que já diz que falta ativar. */
+/* Cartão minúsculo (3 contas no celular): fica só o botão, que já diz que falta ativar. O custo do OpenCode (has-cost) não some. */
 @container usage-card (max-width: 112px) {
-  .ui-usage-card__msg-text {
+  .ui-usage-card__msg:not(.has-cost) .ui-usage-card__msg-text {
     display: none;
+  }
+
+  /* "US$ 4,21 · 7 d" precisa caber inteiro nos ~79px do corpo do cartão (4 cartões em 1000px). */
+  .ui-usage-card__msg.has-cost {
+    font-size: 10px;
+    letter-spacing: -0.2px;
   }
 
   .ui-usage-card__how {
