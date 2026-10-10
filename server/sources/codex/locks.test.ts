@@ -9,6 +9,11 @@ import { createLockProber, decodeDev, probeProc, probeWin32, type ProbeFs } from
 
 const errno = (code: string) => Object.assign(new Error(`${code}: simulado`), { code });
 
+/** Guardas do código-fonte: modo de escrita (qualquer aspa), flags O_ de escrita soltas, open assíncrono e streams. */
+const WRITE_MODE = /['"`](?:r\+|rs\+|w\+?|wx\+?|a\+?|ax\+?|as\+?)['"`]/;
+const WRITE_FLAG = /\bO_(?:RDWR|WRONLY|CREAT|APPEND|TRUNC|EXLOCK)\b/;
+const OTHER_OPEN = /\bopen\s*\(|\bcreateWriteStream\b/;
+
 /** fs falso que registra as chamadas; cada função decide o que a operação faz. */
 function fakeFs(o: { open?: () => number; read?: () => number; close?: () => void } = {}) {
   const calls = { open: [] as Array<[string, string]>, read: [] as Array<[number, number, number]>, closed: [] as number[] };
@@ -257,8 +262,19 @@ describe('sondagem das travas do Codex', () => {
       .replace(/\/\/.*$/gm, '');
     expect(src).not.toMatch(/\bflock\s*\(|\bfcntl\b|LockFileEx|O_EXLOCK|\blockSync\b|constants\.O_/);
     expect(src).not.toMatch(/\b(?:writeSync|writeFileSync|appendFileSync|ftruncateSync|truncateSync|renameSync|unlinkSync|rmSync|mkdirSync)\b/);
-    expect(src).not.toMatch(/'(?:r\+|rs\+|w\+?|wx\+?|a\+?|ax\+?|as\+?)'/);
+    // Modo de escrita em qualquer aspa; flags O_ soltas (desestruturadas de constants); open assíncrono e streams.
+    expect(src).not.toMatch(WRITE_MODE);
+    expect(src).not.toMatch(WRITE_FLAG);
+    expect(src).not.toMatch(OTHER_OPEN);
     expect(src.match(/openSync\(/g)).toHaveLength(2); // a declaração em ProbeFs e a única chamada, com 'r'
     expect(src).toMatch(/fs\.openSync\(lockPath, 'r'\)/);
+  });
+
+  it('o guarda acima pega as formas que passariam caladas', () => {
+    for (const bad of [`openSync(p, "r+")`, 'openSync(p, `w`)', `openSync(p, 'a+')`]) expect(bad).toMatch(WRITE_MODE);
+    for (const bad of ['const { O_RDWR } = constants', 'O_WRONLY | O_CREAT', 'flags: O_APPEND']) expect(bad).toMatch(WRITE_FLAG);
+    for (const bad of ['fs.open(p, flags, cb)', 'await promises.open(p)', 'await open(p, mode)', 'createWriteStream(p)']) expect(bad).toMatch(OTHER_OPEN);
+    expect(`fs.openSync(lockPath, 'r')`).not.toMatch(WRITE_MODE);
+    expect(`fs.openSync(lockPath, 'r')`).not.toMatch(OTHER_OPEN);
   });
 });

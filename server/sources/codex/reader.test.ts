@@ -1,5 +1,5 @@
 // Varredura reversa do rollout do Codex até a fronteira de turno (linhas sintéticas).
-import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -191,6 +191,25 @@ describe('scanBackward', () => {
     expect(r).toEqual({ lines: lines.slice(1), start: offsetOf(lines, 1), end: Buffer.byteLength(text(lines)), hitBoundary: true });
     expect(lineTimestamp(r.lines[0])).toBe(T0 + 2000);
   });
+
+  it('arquivo que encolhe no meio da varredura (reescrito): para sem exceção, com as linhas já lidas e sem fronteira', () => {
+    const lines = [R.taskStarted('t1', T0), R.user(T, 't1', 'u1', 'primeira instrução', T0 + 1), R.agent(T, 't1', 'a1', 'resposta', T0 + 2)];
+    writeFileSync(file, text(lines));
+    const size = sizeOf(file);
+    let shrunk = false;
+    const r = scanBackward(file, {
+      size,
+      blockBytes: 16,
+      // Depois da 1ª linha lida (a última do arquivo), o arquivo encolhe: a próxima leitura volta curta.
+      isBoundary: () => {
+        if (!shrunk) truncateSync(file, 10);
+        shrunk = true;
+        return false;
+      },
+    });
+    expect(shrunk).toBe(true);
+    expect(r).toEqual({ lines: [lines[2]], start: offsetOf(lines, 2), end: size, hitBoundary: false });
+  });
 });
 
 it('o leitor só abre arquivos para leitura (o servidor não escreve no CODEX_HOME)', () => {
@@ -198,7 +217,10 @@ it('o leitor só abre arquivos para leitura (o servidor não escreve no CODEX_HO
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/.*$/gm, '');
   expect(src).not.toMatch(/\b(?:writeSync|writeFileSync|appendFileSync|ftruncateSync|truncateSync|renameSync|unlinkSync|rmSync|mkdirSync)\b/);
-  expect(src).not.toMatch(/'(?:r\+|rs\+|w\+?|wx\+?|a\+?|ax\+?|as\+?)'/);
+  // Modo de escrita em qualquer aspa; flags O_ de escrita soltas (desestruturadas de constants); open assíncrono e streams.
+  expect(src).not.toMatch(/['"`](?:r\+|rs\+|w\+?|wx\+?|a\+?|ax\+?|as\+?)['"`]/);
+  expect(src).not.toMatch(/\bO_(?:RDWR|WRONLY|CREAT|APPEND|TRUNC|EXLOCK)\b/);
+  expect(src).not.toMatch(/\bopen\s*\(|\bcreateWriteStream\b/);
   expect(src.match(/openSync\(/g)?.length).toBe(1);
   expect(src).toMatch(/openSync\(path, 'r'\)/);
 });
