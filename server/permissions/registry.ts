@@ -22,6 +22,7 @@ import type { Activity, AgentInfo, PermissionAnswer, PermissionDecision, Permiss
 import { errMsg, log } from '../log';
 import { toolView } from '../sources/terminal';
 import { codexToolView } from './codex';
+import { antigravityToolView } from './antigravity';
 import { opencodeToolView } from './opencode';
 import { callSignature, scanToolCall } from './transcript';
 
@@ -160,12 +161,12 @@ function isIndex(v: unknown): v is number {
 
 /** Pedido que se responde com `answer` (as perguntas do AskUserQuestion; o Codex não as manda pelo hook; o plugin do OpenCode manda as dele assim). */
 function isQuestion(info: { tool: string; provider?: string }): boolean {
-  return info.tool === ASK_TOOL && info.provider !== 'codex';
+  return info.tool === ASK_TOOL && info.provider !== 'codex' && info.provider !== 'antigravity';
 }
 
 /** O Codex e o OpenCode não aceitam interromper nem "sempre permitir" (só aprovar ou recusar com motivo). */
 function unsupportedByCodex(info: PermissionRequestInfo, d: PermissionDecision): boolean {
-  return (info.provider === 'codex' || info.provider === 'opencode') && (d.interrupt === true || d.suggestion !== undefined);
+  return (info.provider === 'codex' || info.provider === 'opencode' || info.provider === 'antigravity') && (d.interrupt === true || d.suggestion !== undefined);
 }
 
 /**
@@ -246,7 +247,7 @@ export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefin
     a.status = 'waiting';
     a.statusSince = p.createdAt;
   }
-  a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : p.provider === 'codex' ? 'aprovar um comando' : 'aprovar uma permissão';
+  a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : p.provider === 'codex' || p.provider === 'antigravity' ? 'aprovar um comando' : 'aprovar uma permissão';
   return a;
 }
 
@@ -256,7 +257,7 @@ export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefin
  * `agent_id` é o thread do subagente (e `session_id`, o thread raiz).
  */
 export function parseHookInput(raw: unknown): {
-  provider?: 'codex' | 'opencode';
+  provider?: 'codex' | 'opencode' | 'antigravity';
   account?: string;
   codexHome?: string;
   sessionId: string;
@@ -275,15 +276,16 @@ export function parseHookInput(raw: unknown): {
   const t = typeof r.timeout_ms === 'number' && Number.isFinite(r.timeout_ms) ? r.timeout_ms : DEFAULT_TIMEOUT_MS;
   const codex = r.provider === 'codex';
   const opencode = r.provider === 'opencode';
+  const antigravity = r.provider === 'antigravity';
   return {
-    ...(codex ? { provider: 'codex' as const, account: shortStr(r.account, 200), codexHome: shortStr(r.codexHome, 4_096) } : opencode ? { provider: 'opencode' as const } : {}),
+    ...(codex ? { provider: 'codex' as const, account: shortStr(r.account, 200), codexHome: shortStr(r.codexHome, 4_096) } : opencode ? { provider: 'opencode' as const } : antigravity ? { provider: 'antigravity' as const } : {}),
     sessionId,
     agentId: shortStr(r.agent_id, 200),
     agentType: shortStr(r.agent_type, 120),
     cwd: shortStr(r.cwd, 4_096),
     tool,
     input: rec(r.tool_input) ?? {},
-    suggestions: codex || opencode ? undefined : r.permission_suggestions,
+    suggestions: codex || opencode || antigravity ? undefined : r.permission_suggestions,
     timeoutMs: Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, t)),
   };
 }
@@ -386,7 +388,14 @@ export class PermissionRegistry {
     const req = parseHookInput(raw);
     const codex = req.provider === 'codex';
     const opencode = req.provider === 'opencode';
-    const desc = codex ? codexToolView(req.tool, req.input, req.cwd) : opencode ? opencodeToolView(req.tool, req.input, req.cwd) : describeTool(req.tool, req.input);
+    const antigravity = req.provider === 'antigravity';
+    const desc = codex
+      ? codexToolView(req.tool, req.input, req.cwd)
+      : opencode
+        ? opencodeToolView(req.tool, req.input, req.cwd)
+        : antigravity
+          ? antigravityToolView(req.tool, req.input, req.cwd)
+          : describeTool(req.tool, req.input);
     const questions = 'questions' in desc ? desc.questions : undefined;
     const ask = isQuestion(req);
     // Pergunta: todas precisam aparecer no escritório (o hook só responde se cada uma tiver resposta).
@@ -396,7 +405,9 @@ export class PermissionRegistry {
       ? this.resolveCodexAgent(req.sessionId, req.agentId, req.agentType, this.opts.codexAccount?.(req.account, req.codexHome) ?? req.account)
       : opencode
         ? this.resolveOpencodeAgent(req.sessionId)
-        : this.resolveAgent(req.sessionId, req.agentId, req.agentType);
+        : antigravity
+          ? this.resolveAntigravityAgent(req.sessionId)
+          : this.resolveAgent(req.sessionId, req.agentId, req.agentType);
     if (!target) return { skip: 'unknown-session' };
     if (this.size >= this.maxPending) return { skip: 'too-many' };
 
@@ -407,6 +418,7 @@ export class PermissionRegistry {
     const info: PermissionRequestInfo = { id, tool: req.tool, title: view.title, text: desc.text, icon: desc.icon, createdAt: now, expiresAt: now + req.timeoutMs };
     if (codex) info.provider = 'codex';
     else if (opencode) info.provider = 'opencode';
+    else if (antigravity) info.provider = 'antigravity';
     if (view.input) info.input = view.input;
     if (view.inputKind) info.inputKind = view.inputKind;
     if (target.subagent) info.subagent = target.subagent;
@@ -418,12 +430,12 @@ export class PermissionRegistry {
       info,
       agentId: target.id,
       sessionId: req.sessionId,
-      signature: codex || opencode ? '' : callSignature(req.tool, req.input),
+      signature: codex || opencode || antigravity ? '' : callSignature(req.tool, req.input),
       lastScanAt: 0,
       waiters: new Set(),
       idleSince: now,
     };
-    if (codex || opencode) p.codex = true; // sem a busca da resposta no transcript (o OpenCode não grava um)
+    if (codex || opencode || antigravity) p.codex = true; // sem a busca da resposta no transcript (o OpenCode e o Antigravity não gravam um que a fonte leia)
     if (req.agentId) p.hookAgentId = req.agentId;
     if (ask) p.askFormat = askFormat(req.input.questions);
     this.pending.set(id, p);
@@ -578,9 +590,9 @@ export class PermissionRegistry {
     if (agentId) {
       const subId = `${sessionId}:${agentId}`;
       const sub = office.get(subId);
-      if (present(sub) && sub.provider !== 'codex' && sub.provider !== 'opencode') return { id: subId };
+      if (present(sub) && sub.provider !== 'codex' && sub.provider !== 'opencode' && sub.provider !== 'antigravity') return { id: subId };
     }
-    const main = office.list().find((a) => a.kind === 'main' && a.provider !== 'codex' && a.provider !== 'opencode' && a.sessionId === sessionId && a.status !== 'offline');
+    const main = office.list().find((a) => a.kind === 'main' && a.provider !== 'codex' && a.provider !== 'opencode' && a.provider !== 'antigravity' && a.sessionId === sessionId && a.status !== 'offline');
     if (!main) return undefined;
     return agentId ? { id: main.id, subagent: agentType ?? 'subagente' } : { id: main.id };
   }
@@ -609,6 +621,12 @@ export class PermissionRegistry {
    */
   private resolveOpencodeAgent(sessionId: string): { id: string; subagent?: string } | undefined {
     const found = this.opts.office.list().find((a) => a.provider === 'opencode' && a.sessionId === sessionId && present(a));
+    return found ? { id: found.id } : undefined;
+  }
+
+  /** Agente do Antigravity de um pedido: o da conversa `session_id` (o hook manda o `conversationId`). Conversa que o Habblaud não mostra: sem desvio. */
+  private resolveAntigravityAgent(sessionId: string): { id: string; subagent?: string } | undefined {
+    const found = this.opts.office.list().find((a) => a.provider === 'antigravity' && a.sessionId === sessionId && present(a));
     return found ? { id: found.id } : undefined;
   }
 
