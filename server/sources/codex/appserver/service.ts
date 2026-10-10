@@ -39,6 +39,8 @@ const DAEMON_CHECK_TIMEOUT_MS = 5_000;
 const TICK_MS = 1_000;
 /** Pedido sem `availableDecisions`: o escritório oferece as quatro. */
 const ALL_DECISIONS: readonly CodexDecision[] = ['accept', 'acceptForSession', 'decline', 'cancel'];
+/** Decisões que o cartão oferece (o escritório nunca manda cancel): sem nenhuma delas, o pedido fica só no terminal. */
+const OFFICE_DECISIONS: ReadonlySet<CodexDecision> = new Set<CodexDecision>(['accept', 'acceptForSession', 'decline']);
 
 /** O `codex app-server proxy` de uma conta (o processo, ou um falso nos testes). */
 export interface CodexProxy {
@@ -481,11 +483,12 @@ export class CodexAppServerService implements ParallelSink {
     // O app-server só manda o pedido a quem assina a thread.
     conn.owned.add(req.threadId);
     conn.retry.delete(req.threadId);
-    // availableDecisions ausente = as quatro; presente sem nenhuma das quatro (só emendas de política) = o escritório não
-    // tem o que responder: nenhum cartão, vale o terminal (a thread segue assinada, então o hook dela sai sem decidir).
+    // availableDecisions ausente = as quatro; presente sem accept, acceptForSession nem decline (só cancel, ou só emendas
+    // de política) = o escritório não tem o que responder (ele nunca manda cancel): nenhum cartão, vale o terminal (a
+    // thread segue assinada, então o hook dela sai sem decidir).
     const decisions = req.decisions ?? [...ALL_DECISIONS];
-    if (decisions.length === 0) {
-      this.say(`Codex (${st.id}): pedido de aprovação sem nenhuma decisão que o escritório saiba dar (accept, acceptForSession, decline, cancel); fica só com o terminal.`);
+    if (!decisions.some((d) => OFFICE_DECISIONS.has(d))) {
+      this.say(`Codex (${st.id}): pedido de aprovação sem nenhuma decisão que o escritório saiba dar (aprovar, aprovar nesta sessão ou recusar); fica só com o terminal.`);
       return;
     }
     const key = requestKey(st.id, req.requestId);

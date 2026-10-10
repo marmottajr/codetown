@@ -665,6 +665,28 @@ describe('CodexAppServerService: pedidos de aprovação', () => {
     expect(await s.svc.decide(`${ACCOUNT}:12`, 'accept')).toBe('gone');
     expect(s.registry.register(codexHook())).toEqual({ skip: 'parallel' });
   });
+
+  it('só cancel (com ou sem emendas de política): nenhum cartão (o escritório não oferece cancel), uma linha no log e o pedido fica no terminal', async () => {
+    // Arrange
+    const s = setup();
+    const fake = await connected(s);
+    const before = s.logs.length;
+
+    // Act
+    fake.request(13, COMMAND, { threadId: THREAD, ...BASE, itemId: 'call-13', command: 'npm test', availableDecisions: ['cancel', { applyNetworkPolicyAmendment: {} }] });
+    await until(() => s.logs.length > before);
+    await flush();
+
+    // Assert
+    expect(s.seen).toEqual([]);
+    expect(pendingOf(s)).toEqual([]);
+    const lines = s.logs.slice(before);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(ACCOUNT);
+    expect(lines[0]).not.toContain('npm test');
+    expect(lines[0]).not.toMatch(/\bcancel\b/);
+    expect(s.registry.register(codexHook())).toEqual({ skip: 'parallel' });
+  });
 });
 
 describe('CodexAppServerService: queda e corrida (Review Focus #3 e #4)', () => {
