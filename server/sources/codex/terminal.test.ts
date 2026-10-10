@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TerminalEntry } from '../../../shared/types';
 import { R, threadId } from '../../test/codex-fixtures';
-import { sendEncrypted, spawnEncrypted } from '../../test/codex-fixtures-live';
+import { fernet, sendEncrypted, spawnEncrypted } from '../../test/codex-fixtures-live';
 import { parseSessionMeta } from './rollout';
 import { createCodexTerminalParser } from './terminal';
 
@@ -323,6 +323,18 @@ describe('terminal do Codex — response_item no paginated', () => {
       ['s1', 'Agent', 'Agent(explorer: listar_arquivos)', '(mensagem cifrada)'],
       ['x1', 'send_message', 'send_message(/root/listar_arquivos)', '(mensagem cifrada)'],
     ]);
+    expect(JSON.stringify(out)).not.toContain('gAAAAA');
+  });
+
+  it('0.160.1: o CollabAgentToolCall (formato paginated) com o prompt cifrado mostra "(mensagem cifrada)", nunca o texto cifrado; o legível segue como está', () => {
+    const out = entries([
+      R.meta(T),
+      item({ type: 'CollabAgentToolCall', id: 'ca1', tool: 'spawn_agent', prompt: fernet('ca1') }),
+      item({ type: 'CollabAgentToolCall', id: 'ca2', tool: 'spawn_agent', prompt: 'Liste os arquivos do módulo' }),
+    ]);
+    const [cifrado, legivel] = tools(out);
+    expect(cifrado.title).toBe('spawn_agent((mensagem cifrada))');
+    expect(legivel.title).toBe('spawn_agent(Liste os arquivos do módulo)');
     expect(JSON.stringify(out)).not.toContain('gAAAAA');
   });
 

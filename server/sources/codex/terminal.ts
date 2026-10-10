@@ -360,7 +360,7 @@ class CodexTerminalParser implements TerminalParser {
         return this.sys(id, at, 'Conversa compactada');
       case 'CollabAgentToolCall': {
         const tool = str(item.tool) ?? 'spawn_agent';
-        return this.tool(id, at, tool, toolView(tool, str(item.prompt) ? { prompt: item.prompt } : {}, this.cwd));
+        return this.tool(id, at, tool, toolView(tool, str(item.prompt) ? { prompt: readable(item.prompt) } : {}, this.cwd));
       }
       case 'Plan':
         return this.assistant(id, at, str(item.text) ?? '');
