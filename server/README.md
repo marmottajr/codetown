@@ -431,11 +431,11 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   "não ficou pronto" no log. Pronta, um batimento (`thread/loaded/list` com `{limit: 1}`, só leitura) a cada 15 s
   (`HEARTBEAT_MS`) sem resposta em 10 s (`HEARTBEAT_TIMEOUT_MS`) derruba a conexão ("caiu (o daemon não responde)") e
   encerra o proxy filho: um daemon travado por mais que o prazo conta como morto. Na queda, os cartões daquela conexão
-  fecham, a thread volta ao hook e a reconexão espera de 1 a 30 s. Liga só
-  fora do Docker (o container não alcança o socket do host), com a trava do terminal e o Codex ligado;
-  `HABBLAUD_CODEX_APPSERVER` com valor falso desliga. Binário: `HABBLAUD_CODEX_BIN` ou o `codex` do PATH, o mesmo das
-  mensagens (no Windows, só um `codex.exe`: com o Codex instalado só pelo npm, que põe no PATH só os atalhos
-  `codex.cmd`/`codex.ps1`, aponte `HABBLAUD_CODEX_BIN` para o executável nativo).
+  fecham, a thread volta ao hook e a reconexão espera de 1 a 30 s. Liga só fora do Docker (o container não alcança o
+  socket do host), com a trava do terminal e o Codex ligado; `HABBLAUD_CODEX_APPSERVER` com valor falso desliga.
+  Binário: `HABBLAUD_CODEX_BIN` ou o `codex` do PATH, o mesmo das mensagens (no Windows, só um `codex.exe`: com o Codex
+  instalado só pelo npm, que põe no PATH só os atalhos `codex.cmd`/`codex.ps1`, aponte `HABBLAUD_CODEX_BIN` para o
+  executável nativo).
 - **Mensagens** (`messages/*`, `messages/codex.ts`): para agentes do Codex, `codex queue --thread=<id> --message=<texto>`
   com `CODEX_HOME` = pasta da conta (no host). Fora do Docker o servidor roda o comando (`HABBLAUD_CODEX_BIN` ou `codex`
   do PATH); no Docker, o auxiliar do host (`npm run codex:bridge`) busca em `POST /api/codex/bridge/poll` e confirma em
