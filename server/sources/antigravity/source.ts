@@ -6,8 +6,10 @@
 // não tem hook de fim de sessão). Status: PreInvocation/PreToolUse/PostToolUse/PostInvocation = trabalhando (entre uma
 // passada do modelo e a próxima vêm PostInvocation e logo PreInvocation: não é ocioso); Stop (com fullyIdle) = ocioso.
 // Atividade: o nome da ferramenta + o texto curto que o hook mandou (nunca o resto dos args nem a saída).
+import { readFileSync, statSync } from 'node:fs';
 import type { AgentStatus, SourceInfo } from '../../../shared/types';
 import type { AccountsService } from '../../accounts/service';
+import { toEpochMs, usageFromAntigravity } from '../../accounts/usage';
 import { errMsg, log } from '../../log';
 import type { Office } from '../../model/office';
 import type { AgentSource } from '../source';
@@ -17,6 +19,7 @@ import { AG_EVENTS, CONVERSATION_ID_RE, type AntigravityEvent, type AntigravityL
 /** Conversa sem nenhum evento há mais que isto sai do escritório. */
 export const PRESENCE_MS = 30 * 60_000;
 const SWEEP_MS = 60_000;
+const USAGE_POLL_MS = 5_000;
 const ACCOUNT_ID = 'antigravity';
 const ACCOUNT_COLOR = '#6c8cff';
 const ROLE = 'Agente principal (Antigravity)';
@@ -29,7 +32,14 @@ export interface AntigravitySourceOptions {
   now?: () => number;
   /** De quanto em quanto tempo varrer as conversas paradas (padrão 60 s). */
   sweepMs?: number;
+  /** Arquivo das cotas gravado pelo statusline do agy (mod/habblaud-antigravity/statusline.mjs); sem ele, sem uso. */
+  usageFile?: string;
+  /** De quanto em quanto tempo conferir o arquivo das cotas (padrão 5 s). */
+  usagePollMs?: number;
 }
+
+/** O arquivo das cotas tem ~300 bytes; maior que isto não é dele. */
+const USAGE_MAX_BYTES = 16 * 1024;
 
 interface Tracker {
   key: string;
@@ -52,6 +62,8 @@ export class AntigravitySource implements AgentSource, AntigravityLive {
   private accountId = ACCOUNT_ID;
   private registered = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private usageTimer: ReturnType<typeof setInterval> | null = null;
+  private usageMtime = 0;
   private stopped = false;
   private readonly now: () => number;
 
@@ -62,12 +74,19 @@ export class AntigravitySource implements AgentSource, AntigravityLive {
   start(): void {
     this.timer = setInterval(() => this.sweep(), this.opts.sweepMs ?? SWEEP_MS);
     this.timer.unref?.();
+    if (this.opts.usageFile) {
+      this.readUsage();
+      this.usageTimer = setInterval(() => this.readUsage(), this.opts.usagePollMs ?? USAGE_POLL_MS);
+      this.usageTimer.unref?.();
+    }
   }
 
   stop(): void {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.usageTimer) clearInterval(this.usageTimer);
     this.timer = null;
+    this.usageTimer = null;
   }
 
   sources(): SourceInfo[] {
@@ -101,6 +120,32 @@ export class AntigravitySource implements AgentSource, AntigravityLive {
     ]);
     this.accountId = entries[0]?.id ?? ACCOUNT_ID;
     this.registered = true;
+  }
+
+  /**
+   * Lê as cotas que o statusline do agy gravou ({fetchedAt, quota}) e as leva à conta do Antigravity (a conta aparece
+   * assim que há números, mesmo sem nenhum evento de hook). Só relê se o arquivo mudou. Nunca lança: arquivo ausente,
+   * grande demais ou sem cota válida não muda nada (se havia números, saem).
+   */
+  readUsage(): void {
+    const file = this.opts.usageFile;
+    if (!file || this.stopped) return;
+    try {
+      const st = statSync(file);
+      if (st.mtimeMs === this.usageMtime || st.size > USAGE_MAX_BYTES) return;
+      this.usageMtime = st.mtimeMs;
+      const j = JSON.parse(readFileSync(file, 'utf8')) as { fetchedAt?: unknown; quota?: unknown };
+      const fetchedAt = Math.min(this.now(), toEpochMs(j.fetchedAt) ?? Math.round(st.mtimeMs));
+      const usage = usageFromAntigravity(j.quota, fetchedAt);
+      if (!usage) {
+        if (this.registered) this.opts.accounts.clearUsage(this.accountId, 'antigravity');
+        return;
+      }
+      this.registerAccount();
+      this.opts.accounts.setUsage(this.accountId, usage);
+    } catch {
+      // ausente ou ilegível: sem uso
+    }
   }
 
   applyHookEvent(event: AntigravityEvent): boolean {

@@ -287,9 +287,14 @@ export interface AccountUsage {
    * - 'statusline': capturado ao vivo e gravado em ~/.habblaud/usage/<conta>.json pelo mod do Habblaud
    *   (mod/habblaud, recomendado) ou pelo scripts/statusline-tap.mjs (campo rate_limits do statusline);
    * - 'cache': `cachedUsageUtilization` gravado pelo próprio Claude Code (atualiza quando alguém roda /usage);
-   * - 'codex': `rate_limits` dos arquivos de sessão do Codex (só se renovam enquanto alguma sessão roda).
+   * - 'codex': `rate_limits` dos arquivos de sessão do Codex (só se renovam enquanto alguma sessão roda);
+   * - 'antigravity': `quota` que o `agy` manda ao statusline, gravada por mod/habblaud-antigravity/statusline.mjs.
    */
-  source: 'cache' | 'statusline' | 'codex';
+  source: 'cache' | 'statusline' | 'codex' | 'antigravity';
+  /** Nomes de exibição quando a janela não é a padrão (Antigravity: a barra semanal leva o nome da cota, ex.: "Gemini"). */
+  labels?: { sevenDay?: string };
+  /** Outras janelas semanais além da principal (Antigravity: uma cota por grupo de modelos). */
+  extra?: Array<{ label: string; window: UsageWindow }>;
   /** Quem gravou o arquivo ao vivo ('statusline'): o mod do Habblaud no Claude Code ou o tap de statusline. */
   via?: 'mod' | 'tap';
   /**

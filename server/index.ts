@@ -102,7 +102,7 @@ if (codex) agents.add(codex);
 const opencode = createOpencodeSource(config, { accounts, office });
 if (opencode) agents.add(opencode);
 // Antigravity (sources/antigravity/): só por eventos do hook dele (nenhum arquivo é lido). Entra com HABBLAUD_ANTIGRAVITY ligado.
-const antigravity = config.antigravity ? new AntigravitySource({ accounts, office }) : undefined;
+const antigravity = config.antigravity ? new AntigravitySource({ accounts, office, usageFile: join(config.usageDir, 'antigravity-quota.json') }) : undefined;
 if (antigravity) agents.add(antigravity);
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
