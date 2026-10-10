@@ -72,13 +72,16 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(emptyOfficeHint([])).toBe('Abra o Claude Code em qualquer projeto e veja seu agente chegar.');
   });
 
-  it('relógio de 1 s enquanto há pedido do Codex esperando', () => {
+  it('relógio de 1 s enquanto há pedido do hook do Codex esperando (o do canal paralelo não tem prazo nem contador)', () => {
     const agent = (permission?: AgentInfo['permission'], status: AgentInfo['status'] = 'waiting') => ({ status, permission }) as AgentInfo;
     const p = { id: 'p', tool: 'Bash', title: 'Bash(ls)', text: 'Listando', icon: '💻', createdAt: 0, expiresAt: 25_000 };
     const snap = (agents: AgentInfo[]) => ({ agents }) as Pick<OfficeSnapshot, 'agents'>;
     expect(hasCodexPermission(snap([agent({ ...p, provider: 'codex' })]))).toBe(true);
+    expect(hasCodexPermission(snap([agent({ ...p, provider: 'codex', mode: 'blocking' })]))).toBe(true);
     expect(hasCodexPermission(snap([agent(p)]))).toBe(false);
     expect(hasCodexPermission(snap([agent({ ...p, provider: 'codex' }, 'offline')]))).toBe(false);
+    expect(hasCodexPermission(snap([agent({ ...p, provider: 'codex', mode: 'parallel', expiresAt: Number.MAX_SAFE_INTEGER })]))).toBe(false);
+    expect(hasCodexPermission(snap([agent({ ...p, provider: 'codex', mode: 'parallel' }), agent({ ...p, provider: 'codex' })]))).toBe(true);
     expect(hasCodexPermission(null)).toBe(false);
   });
 
