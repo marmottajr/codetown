@@ -3,7 +3,7 @@
 //   npm run antigravity:install     # registra o hook "habblaud" no hooks.json do agy e copia o script
 //   npm run antigravity:uninstall   # remove só o que a instalação acrescentou
 //   npm run antigravity:status      # mostra se o hook está registrado e atualizado, e se o Habblaud responde
-//   (opções: --dry-run, --port <n>, --aprovar, --espera <s>)
+//   (opções: --dry-run, --port <n>, --aprovar, --espera <s>, --uso)
 //
 // O hook (mod/habblaud-antigravity/hook.mjs) manda ao escritório, na hora, o que as sessões do agy fazem. Por padrão só
 // observa: não imprime nada e sai com 0 (o agy bloqueia o agente enquanto o hook roda, ver o cabeçalho do hook). Com
@@ -12,13 +12,18 @@
 // arquivo, para continuar funcionando se o repositório mudar de lugar: depois de atualizar o Habblaud, rode
 // npm run antigravity:install de novo (o status avisa quando a cópia ficou para trás).
 //
+// Com `--uso` ele também mostra a cota (a do /usage do agy) no cartão de uso: copia mod/habblaud-antigravity/statusline.mjs
+// para ~/.habblaud/antigravity-statusline.mjs e acrescenta um `statusLine` (com `stack_with_default`, a linha padrão do agy
+// continua) em ~/.gemini/antigravity-cli/settings.json, com backup. Se o settings.json já tem um statusLine que não é do
+// Habblaud, ele NÃO é trocado (o instalador avisa e sai com 1). Sem `--uso` o settings.json nunca é tocado.
+//
 // Arquivos: o hooks.json que o agy carrega (~/.gemini/config/hooks.json, confirmado no agy 1.3.3 pelo log dele), a cópia
 // ~/.habblaud/antigravity-hook.mjs e ~/.habblaud/antigravity-hook.json ({port}). No hooks.json entra uma chave só,
 // "habblaud", com os cinco eventos; os outros hooks ficam como estão. Antes de mudar o hooks.json, uma cópia vai para
 // <arquivo>.habblaud-backup-<data>. Um hooks.json que não é um objeto JSON é recusado sem gravar nada. O agy parte o
 // comando nos espaços e não tira aspas: por isso o caminho da cópia não pode ter espaço nem aspas (a instalação para).
 // Nunca toca em settings.json, no token de login nem nas conversas do agy.
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,6 +31,9 @@ import { tildify } from './statusline-install';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const HOOK_SOURCE = join(ROOT, 'mod', 'habblaud-antigravity', 'hook.mjs');
+export const STATUSLINE_SOURCE = join(ROOT, 'mod', 'habblaud-antigravity', 'statusline.mjs');
+/** O statusLine só é considerado do Habblaud se o comando tiver isto. */
+const STATUSLINE_MARK = 'antigravity-statusline.mjs';
 export const DEFAULT_PORT = 4747;
 export const CONFIG_NAME = 'antigravity-hook.json';
 export const HOOK_NAME = 'habblaud';
@@ -52,6 +60,9 @@ Opções:
   --aprovar        também aprovar ou recusar os comandos (run_command) pelo escritório: o hook segura o comando até a
                    sua resposta. Sem a opção, o hook só observa (rodar de novo sem ela desliga). Usa o comportamento
                    \`{}\` do agy, que a documentação dele não descreve (conferido no agy ${TESTED_AGY}).
+  --uso            também mostrar a cota (a do /usage do agy) no cartão de uso: acrescenta um statusLine no
+                   ~/.gemini/antigravity-cli/settings.json (com backup; um statusLine que já exista e não seja do Habblaud
+                   não é trocado)
   --espera <s>     quanto o hook espera a sua resposta antes de deixar o agy perguntar (padrão: ${DEFAULT_WAIT_S} s; de
                    ${MIN_WAIT_S} a ${MAX_WAIT_S}); só vale com --aprovar
   -h, --help       mostra esta ajuda
@@ -66,6 +77,7 @@ export interface RunOptions {
   port: number;
   approvals: boolean;
   waitS: number;
+  usage: boolean;
 }
 
 export interface Health {
@@ -79,6 +91,8 @@ export interface RunContext {
   now: Date;
   /** O hook do repositório (a origem da cópia). */
   hookPath: string;
+  /** O statusline do repositório (a origem da cópia, com --uso). */
+  statuslinePath?: string;
   out: (line: string) => void;
   /** Consulta o /api/health do Habblaud (testes injetam um falso). */
   health?: (port: number) => Promise<Health | undefined>;
@@ -90,6 +104,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   const envPort = Number.parseInt(env.HABBLAUD_PORT ?? '', 10);
   let port = Number.isInteger(envPort) && envPort > 0 && envPort < 65_536 ? envPort : DEFAULT_PORT;
   let approvals = false;
+  let usage = false;
   let waitS = DEFAULT_WAIT_S;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -99,6 +114,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
       port = Number(argv[++i]);
       if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new FatalError('--port precisa de um número entre 1 e 65535.');
     } else if (a === '--aprovar') approvals = true;
+    else if (a === '--uso') usage = true;
     else if (a === '--espera') {
       waitS = Number(argv[++i]);
       if (!Number.isInteger(waitS) || waitS < MIN_WAIT_S || waitS > MAX_WAIT_S) throw new FatalError(`--espera precisa de um número de segundos entre ${MIN_WAIT_S} e ${MAX_WAIT_S}.`);
@@ -106,12 +122,20 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
     else throw new FatalError(`opção desconhecida: ${a}\n\n${USAGE}`);
   }
   if (!command) throw new FatalError(`diga o que fazer: install, uninstall ou status.\n\n${USAGE}`);
-  return { command, dryRun, port, approvals, waitS };
+  return { command, dryRun, port, approvals, waitS, usage };
 }
 
 export const hooksFile = (home: string): string => join(home, '.gemini', 'config', 'hooks.json');
 export const hookCopy = (home: string): string => join(home, '.habblaud', 'antigravity-hook.mjs');
 export const configPath = (home: string): string => join(home, '.habblaud', CONFIG_NAME);
+export const statuslineCopy = (home: string): string => join(home, '.habblaud', 'antigravity-statusline.mjs');
+export const settingsFile = (home: string): string => join(home, '.gemini', 'antigravity-cli', 'settings.json');
+export const quotaFile = (home: string): string => join(home, '.habblaud', 'usage', 'antigravity-quota.json');
+
+/** O statusLine que o Habblaud põe no settings.json do agy. */
+export const statusLineEntry = (copyPath: string): Json => ({ type: 'command', command: `node ${copyPath}`, stack_with_default: true });
+
+const isOurStatusLine = (v: unknown): boolean => !!v && typeof v === 'object' && typeof (v as Json).command === 'string' && ((v as Json).command as string).includes(STATUSLINE_MARK);
 
 type Json = Record<string, unknown>;
 
@@ -240,7 +264,36 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
       { label: cfgLabel, file: cfgFile, text: configText(cfg), same: JSON.stringify(readHookConfig(home)) === JSON.stringify(cfg), existing: readText(cfgFile), backup: true },
       { label: hooksLabel, file: hooks, text: hooksText(nextHooks), same: JSON.stringify(curHooks[HOOK_NAME]) === JSON.stringify(entry), existing: curHooksText, backup: true },
     ];
+    let failures0 = 0;
+    if (opts.usage) {
+      const slSource = readText(ctx.statuslinePath ?? STATUSLINE_SOURCE);
+      const settings = settingsFile(home);
+      const settingsText = readText(settings);
+      const parsed = readHooks(settingsText);
+      const settingsLabel = tildify(settings, home);
+      const slCopy = statuslineCopy(home);
+      if (slSource === undefined) {
+        out(`✗ não achei o statusline do repositório; o uso não foi instalado.`);
+        failures0++;
+      } else if (/[\s"'$`\\]/.test(slCopy)) {
+        out(`✗ o caminho ${slCopy} tem espaço ou aspas: o statusline não rodaria. O uso não foi instalado.`);
+        failures0++;
+      } else if (parsed === undefined) {
+        out(`✗ ${settingsLabel} existe, mas não é um objeto JSON válido. O uso não foi instalado.`);
+        failures0++;
+      } else if (parsed.statusLine !== undefined && !isOurStatusLine(parsed.statusLine)) {
+        out(`✗ ${settingsLabel} já tem um statusLine que não é do Habblaud; não troquei. O uso não foi instalado (encadeie o seu comando com o statusline do Habblaud ou remova o seu).`);
+        failures0++;
+      } else {
+        const wanted = statusLineEntry(slCopy);
+        steps.push(
+          { label: tildify(slCopy, home), file: slCopy, text: slSource, same: readText(slCopy) === slSource, existing: readText(slCopy), backup: true },
+          { label: settingsLabel, file: settings, text: hooksText({ ...parsed, statusLine: wanted }), same: JSON.stringify(parsed.statusLine) === JSON.stringify(wanted), existing: settingsText, backup: true },
+        );
+      }
+    }
     let changed = 0;
+    failures += failures0;
     for (const s of steps) {
       if (s.same) {
         out(`= ${s.label}: já instalado`);
@@ -266,6 +319,7 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
         out('o agente aparece no escritório quando você mandar o primeiro pedido. Com página do Habblaud aberta, cada comando (run_command)');
         out(`espera sua resposta lá por até ${opts.waitS} s; sem resposta, o agy mostra o prompt dele. Isso usa o comportamento \`{}\` do agy (não documentado; conferido no agy ${TESTED_AGY}).`);
       } else out('o agente aparece no escritório quando você mandar o primeiro pedido. O hook só observa e nunca bloqueia o agy.');
+      if (opts.usage && failures === 0) out('Uso: a cota do agy aparece no cartão do Antigravity depois que o agy renderizar a primeira tela (abra o agy).');
       out('Para desfazer: npm run antigravity:uninstall');
     }
     return failures ? 1 : 0;
@@ -289,8 +343,30 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
         failures++;
       }
     }
+    // O statusLine do uso (--uso): sai só se for do Habblaud; o de outra pessoa nunca é tocado.
+    {
+      const settings = settingsFile(home);
+      const settingsText = readText(settings);
+      const parsed = readHooks(settingsText);
+      const label = tildify(settings, home);
+      if (settingsText !== undefined && parsed === undefined) out(`= ${label}: não é um objeto JSON válido; não mexi.`);
+      else if (parsed === undefined || !isOurStatusLine(parsed.statusLine)) out(`= ${label}: sem statusLine do Habblaud`);
+      else if (opts.dryRun) out(`~ ${label}: o statusLine do Habblaud seria removido (simulação: nada removido)`);
+      else {
+        const { statusLine: _sl, ...rest } = parsed;
+        try {
+          const backup = writeWithBackup(settings, hooksText(rest), settingsText, ctx.now);
+          out(`✓ ${label}: statusLine do Habblaud removido${backup ? ` · backup em ${tildify(backup, home)}` : ''}`);
+          removed++;
+        } catch (err) {
+          out(`✗ ${label}: não consegui gravar (${(err as Error).message})`);
+          failures++;
+        }
+      }
+    }
     // Com o hooks.json sem mexer (inválido ou sem poder gravar), o hook pode seguir registrado: a cópia fica, para o comando não apontar para um arquivo que sumiu.
-    for (const [file, label] of failures ? [] : ([[copy, copyLabel], [cfgFile, cfgLabel]] as const)) {
+    const extra = [[statuslineCopy(home), tildify(statuslineCopy(home), home)], [quotaFile(home), tildify(quotaFile(home), home)]] as const;
+    for (const [file, label] of failures ? [] : ([[copy, copyLabel], [cfgFile, cfgLabel], ...extra] as const)) {
       if (!existsSync(file)) out(`= ${label}: não existia`);
       else if (opts.dryRun) out(`~ ${label}: seria removido (simulação: nada removido)`);
       else {
@@ -321,6 +397,27 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
       ? `Aprovar pelo escritório: ligado (espera ${stored.permissionTimeoutS ?? DEFAULT_WAIT_S} s; só run_command). Para desligar: npm run antigravity:install sem --aprovar.`
       : 'Aprovar pelo escritório: desligado (o hook só observa). Para ligar: npm run antigravity:install -- --aprovar.',
   );
+  {
+    const settings = settingsFile(home);
+    const parsed = readHooks(readText(settings));
+    const label = tildify(settings, home);
+    const slCopyText = readText(statuslineCopy(home));
+    const slSource = readText(ctx.statuslinePath ?? STATUSLINE_SOURCE);
+    if (parsed === undefined) out(`• Uso (cota do /usage): ${label} ${existsSync(settings) ? 'não é um objeto JSON válido' : 'não existe'}; desligado. Para ligar: npm run antigravity:install -- --uso.`);
+    else if (parsed.statusLine === undefined) out('• Uso (cota do /usage): desligado. Para ligar: npm run antigravity:install -- --uso.');
+    else if (!isOurStatusLine(parsed.statusLine)) out(`• Uso (cota do /usage): ${label} tem um statusLine que não é do Habblaud; o uso não é lido.`);
+    else if (JSON.stringify(parsed.statusLine) !== JSON.stringify(statusLineEntry(statuslineCopy(home))) || (slSource !== undefined && slCopyText !== slSource)) out('! Uso (cota do /usage): ligado, mas diferente do esperado ou desatualizado; rode npm run antigravity:install -- --uso para atualizar.');
+    else {
+      let age = 'ainda sem leitura (abra o agy)';
+      try {
+        const sec = Math.max(0, Math.round((Date.now() - statSync(quotaFile(home)).mtimeMs) / 1000));
+        age = sec < 90 ? `última leitura há ${sec} s` : `última leitura há ${Math.round(sec / 60)} min`;
+      } catch {
+        // sem arquivo ainda
+      }
+      out(`• Uso (cota do /usage): ligado; ${age}.`);
+    }
+  }
   const port = readConfigPort(home) ?? opts.port;
   const health = await (ctx.health ?? fetchHealth)(port);
   if (!health) out(`Habblaud em http://127.0.0.1:${port}: fora do ar (com ele parado, o hook não faz nada e o agy segue normal).`);

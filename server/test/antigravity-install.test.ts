@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 afterEach(() => tmp.cleanup());
 
-const opts = (command: RunOptions['command'], over: Partial<RunOptions> = {}): RunOptions => ({ command, dryRun: false, port: 4851, approvals: false, waitS: 40, ...over });
+const opts = (command: RunOptions['command'], over: Partial<RunOptions> = {}): RunOptions => ({ command, dryRun: false, port: 4851, approvals: false, waitS: 40, usage: false, ...over });
 const ctx = (over: Partial<RunContext> = {}): RunContext => ({ home, now: NOW, hookPath: HOOK_SOURCE, out: (l) => out.push(l), health: async () => undefined, ...over });
 const exec = (command: RunOptions['command'], over: Partial<RunOptions> = {}, c: Partial<RunContext> = {}) => run(opts(command, over), ctx(c));
 const backups = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.includes('backup')) : []);
@@ -239,8 +239,8 @@ describe('antigravity-install: status (AG-18)', () => {
 
 describe('antigravity-install: argumentos', () => {
   it('comando, --dry-run e --port', () => {
-    expect(parseArgs(['install'], {})).toEqual({ command: 'install', dryRun: false, port: DEFAULT_PORT, approvals: false, waitS: DEFAULT_WAIT_S });
-    expect(parseArgs(['uninstall', '--dry-run', '--port', '5000'], {})).toEqual({ command: 'uninstall', dryRun: true, port: 5000, approvals: false, waitS: DEFAULT_WAIT_S });
+    expect(parseArgs(['install'], {})).toEqual({ command: 'install', dryRun: false, port: DEFAULT_PORT, approvals: false, waitS: DEFAULT_WAIT_S, usage: false });
+    expect(parseArgs(['uninstall', '--dry-run', '--port', '5000'], {})).toEqual({ command: 'uninstall', dryRun: true, port: 5000, approvals: false, waitS: DEFAULT_WAIT_S, usage: false });
     expect(parseArgs(['status'], { HABBLAUD_PORT: '4800' })).toMatchObject({ port: 4800 });
     expect(parseArgs(['--help'], {})).toBe('help');
   });
