@@ -186,6 +186,12 @@ class AgentView {
   private last: AgentInfo | null = null;
   private history: Activity[] = [];
   private historyReq = 0;
+  /** Sobe ao trocar ao vivo ↔ replay ou ao retroceder: a resposta da geração anterior não entra. */
+  private historyGen = 0;
+  /** Fonte e instante da última linha do tempo (para perceber troca e retrocesso). */
+  private historyReplay = false;
+  private historyAt = 0;
+  private historyBound = false;
 
   private avatar: HTMLElement;
   private name: HTMLElement;
@@ -423,17 +429,50 @@ class AgentView {
     this.team.clear();
     this.shells.clear();
     this.actDetails.open = false;
+    this.loadHistory();
+  }
+
+  /** Histórico longo do agente (o pedido mais recente vale; ver historyGen). */
+  private loadHistory(): void {
+    const id = this.id;
+    if (!id) return;
     const req = ++this.historyReq;
+    const gen = this.historyGen;
     this.ctx.store
       .agentHistory(id)
       .then((hist) => {
-        if (req !== this.historyReq) return;
-        this.history = mergeHistory(hist, this.history);
+        // Outro agente (req) ou troca de fonte/retrocesso no meio do caminho (gen): a resposta não vale mais.
+        if (req !== this.historyReq || gen !== this.historyGen) return;
+        this.history = mergeHistory(hist, this.history, 200, this.ctx.store.replaying ? this.ctx.store.snapshot?.serverTime : undefined);
         this.ctx.invalidate();
       })
       .catch(() => {
         // Sem histórico longo: a linha do tempo usa as atividades recentes do snapshot.
       });
+  }
+
+  /**
+   * No replay, a linha do tempo para no instante reproduzido. Trocar a fonte ou retroceder invalida
+   * o pedido em curso; na troca, recomeça pelo snapshot (e, de volta ao vivo, busca o histórico de novo).
+   */
+  private historyUntil(): number | undefined {
+    const replaying = this.ctx.store.replaying;
+    const at = this.ctx.store.snapshot?.serverTime ?? 0;
+    if (this.historyBound) {
+      const sourceChanged = replaying !== this.historyReplay;
+      const rewound = replaying && at < this.historyAt;
+      if (sourceChanged || rewound) {
+        this.historyGen++;
+        if (sourceChanged) {
+          this.history = [];
+          if (!replaying) this.loadHistory();
+        }
+      }
+    }
+    this.historyBound = true;
+    this.historyReplay = replaying;
+    this.historyAt = at;
+    return replaying ? at : undefined;
   }
 
   /** Abre (ou fecha) o terminal deste agente; desligado sem acesso local ou depois que ele saiu. */
@@ -580,8 +619,9 @@ class AgentView {
       this.team.sync(parent ? [parent] : []);
     }
 
-    // Linha do tempo (mais recente primeiro).
-    this.history = mergeHistory(this.history, a.recent);
+    // Linha do tempo (mais recente primeiro). No replay, nada depois do instante reproduzido.
+    const until = this.historyUntil();
+    this.history = mergeHistory(this.history, a.recent, 200, until);
     const items = this.history.slice(-this.timelineShown).reverse();
     const hiddenCount = Math.max(0, this.history.length - this.timelineShown);
     setHidden(this.timelineMore, hiddenCount === 0);
