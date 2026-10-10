@@ -302,7 +302,7 @@ export interface WaitRow {
 export function waitRows(waits: readonly WaitDayStats[], clock: (t: number) => string): WaitRow[] {
   const longest = Math.max(1, ...waits.map((w) => w.ms));
   return waits.map((w, i) => {
-    const when = w.ongoing ? `desde ${clock(w.start)}` : `${clock(w.start)}–${clock(w.end)}`;
+    const when = w.ongoing ? tr('desde {0}', [clock(w.start)]) : `${clock(w.start)}–${clock(w.end)}`;
     const row: WaitRow = {
       key: `${w.agentId}|${w.start}`,
       rank: i + 1,

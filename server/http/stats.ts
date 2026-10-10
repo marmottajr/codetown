@@ -34,7 +34,7 @@ function parseTz(url: URL, fallback: string): { tz?: string; error?: string } {
  */
 export function parseStatsQuery(url: URL, defaultTz: string, today: (tz: string) => string): StatsQuery {
   const t = parseTz(url, defaultTz);
-  if (!t.tz) return { ok: false, status: 400, error: t.error ?? 'fuso inválido' };
+  if (!t.tz) return { ok: false, status: 400, error: t.error ?? tr('fuso inválido') };
   const d = single(url, 'day');
   if (d.error) return { ok: false, status: 400, error: d.error };
   const now = today(t.tz);
@@ -69,7 +69,7 @@ export function handleStatsRoute(req: IncomingMessage, res: ServerResponse, url:
   }
   if (path === '/api/stats/days') {
     const t = parseTz(url, stats.tz);
-    if (!t.tz) send(res, 400, { error: t.error ?? 'fuso inválido' });
+    if (!t.tz) send(res, 400, { error: t.error ?? tr('fuso inválido') });
     else send(res, 200, stats.days(t.tz));
     return;
   }

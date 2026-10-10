@@ -52,7 +52,7 @@ export function createTimelineHandler(opts: TimelineRoutesOptions): (req: Incomi
     let size: number;
     try {
       const st = statSync(file);
-      if (!st.isFile()) throw new Error('não é arquivo');
+      if (!st.isFile()) throw new Error(tr('não é arquivo'));
       size = st.size;
     } catch {
       sendJson(res, 404, { error: tr('nada gravado neste dia') });

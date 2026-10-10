@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { discoverClaudeDirs } from './accounts/detect';
 import { parseAllowedHosts } from './http/guard';
 import { parseGithubRepo } from './updates/checker';
+import { tr } from '../shared/i18n';
 
 export interface ServerConfig {
   port: number;
@@ -125,10 +126,10 @@ export function terminalOffReason(env: NodeJS.ProcessEnv, host: string, inDocker
   if (flag && !isTruthy(flag)) return `HABBLAUD_TERMINAL=${flag}`;
   if (inDocker) {
     const bind = env.HABBLAUD_BIND?.trim();
-    if (!bind) return 'HABBLAUD_BIND não chegou ao container, então a porta pode estar exposta na rede';
-    return isLoopbackBind(bind) ? undefined : `a porta está exposta na rede: HABBLAUD_BIND=${bind}`;
+    if (!bind) return tr('HABBLAUD_BIND não chegou ao container, então a porta pode estar exposta na rede');
+    return isLoopbackBind(bind) ? undefined : tr('a porta está exposta na rede: HABBLAUD_BIND={0}', [bind]);
   }
-  return isLoopbackBind(host) ? undefined : `a porta está exposta na rede: HABBLAUD_HOST=${host}`;
+  return isLoopbackBind(host) ? undefined : tr('a porta está exposta na rede: HABBLAUD_HOST={0}', [host]);
 }
 
 /**
@@ -140,7 +141,7 @@ export function messagesOffReason(env: NodeJS.ProcessEnv, host: string, inDocker
   const flag = env.HABBLAUD_MENSAGENS?.trim();
   if (flag && !isTruthy(flag)) return `HABBLAUD_MENSAGENS=${flag}`;
   const terminal = terminalOffReason(env, host, inDocker);
-  return terminal ? `mesma trava do terminal: ${terminal}` : undefined;
+  return terminal ? tr('mesma trava do terminal: {0}', [terminal]) : undefined;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] = process.argv): ServerConfig {

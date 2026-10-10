@@ -9,6 +9,7 @@
 //    este servidor nunca autoriza — e, quando há `Origin`, ele precisa ser da mesma origem ou local.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isIP } from 'node:net';
+import { tr } from '../../shared/i18n';
 
 /** Nomes liberados por HABBLAUD_ALLOWED_HOSTS (lista separada por vírgula; porta é ignorada). */
 export function parseAllowedHosts(raw: string | undefined): Set<string> {
@@ -118,8 +119,8 @@ export function createRequestGuard(opts: GuardOptions = {}): (req: IncomingMessa
       reject(
         res,
         403,
-        `Host não permitido: ${String(host).slice(0, 100)}. Abra o Habblaud por http://localhost (ou pelo IP) ` +
-          'ou libere o nome em HABBLAUD_ALLOWED_HOSTS.',
+        tr('Host não permitido: {0}. Abra o Habblaud por http://localhost (ou pelo IP) ', [String(host).slice(0, 100)]) +
+          tr('ou libere o nome em HABBLAUD_ALLOWED_HOSTS.'),
       );
       return true;
     }
@@ -127,12 +128,12 @@ export function createRequestGuard(opts: GuardOptions = {}): (req: IncomingMessa
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
     if (!originAllowed(origin, host, allowed)) {
-      reject(res, 403, 'Origem não permitida.');
+      reject(res, 403, tr('Origem não permitida.'));
       return true;
     }
     const path = (req.url ?? '/').split('?')[0];
     if (path.startsWith('/api/') && !isJsonContentType(req.headers['content-type'])) {
-      reject(res, 415, 'Envie o corpo como JSON (Content-Type: application/json).');
+      reject(res, 415, tr('Envie o corpo como JSON (Content-Type: application/json).'));
       return true;
     }
     return false;

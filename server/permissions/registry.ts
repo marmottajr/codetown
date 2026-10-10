@@ -356,7 +356,7 @@ export class PermissionRegistry {
       try {
         this.tick();
       } catch (err) {
-        log.warnOnce(`permissions-tick:${errMsg(err)}`, `Pedidos de permissão: falha no relógio (${errMsg(err)}).`);
+        log.warnOnce(`permissions-tick:${errMsg(err)}`, tr('Pedidos de permissão: falha no relógio ({0}).', [errMsg(err)]));
       }
     }, this.opts.tickMs ?? 500);
     this.timer.unref?.();
@@ -423,11 +423,11 @@ export class PermissionRegistry {
     if (ask) p.askFormat = askFormat(req.input.questions);
     this.pending.set(id, p);
 
-    const by = target.subagent ? ` (subagente ${target.subagent})` : '';
+    const by = target.subagent ? tr(' (subagente {0})', [target.subagent]) : '';
     const first = info.questions?.[0]?.question;
     if (first) {
       const all = info.questions!.map((q) => q.question).join(' · ');
-      this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '❓', text: truncate(`Pergunta: ${first}`, 46), detail: truncate(all, 300), tool: 'PermissionRequest' }, false);
+      this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '❓', text: truncate(tr('Pergunta: {0}', [first]), 46), detail: truncate(all, 300), tool: 'PermissionRequest' }, false);
       this.opts.office.noticePermission(target.id, `${truncate(first, 120)}${by}`, 'question');
     } else {
       this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(tr('Pede permissão: {0}', [desc.text]), 46), detail: view.title, tool: 'PermissionRequest' }, false);
@@ -563,7 +563,7 @@ export class PermissionRegistry {
     }
     const main = office.list().find((a) => a.kind === 'main' && a.provider !== 'codex' && a.sessionId === sessionId && a.status !== 'offline');
     if (!main) return undefined;
-    return agentId ? { id: main.id, subagent: agentType ?? 'subagente' } : { id: main.id };
+    return agentId ? { id: main.id, subagent: agentType ?? tr('subagente') } : { id: main.id };
   }
 
   /**
@@ -581,7 +581,7 @@ export class PermissionRegistry {
     if (own) return { id: own.id };
     const main = find(sessionId);
     if (!main) return undefined;
-    return sub ? { id: main.id, subagent: agentType ?? 'subagente' } : { id: main.id };
+    return sub ? { id: main.id, subagent: agentType ?? tr('subagente') } : { id: main.id };
   }
 
   private queueOf(p: Pending): { queued?: number } {

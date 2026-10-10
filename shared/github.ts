@@ -54,9 +54,9 @@ export function bannerOf(ev: GitHubEvent): string | undefined {
   const pr = ev.number !== undefined ? `PR #${ev.number}` : 'PR';
   switch (ev.kind) {
     case 'pr_opened':
-      return `${pr} aberto!`;
+      return tr('{0} aberto!', [pr]);
     case 'pr_merged':
-      return `${pr} mergeado!`;
+      return tr('{0} mergeado!', [pr]);
     case 'release':
       return ev.tag ? clean(tr('Release {0} no ar!', [ev.tag]), MAX_BANNER) : tr('Release no ar!');
     case 'ci_failed': {
@@ -85,7 +85,7 @@ export interface GitHubEventText {
 
 /** Textos em PT-BR de um evento: aviso e atividade. */
 export function describeGitHubEvent(ev: GitHubEvent, agentName: string, roomName: string): GitHubEventText {
-  const pr = ev.number !== undefined ? `o PR #${ev.number}` : tr('um PR');
+  const pr = ev.number !== undefined ? tr('o PR #{0}', [ev.number]) : tr('um PR');
   const act = (icon: string, text: string, detail?: string, error = false): MarkedDescription => {
     const d: MarkedDescription = { kind: 'git', icon, text: clean(text, MAX_TEXT), tool: GITHUB_TOOL };
     const det = detail ?? ev.url ?? ev.repo;
@@ -101,7 +101,7 @@ export function describeGitHubEvent(ev: GitHubEvent, agentName: string, roomName
     case 'release': {
       const tag = ev.tag ? clean(ev.tag, 24) : undefined;
       return {
-        notice: tr('🎉 {0} publicou {1} em {2}', [agentName, tag ? `a release ${tag}` : tr('uma release'), roomName]),
+        notice: tr('🎉 {0} publicou {1} em {2}', [agentName, tag ? tr('a release {0}', [tag]) : tr('uma release'), roomName]),
         level: 'success',
         activity: act('🎉', tag ? tr('Publicou a release {0}', [tag]) : tr('Publicou uma release')),
       };

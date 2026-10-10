@@ -106,7 +106,7 @@ export class FeedPanel implements UiComponent {
     const visible = filtering ? this.items.filter((f) => this.visible(f)) : this.items;
     const pending = filtering ? this.pending.filter((f) => this.visible(f)) : this.pending;
     setHidden(this.newPill, !(paused && pending.length > 0 && open));
-    if (pending.length) setText(this.newPill, pending.length === 1 ? '1 nova' : `${Math.min(pending.length, 99)} novas`);
+    if (pending.length) setText(this.newPill, pending.length === 1 ? tr('1 nova') : tr('{0} novas', [Math.min(pending.length, 99)]));
     // Escritório vazio: o cartão central já explica; o feed só mostra o que houver de antes.
     setHidden(this.empty, visible.length > 0 || officeIsEmpty(this.ctx));
     setText(

@@ -323,7 +323,7 @@ export class OfficeStore {
     }
     if (res.status === 201 && body && typeof body === 'object') return { message: body as OutboxMessage };
     const error = (body as { error?: unknown } | undefined)?.error;
-    return { error: typeof error === 'string' ? error : `erro ${res.status}` };
+    return { error: typeof error === 'string' ? error : tr('erro {0}', [res.status]) };
   }
 
   /** Situação de uma mensagem (GET /api/messages/:id). null = o servidor não a conhece (404). Sem conexão: lança. */
@@ -334,7 +334,7 @@ export class OfficeStore {
     }
     const res = await fetch(`/api/messages/${encodeURIComponent(id)}`);
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`erro ${res.status}`);
+    if (!res.ok) throw new Error(tr('erro {0}', [res.status]));
     return (await res.json()) as OutboxMessage;
   }
 

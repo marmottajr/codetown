@@ -323,7 +323,7 @@ export function toolView(name: string, input: Rec, cwd?: string): ToolView {
     }
     case 'TodoWrite': {
       const t = todoList(input.todos);
-      return { title: t.total ? `TodoWrite(${t.done}/${t.total} concluídas)` : 'TodoWrite', ...textInput(t.list) };
+      return { title: t.total ? tr('TodoWrite({0}/{1} concluídas)', [t.done, t.total]) : 'TodoWrite', ...textInput(t.list) };
     }
     case 'TaskCreate':
       return { title: titled('TaskCreate', s('subject')), ...textInput(s('description')) };
@@ -368,7 +368,7 @@ function resultText(content: unknown): string {
     const b = rec(raw);
     if (!b) continue;
     if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text);
-    else if (b.type === 'image') parts.push('[imagem]');
+    else if (b.type === 'image') parts.push(tr('[imagem]'));
     else if (b.type === 'document') parts.push('[documento]');
     else if (b.type === 'tool_reference' && typeof b.tool_name === 'string') parts.push(b.tool_name);
   }
@@ -518,7 +518,7 @@ class Parser implements TerminalParser {
 
   private userText(c: Ctx, raw: string, images = 0): void {
     const text = (raw.includes('<system-reminder>') ? raw.replace(REMINDER, '') : raw).trim();
-    const pics = images ? Array.from({ length: Math.min(images, 10) }, () => '[imagem]').join(' ') : '';
+    const pics = images ? Array.from({ length: Math.min(images, 10) }, () => tr('[imagem]')).join(' ') : '';
     if (!text) {
       if (pics) this.userEntry(c, pics);
       return;
@@ -724,7 +724,7 @@ class Parser implements TerminalParser {
         const err = rec(j.error);
         const why = str(err?.formatted) ?? str(err?.message) ?? str(j.error);
         const max = typeof j.maxRetries === 'number' ? j.maxRetries : undefined;
-        const retry = attempt !== undefined ? tr(' — tentando de novo{0}', [max ? ` (até ${max} vezes)` : '']) : '';
+        const retry = attempt !== undefined ? tr(' — tentando de novo{0}', [max ? tr(' (até {0} vezes)', [max]) : '']) : '';
         return this.sys(c, tr('Erro da API{0}{1}', [why ? `: ${oneLine(why, 140)}` : '', retry]), { level: 'error' });
       }
       case 'local_command':

@@ -20,12 +20,13 @@ import { basename, delimiter, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { discoverClaudeDirs } from '../server/accounts/detect';
 import { describeStateMigration, LEGACY_NAME, migrateLegacyStateDir } from '../server/legacy';
+import { tr } from '../shared/i18n';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const TAP_SCRIPT = join(ROOT, 'scripts', 'statusline-tap.mjs');
 const TAP_NAME = 'statusline-tap.mjs';
 
-const USAGE = `Uso: npm run usage:<install|uninstall|status> [-- opções]
+const USAGE = tr(`Uso: npm run usage:<install|uninstall|status> [-- opções]
 
   install     envolve o statusline de cada conta com o tap do Habblaud (faz backup do settings.json)
   uninstall   restaura o statusline original de cada conta
@@ -37,7 +38,7 @@ Opções:
   -h, --help       mostra esta ajuda
 
 Contas: as mesmas do servidor (~/.claude* com projects/ ou sessions/, CLAUDE_CONFIG_DIR ou
-HABBLAUD_CLAUDE_DIRS). Uso capturado em HABBLAUD_USAGE_DIR (padrão ~/.habblaud/usage).`;
+HABBLAUD_CLAUDE_DIRS). Uso capturado em HABBLAUD_USAGE_DIR (padrão ~/.habblaud/usage).`);
 
 // ---------------------------------------------------------------------------------------------
 // Funções puras (testadas em server/test/statusline-install.test.ts)
@@ -120,40 +121,40 @@ function statusLineOf(settings: Settings): StatusLine | undefined {
 /** Plano de instalação para um settings.json já lido (não grava nada). */
 export function planInstall(settings: Settings, nodeCmd: string, tapPath: string): PlanAction {
   const sl = statusLineOf(settings);
-  if (settings.statusLine !== undefined && !sl) return { action: 'skip', message: 'statusLine em formato desconhecido; nada foi alterado' };
+  if (settings.statusLine !== undefined && !sl) return { action: 'skip', message: tr('statusLine em formato desconhecido; nada foi alterado') };
   if (!sl) {
     return {
       action: 'install',
       settings: { ...settings, statusLine: { type: 'command', command: wrapCommand(nodeCmd, tapPath) } },
-      message: 'sem statusline antes: criado um que só captura o uso (não imprime nada)',
+      message: tr('sem statusline antes: criado um que só captura o uso (não imprime nada)'),
     };
   }
-  if (sl.type !== undefined && sl.type !== 'command') return { action: 'skip', message: `statusLine do tipo "${String(sl.type)}" não é suportado; nada foi alterado` };
-  if (typeof sl.command !== 'string' || !sl.command.trim()) return { action: 'skip', message: 'statusLine sem comando; nada foi alterado' };
+  if (sl.type !== undefined && sl.type !== 'command') return { action: 'skip', message: tr('statusLine do tipo "{0}" não é suportado; nada foi alterado', [String(sl.type)]) };
+  if (typeof sl.command !== 'string' || !sl.command.trim()) return { action: 'skip', message: tr('statusLine sem comando; nada foi alterado') };
   if (isTapCommand(sl.command)) {
     const cur = unwrapCommand(sl.command);
-    if (!cur) return { action: 'skip', message: 'o comando já menciona o tap, mas não no formato esperado; confira à mão' };
+    if (!cur) return { action: 'skip', message: tr('o comando já menciona o tap, mas não no formato esperado; confira à mão') };
     const next = wrapCommand(nodeCmd, tapPath, cur.original);
-    if (next === sl.command) return { action: 'none', message: 'já instalado' };
-    return { action: 'install', settings: { ...settings, statusLine: { ...sl, command: next } }, message: 'atualizado (novo caminho do Habblaud ou do node)' };
+    if (next === sl.command) return { action: 'none', message: tr('já instalado') };
+    return { action: 'install', settings: { ...settings, statusLine: { ...sl, command: next } }, message: tr('atualizado (novo caminho do Habblaud ou do node)') };
   }
   return {
     action: 'install',
     settings: { ...settings, statusLine: { ...sl, command: wrapCommand(nodeCmd, tapPath, sl.command) } },
-    message: `instalado na frente de: ${sl.command}`,
+    message: tr('instalado na frente de: {0}', [sl.command]),
   };
 }
 
 /** Plano de remoção: devolve o comando original (ou tira o statusLine que o próprio tap criou). */
 export function planUninstall(settings: Settings): PlanAction {
   const sl = statusLineOf(settings);
-  if (!sl || !isTapCommand(sl.command)) return { action: 'none', message: 'não estava instalado' };
+  if (!sl || !isTapCommand(sl.command)) return { action: 'none', message: tr('não estava instalado') };
   const cur = unwrapCommand(sl.command);
-  if (!cur) return { action: 'skip', message: 'o comando menciona o tap, mas não no formato esperado; confira à mão' };
+  if (!cur) return { action: 'skip', message: tr('o comando menciona o tap, mas não no formato esperado; confira à mão') };
   if (!cur.original) {
     const rest = { ...settings };
     delete rest.statusLine;
-    return { action: 'uninstall', settings: rest, message: 'statusline criado pelo Habblaud removido' };
+    return { action: 'uninstall', settings: rest, message: tr('statusline criado pelo Habblaud removido') };
   }
   return { action: 'uninstall', settings: { ...settings, statusLine: { ...sl, command: cur.original } }, message: `restaurado: ${cur.original}` };
 }
@@ -196,7 +197,7 @@ export function formatAge(ms: number): string {
   if (m < 60) return `${m} min`;
   const h = Math.round(m / 60);
   if (h < 48) return `${h} h`;
-  return `${Math.round(h / 24)} dias`;
+  return tr('{0} dias', [Math.round(h / 24)]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -229,11 +230,11 @@ export function parseArgs(argv: string[]): RunOptions | 'help' {
     if (a === '--dry-run') dryRun = true;
     else if (a === '--node') {
       nodeCmd = argv[++i];
-      if (!nodeCmd) throw new FatalError('--node precisa de um caminho.');
+      if (!nodeCmd) throw new FatalError(tr('--node precisa de um caminho.'));
     } else if ((a === 'install' || a === 'uninstall' || a === 'status') && !command) command = a;
-    else throw new FatalError(`opção desconhecida: ${a}\n\n${USAGE}`);
+    else throw new FatalError(tr('opção desconhecida: {0}\n\n{1}', [a, USAGE]));
   }
-  if (!command) throw new FatalError(`diga o que fazer: install, uninstall ou status.\n\n${USAGE}`);
+  if (!command) throw new FatalError(tr('diga o que fazer: install, uninstall ou status.\n\n{0}', [USAGE]));
   return { command, dryRun, nodeCmd };
 }
 
@@ -254,15 +255,15 @@ export function readSettings(file: string): { settings: Settings; raw?: string }
   try {
     raw = readFileSync(file, 'utf8');
   } catch (err) {
-    return { error: `não consegui ler (${(err as Error).message})` };
+    return { error: tr('não consegui ler ({0})', [(err as Error).message]) };
   }
   if (!raw.trim()) return { settings: {}, raw };
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: 'não é um objeto JSON; nada foi alterado' };
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: tr('não é um objeto JSON; nada foi alterado') };
     return { settings: parsed as Settings, raw };
   } catch {
-    return { error: 'JSON inválido; nada foi alterado' };
+    return { error: tr('JSON inválido; nada foi alterado') };
   }
 }
 
@@ -302,7 +303,7 @@ export function migrateLegacyState(home: string, dryRun: boolean): string | unde
     } catch {
       legacy = false;
     }
-    return legacy ? `~ ~/.${LEGACY_NAME} (nome antigo) vai para ~/.habblaud (simulação: nada movido)` : undefined;
+    return legacy ? tr('~ ~/.{0} (nome antigo) vai para ~/.habblaud (simulação: nada movido)', [LEGACY_NAME]) : undefined;
   }
   const r = migrateLegacyStateDir(home);
   const msg = describeStateMigration(r);
@@ -327,7 +328,7 @@ export function run(opts: RunOptions, ctx: RunContext): number {
   const { env, home, out } = ctx;
   const dirs = discoverClaudeDirs(env, home);
   if (!dirs.length) {
-    out('Nenhuma conta do Claude Code encontrada (~/.claude* com projects/ ou sessions/). Use HABBLAUD_CLAUDE_DIRS se estiverem em outro lugar.');
+    out(tr('Nenhuma conta do Claude Code encontrada (~/.claude* com projects/ ou sessions/). Use HABBLAUD_CLAUDE_DIRS se estiverem em outro lugar.'));
     return 1;
   }
   const nodeCmd = opts.nodeCmd ?? detectNodeCommand(env, home);
@@ -351,17 +352,17 @@ export function run(opts: RunOptions, ctx: RunContext): number {
       const sl = statusLineOf(read.settings);
       const wrapped = sl && isTapCommand(sl.command) ? unwrapCommand(sl.command) : undefined;
       const state = wrapped
-        ? `instalado${wrapped.original ? ` (na frente de: ${wrapped.original})` : ' (sem statusline original)'}`
+        ? tr('instalado{0}', [wrapped.original ? tr(' (na frente de: {0})', [wrapped.original]) : tr(' (sem statusline original)')])
         : sl && typeof sl.command === 'string'
-          ? `não instalado (statusline atual: ${sl.command})`
-          : 'não instalado (sem statusline)';
-      if (wrapped?.tapPath && resolve(wrapped.tapPath) !== resolve(ctx.tapPath)) out(`! ${label}: o tap aponta para ${wrapped.tapPath}; rode npm run usage:install para atualizar`);
+          ? tr('não instalado (statusline atual: {0})', [sl.command])
+          : tr('não instalado (sem statusline)');
+      if (wrapped?.tapPath && resolve(wrapped.tapPath) !== resolve(ctx.tapPath)) out(tr('! {0}: o tap aponta para {1}; rode npm run usage:install para atualizar', [label, wrapped.tapPath]));
       const cap = lastCapture(dir, env, home);
       const capText = cap
-        ? `último uso capturado há ${formatAge(ctx.now.getTime() - cap.at)}${cap.five !== undefined ? ` · 5h ${Math.round(cap.five)}%` : ''}${cap.week !== undefined ? ` · semana ${Math.round(cap.week)}%` : ''}`
+        ? tr('último uso capturado há {0}{1}{2}', [formatAge(ctx.now.getTime() - cap.at), cap.five !== undefined ? ` · 5h ${Math.round(cap.five)}%` : '', cap.week !== undefined ? tr(' · semana {0}%', [Math.round(cap.week)]) : ''])
         : wrapped
-          ? 'nenhum uso capturado ainda (o Claude Code envia os limites depois da primeira resposta numa sessão aberta)'
-          : 'nenhum uso capturado';
+          ? tr('nenhum uso capturado ainda (o Claude Code envia os limites depois da primeira resposta numa sessão aberta)')
+          : tr('nenhum uso capturado');
       out(`• ${label}: ${state}; ${capText}`);
       continue;
     }
@@ -376,24 +377,24 @@ export function run(opts: RunOptions, ctx: RunContext): number {
       continue;
     }
     if (opts.dryRun) {
-      out(`~ ${label}: ${plan.message} (simulação: nada gravado)`);
+      out(tr('~ {0}: {1} (simulação: nada gravado)', [label, plan.message]));
       out(`    statusLine → ${JSON.stringify(plan.settings.statusLine ?? null)}`);
       continue;
     }
     try {
       const backup = writeSettings(file, plan.settings, read.raw, ctx.now);
-      out(`✓ ${label}: ${plan.message}${backup ? ` · backup em ${tildify(backup, home)}` : ''}`);
+      out(`✓ ${label}: ${plan.message}${backup ? tr(' · backup em {0}', [tildify(backup, home)]) : ''}`);
       changed++;
     } catch (err) {
-      out(`✗ ${label}: não consegui gravar (${(err as Error).message})`);
+      out(tr('✗ {0}: não consegui gravar ({1})', [label, (err as Error).message]));
       failures++;
     }
   }
   if (opts.command === 'install' && changed) {
     out('');
-    out('Pronto. Os números aparecem no Habblaud depois da próxima resposta de cada sessão. Sessões já');
-    out('abertas costumam recarregar o settings.json sozinhas; se o uso não aparecer, reabra a sessão.');
-    out(`Uso capturado em ${tildify(usageDirOf(env, home), home)}. Para desfazer: npm run usage:uninstall`);
+    out(tr('Pronto. Os números aparecem no Habblaud depois da próxima resposta de cada sessão. Sessões já'));
+    out(tr('abertas costumam recarregar o settings.json sozinhas; se o uso não aparecer, reabra a sessão.'));
+    out(tr('Uso capturado em {0}. Para desfazer: npm run usage:uninstall', [tildify(usageDirOf(env, home), home)]));
   }
   return failures ? 1 : 0;
 }
@@ -410,7 +411,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((err: unknown) => {
-    console.error(err instanceof FatalError ? `[usage] Erro: ${err.message}` : `[usage] Erro inesperado: ${String(err)}`);
+    console.error(err instanceof FatalError ? tr('[usage] Erro: {0}', [err.message]) : tr('[usage] Erro inesperado: {0}', [String(err)]));
     process.exitCode = 1;
   });
 }

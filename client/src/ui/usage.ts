@@ -107,7 +107,7 @@ function updateMeter(m: Meter, view: UsageWindowView | null, windowName: string)
     m.el.classList.toggle('is-renewed', !!view?.renewed);
     setStyleVar(m.bar, '--pct', '0');
     setText(m.pct, '—');
-    setText(m.resetLong, view?.renewed ? '↻ renovada' : '');
+    setText(m.resetLong, view?.renewed ? tr('↻ renovada') : '');
     setText(m.resetShort, '');
     const text = view ? `${windowName}: ${view.summary}` : tr('{0}: sem dados', [windowName]);
     setAttr(m.el, 'aria-label', text);
@@ -176,7 +176,7 @@ export function showsUsageAge(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'pr
 /** Linha embaixo do nome: e-mail; no Codex (sem e-mail), o plano; nas outras, a pasta. */
 export function usageSubtitle(a: Pick<AccountInfo, 'email' | 'plan' | 'configDir' | 'provider'>): string {
   if (a.email) return a.email;
-  if (isCodex(a)) return a.plan ? `plano ${a.plan}` : 'Codex';
+  if (isCodex(a)) return a.plan ? tr('plano {0}', [a.plan]) : 'Codex';
   return a.configDir;
 }
 
@@ -351,7 +351,7 @@ export class UsageCards {
 
   private updateTip(r: CardRefs, a: AccountInfo, state: CardState, five: UsageWindowView | null, week: UsageWindowView | null, now: number): void {
     const codex = isCodex(a);
-    setText(r.tipTitle, `${a.name}${codex && !/codex/i.test(a.name) ? ' · Codex' : ''}${a.plan ? ` · plano ${a.plan}` : ''}`);
+    setText(r.tipTitle, `${a.name}${codex && !/codex/i.test(a.name) ? ' · Codex' : ''}${a.plan ? tr(' · plano {0}', [a.plan]) : ''}`);
     const rows: [string, string][] = [];
     if (codex) rows.push([tr('Ferramenta'), 'Codex']);
     if (a.email) rows.push(['E-mail', a.email]);

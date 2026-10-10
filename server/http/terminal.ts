@@ -84,7 +84,7 @@ function parseInto(parser: TerminalParser, lines: readonly string[], out: Termin
     try {
       entries = parser.push(line);
     } catch (err) {
-      log.warnOnce(`terminal-parse:${errMsg(err)}`, `Terminal: linha do transcript ignorada (${errMsg(err)}).`);
+      log.warnOnce(`terminal-parse:${errMsg(err)}`, tr('Terminal: linha do transcript ignorada ({0}).', [errMsg(err)]));
       continue;
     }
     for (const e of entries) out.push(e);
@@ -254,7 +254,7 @@ export class TerminalStreams {
     try {
       init = source.load();
     } catch (err) {
-      log.warnOnce(`terminal-load:${id}:${errMsg(err)}`, `Terminal de ${id}: não foi possível ler o transcript (${errMsg(err)}).`);
+      log.warnOnce(`terminal-load:${id}:${errMsg(err)}`, tr('Terminal de {0}: não foi possível ler o transcript ({1}).', [id, errMsg(err)]));
       return sendJson(res, 500, { error: tr('não foi possível ler o transcript') });
     }
     req.socket.setTimeout(0);
@@ -288,7 +288,7 @@ export class TerminalStreams {
     const office = this.opts.office;
     if (office.has(agentId)) {
       const path = this.opts.transcriptPathOf(agentId);
-      if (!path) return 'transcript do agente não encontrado';
+      if (!path) return tr('transcript do agente não encontrado');
       const parserFor = this.opts.parserFor;
       const createParser = parserFor ? () => parserFor(agentId) ?? this.createParser() : this.createParser;
       const o = { transcriptPathOf: this.opts.transcriptPathOf, createParser, initTailBytes: this.initTailBytes, initEntries: this.initEntries };
@@ -298,7 +298,7 @@ export class TerminalStreams {
     if (agentId.startsWith(DEMO_PREFIX) && office.detail(agentId)) {
       return new DemoSource(agentId, { office, demoEntries: this.demoEntries, initEntries: this.initEntries }, this.demoPollMs);
     }
-    return 'agente não encontrado';
+    return tr('agente não encontrado');
   }
 
   private pump(s: Stream, source: ConversationSource, agentId: string): void {
@@ -307,7 +307,7 @@ export class TerminalStreams {
       r = source.poll();
     } catch (err) {
       // Ex.: transcript sem permissão de leitura. Tenta de novo no próximo ciclo.
-      log.warnOnce(`terminal:${agentId}:${errMsg(err)}`, `Terminal de ${agentId}: ${errMsg(err)}`);
+      log.warnOnce(`terminal:${agentId}:${errMsg(err)}`, tr('Terminal de {0}: {1}', [agentId, errMsg(err)]));
       return;
     }
     if (r.init) this.write(s, frame('init', r.init));

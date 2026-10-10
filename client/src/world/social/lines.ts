@@ -11,13 +11,13 @@ export const INVITE = {
   novela: [tr('Tá passando a novela! 📺'), tr('Bora ver o capítulo de hoje?')],
   desenho: [tr('Tá passando desenho! 😄'), tr('Bora ver desenho?')],
   videogame: [tr('Bora uma partida no videogame? 🎮'), tr('Duvido você me ganhar 🎮'), tr('Videogame? Melhor de três!')],
-  arcade: ['Fliperama? 👾', tr('Aposto que bato teu recorde 👾'), tr('Bora no fliperama?')],
+  arcade: [tr('Fliperama? 👾'), tr('Aposto que bato teu recorde 👾'), tr('Bora no fliperama?')],
   pingpong: [tr('Pingue-pongue? 🏓'), tr('Bora uma partidinha? 🏓'), tr('Vem jogar ping-pong!')],
   pingpongRival: [tr('Vem tomar uma surra no ping-pong 😏'), tr('Revanche no ping-pong? 🏓')],
   kitchen: [tr('Bora tomar um café? ☕'), tr('Pausa pro café? ☕'), tr('Bora dar uma pausa na copa?')],
   kitchenGossip: [tr('Tenho uma fofoca… 👀'), tr('Copa. Agora. Tenho novidade 👀')],
-  talk: [tr('E aí, tudo certo?'), 'Ei, {nome}!', tr('Bora trocar uma ideia?'), 'Opa, {nome}! Beleza?'],
-  rps: [tr('Jokenpô valendo 🪙{v}?'), tr('Aposto 🪙{v} no jokenpô!'), 'Pedra, papel e tesoura? 🪙{v}!'],
+  talk: [tr('E aí, tudo certo?'), tr('Ei, {nome}!'), tr('Bora trocar uma ideia?'), tr('Opa, {nome}! Beleza?')],
+  rps: [tr('Jokenpô valendo 🪙{v}?'), tr('Aposto 🪙{v} no jokenpô!'), tr('Pedra, papel e tesoura? 🪙{v}!')],
   rpsHonor: [tr('Jokenpô? Só pela honra 😅'), tr('Jokenpô valendo nada?')],
   mirror: [tr('Bora dar um tapa no visual? 💄'), tr('Espelho? Preciso me arrumar ✨')],
 } satisfies Record<string, Pool>;
@@ -37,7 +37,7 @@ export const TV = {
     talk: [tr('Juiz ladrão! 😤'), tr('Que jogada!'), tr('Esse goleiro é bom demais'), tr('Bora, time!'), tr('Isso foi pênalti!'), tr('Tá jogando muito!')],
   },
   novela: {
-    twist: [tr('Não acredito! 😱'), tr('Eu sabia!'), tr('Que reviravolta!'), 'Mentira!!'],
+    twist: [tr('Não acredito! 😱'), tr('Eu sabia!'), tr('Que reviravolta!'), tr('Mentira!!')],
     love: [tr('Esse casal! 😍'), 'Finalmente! 😍', tr('Que romance…')],
     talk: [tr('Shhh, vai começar!'), tr('Chora não… 😭'), tr('Esse vilão não presta'), tr('Amanhã é o último capítulo!')],
   },
@@ -51,20 +51,20 @@ export const TV = {
 export const GAME = {
   trash: [tr('Vou te passar! 🏎️'), tr('Que lag é esse?!'), 'Combo! 💥', tr('Não vale!'), tr('Tá fácil 😎'), tr('Só aquecendo…'), tr('Ninguém me para!'), tr('Olha essa!')],
   round: [tr('Ganhei essa! 🏆'), tr('Uma a zero!'), tr('Toma!')],
-  cheer: ['Vai, {nome}!', tr('Uooou!'), tr('Que jogada!'), tr('Aperta o botão!')],
+  cheer: [tr('Vai, {nome}!'), tr('Uooou!'), tr('Que jogada!'), tr('Aperta o botão!')],
 };
 
 export const PINGPONG = {
-  point: ['Ponto! 🏓', tr('Toma!'), tr('Na quina!'), tr('Corta!'), tr('Defende essa!')],
-  cheer: [tr('Boa!'), 'Vai, {nome}!', tr('Uooou!'), tr('Que ralo!')],
+  point: [tr('Ponto! 🏓'), tr('Toma!'), tr('Na quina!'), tr('Corta!'), tr('Defende essa!')],
+  cheer: [tr('Boa!'), tr('Vai, {nome}!'), tr('Uooou!'), tr('Que ralo!')],
   final: ['{a} a {b}! 🏆', tr('Ganhei de {a} a {b}! 🏆')],
 };
 
 export const RPS = {
   count: ['Jo…', tr('Ken…'), tr('Pô!')],
   tie: [tr('Empate! De novo!'), tr('Pensamos igual 😂'), tr('De novo!')],
-  win: ['Ganhei! 💰', tr('Hoje é meu dia!'), 'Passa o 🪙!', tr('Mole demais 😎'), tr('Sabia!')],
-  winHonor: ['Ganhei! 😎', tr('Sabia!'), tr('Hoje é meu dia!')],
+  win: [tr('Ganhei! 💰'), tr('Hoje é meu dia!'), tr('Passa o 🪙!'), tr('Mole demais 😎'), tr('Sabia!')],
+  winHonor: [tr('Ganhei! 😎'), tr('Sabia!'), tr('Hoje é meu dia!')],
   lose: [tr('Não valeu!'), tr('Sorte sua…'), tr('Meu dinheiro… 😭'), tr('Tá, tá…'), tr('Era pra ser pedra!')],
   rematch: [tr('Revanche!'), tr('Melhor de três!'), tr('De novo, valendo!')],
   stalemate: [tr('Deixa quieto 😅'), tr('Empatamos, então.')],

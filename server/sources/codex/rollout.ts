@@ -278,7 +278,7 @@ export function deliveredMessage(line: Rec): { id?: string; text: string } | und
 /** Atividade de uma instrução recebida pelo Codex: "Recebeu “…”" (kind 'prompt', a base do "Concluiu em X"). */
 export function describeCodexPrompt(text: string): ActivityDescription {
   const shown = truncate(maskSecrets(text.slice(0, 1_000)), 34);
-  return { ...describePrompt(text), text: truncate(`Recebeu “${shown}”`, 46) };
+  return { ...describePrompt(text), text: truncate(tr('Recebeu “{0}”', [shown]), 46) };
 }
 
 const PLAN_STATUS = new Set<string>(['pending', 'in_progress', 'completed']);
@@ -664,7 +664,7 @@ class RolloutLineParser {
   }
 
   private prompt(raw: string, images: number, key?: string): void {
-    const text = promptText(raw) || (images ? '[imagem]' : '');
+    const text = promptText(raw) || (images ? tr('[imagem]') : '');
     if (!text) return;
     if (this.s.title === undefined) {
       this.s.title = truncate(maskSecrets(text.slice(0, 1_000)), TITLE_MAX);

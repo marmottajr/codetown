@@ -19,10 +19,10 @@ interface CounterRefs {
 
 /** Contadores fixos (o de shells é à parte: só aparece quando há shells rodando). */
 const COUNTERS: { key: Exclude<keyof Counters, 'shells'>; singular: string; plural: string; hint: string }[] = [
-  { key: 'rooms', singular: 'sala', plural: 'salas', hint: tr('Salas abertas (uma por projeto)') },
-  { key: 'agents', singular: 'agente', plural: 'agentes', hint: tr('Agentes no escritório (principais e subagentes)') },
-  { key: 'working', singular: 'trabalhando', plural: 'trabalhando', hint: tr('Agentes processando um pedido agora') },
-  { key: 'subagents', singular: 'subagente', plural: 'subagentes', hint: tr('Subagentes em atividade') },
+  { key: 'rooms', singular: tr('sala'), plural: tr('salas'), hint: tr('Salas abertas (uma por projeto)') },
+  { key: 'agents', singular: tr('agente'), plural: tr('agentes'), hint: tr('Agentes no escritório (principais e subagentes)') },
+  { key: 'working', singular: tr('trabalhando'), plural: tr('trabalhando'), hint: tr('Agentes processando um pedido agora') },
+  { key: 'subagents', singular: tr('subagente'), plural: tr('subagentes'), hint: tr('Subagentes em atividade') },
   { key: 'waiting', singular: tr('precisa de você'), plural: tr('precisam de você'), hint: tr('Agentes esperando sua resposta no terminal') },
 ];
 const WAITING_HINT = COUNTERS.find((c) => c.key === 'waiting')!.hint;
@@ -97,15 +97,15 @@ export class TopBar implements UiComponent {
     this.sidebarBtn = iconButton(ICONS.sidebar, tr('Painel lateral ( [ )'), () => ctx.togglePanel('sidebar'), 'ui-btn-sidebar');
     this.feedBtn = iconButton(ICONS.feed, tr('Feed de atividade ( ] )'), () => ctx.togglePanel('feed'));
     this.timelapseBtn = iconButton(TIMELAPSE_ICONS.timelapse, tr('Timelapse: reproduzir o dia (L)'), () => ctx.toggleTimelapse(), 'ui-btn-timelapse');
-    this.settingsBtn = iconButton(ICONS.settings, 'Configurações', () => ctx.toggleSettings());
+    this.settingsBtn = iconButton(ICONS.settings, tr('Configurações'), () => ctx.toggleSettings());
     this.settingsBtn.setAttribute('aria-haspopup', 'dialog');
     this.version = new VersionChip(ctx, this.settingsBtn);
     const viewGroup = h(
       'div',
       { class: 'ui-btn-group', role: 'group', attrs: { 'aria-label': tr('Câmera') } },
       iconButton(ICONS.overview, tr('Visão geral (O)'), () => ctx.camera('overview')),
-      iconButton(ICONS.zoomOut, 'Afastar (−)', () => ctx.camera('zoomOut')),
-      iconButton(ICONS.zoomIn, 'Aproximar (+)', () => ctx.camera('zoomIn')),
+      iconButton(ICONS.zoomOut, tr('Afastar (−)'), () => ctx.camera('zoomOut')),
+      iconButton(ICONS.zoomIn, tr('Aproximar (+)'), () => ctx.camera('zoomIn')),
     );
     const panelGroup = h(
       'div',
@@ -113,7 +113,7 @@ export class TopBar implements UiComponent {
       this.timelapseBtn,
       this.feedBtn,
       this.settingsBtn,
-      iconButton(ICONS.help, 'Ajuda (?)', () => ctx.openHelp()),
+      iconButton(ICONS.help, tr('Ajuda (?)'), () => ctx.openHelp()),
     );
     this.panelGroup = panelGroup;
 

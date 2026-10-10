@@ -206,7 +206,7 @@ export class MessageRegistry {
       try {
         this.tick();
       } catch (err) {
-        log.warnOnce(`messages-tick:${errMsg(err)}`, `Mensagens: falha no relógio (${errMsg(err)}).`);
+        log.warnOnce(`messages-tick:${errMsg(err)}`, tr('Mensagens: falha no relógio ({0}).', [errMsg(err)]));
       }
     }, this.opts.tickMs ?? 500);
     this.timer.unref?.();
@@ -339,7 +339,7 @@ export class MessageRegistry {
    * quem entrega é o servidor: nada sai por aqui (sem entrega dobrada).
    */
   codexPoll(raw: unknown): CodexBridgeMessage[] {
-    if (!rec(raw)) throw new InvalidRequest('esperado um objeto JSON ({})');
+    if (!rec(raw)) throw new InvalidRequest(tr('esperado um objeto JSON ({})'));
     const c = this.opts.codex;
     if (!c) return [];
     const now = this.now();

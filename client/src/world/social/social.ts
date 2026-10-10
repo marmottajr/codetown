@@ -1148,7 +1148,7 @@ export class Social {
 
   /** Subagente entregou o resultado: a tarefa dele está paga. */
   delivered(ch: Character, now: number): void {
-    const v = this.wallets.credit(ch.id, DELIVERY_REWARD, '📦', tr('Entregou: {0}', [ch.info.title ?? 'resultado']), now);
+    const v = this.wallets.credit(ch.id, DELIVERY_REWARD, '📦', tr('Entregou: {0}', [ch.info.title ?? tr('resultado')]), now);
     if (v) this.earned(ch, v, now);
   }
 
@@ -1169,8 +1169,8 @@ export class Social {
       .map((m) => this.sim.chars.get(m.id)?.info.name)
       .filter((n): n is string => !!n);
     const label = g.kind === 'tv' && g.program ? tr('Vendo {0} na TV', [g.program === 'futebol' ? 'futebol' : g.program === 'novela' ? 'novela' : 'desenho']) : KINDS[g.kind].label;
-    const going = g.phase === 'gather' ? ' (a caminho)' : '';
-    const bet = g.bet && KINDS[g.kind].match ? ` · valendo 🪙${g.bet}` : '';
+    const going = g.phase === 'gather' ? tr(' (a caminho)') : '';
+    const bet = g.bet && KINDS[g.kind].match ? tr(' · valendo 🪙{0}', [g.bet]) : '';
     return `${KINDS[g.kind].emoji} ${label}${others.length ? ` com ${joinNames(others)}` : ''}${bet}${going}`;
   }
 

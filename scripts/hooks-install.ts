@@ -24,6 +24,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { discoverClaudeDirs } from '../server/accounts/detect';
 import { detectNodeCommand, quotePath, readSettings, tildify, writeSettings, type Settings } from './statusline-install';
+import { tr } from '../shared/i18n';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const HOOK_SCRIPT = join(ROOT, 'mod', 'habblaud-permissoes', 'hooks', 'permission-hook.mjs');
@@ -40,24 +41,9 @@ export const DEFAULT_PORT = 4747;
 export const DEFAULT_TIMEOUT_S = 300;
 /** Folga do tempo limite do Claude Code sobre o do hook (o hook sempre desiste antes). */
 const TIMEOUT_SLACK_S = 30;
-export const STATUS_MESSAGE = 'Aguardando resposta no Habblaud';
+export const STATUS_MESSAGE = tr('Aguardando resposta no Habblaud');
 
-const USAGE = `Uso: npm run hooks:<install|uninstall|status> [-- opções]
-
-  install     acrescenta o hook de permissão do Habblaud em cada conta (faz backup do settings.json)
-  uninstall   tira o hook do Habblaud de cada conta (os outros hooks ficam)
-  status      mostra se o hook está instalado e se o Habblaud está respondendo pedidos
-
-Opções:
-  --dry-run        mostra o que mudaria, sem gravar nada
-  --node <cmd>     comando do node usado no hook (padrão: detectado no PATH)
-  --port <n>       porta do Habblaud (padrão: HABBLAUD_PORT ou ${DEFAULT_PORT})
-  --timeout <s>    quanto o hook espera sua resposta no Habblaud antes de devolver o pedido ao terminal
-                   (padrão: ${DEFAULT_TIMEOUT_S} s)
-  -h, --help       mostra esta ajuda
-
-Contas: as mesmas do servidor (~/.claude* com projects/ ou sessions/, CLAUDE_CONFIG_DIR ou
-HABBLAUD_CLAUDE_DIRS).`;
+const USAGE = tr('Uso: npm run hooks:<install|uninstall|status> [-- opções]\n\n  install     acrescenta o hook de permissão do Habblaud em cada conta (faz backup do settings.json)\n  uninstall   tira o hook do Habblaud de cada conta (os outros hooks ficam)\n  status      mostra se o hook está instalado e se o Habblaud está respondendo pedidos\n\nOpções:\n  --dry-run        mostra o que mudaria, sem gravar nada\n  --node <cmd>     comando do node usado no hook (padrão: detectado no PATH)\n  --port <n>       porta do Habblaud (padrão: HABBLAUD_PORT ou {0})\n  --timeout <s>    quanto o hook espera sua resposta no Habblaud antes de devolver o pedido ao terminal\n                   (padrão: {1} s)\n  -h, --help       mostra esta ajuda\n\nContas: as mesmas do servidor (~/.claude* com projects/ ou sessions/, CLAUDE_CONFIG_DIR ou\nHABBLAUD_CLAUDE_DIRS).', [DEFAULT_PORT, DEFAULT_TIMEOUT_S]);
 
 // ---------------------------------------------------------------------------------------------
 // Funções puras (testadas em server/test/hooks-install.test.ts)
@@ -101,9 +87,9 @@ export type PlanAction =
 
 /** hooks e hooks.PermissionRequest num formato que dá para editar (ou o motivo para não mexer). */
 function eventList(settings: Settings): { hooks: Rec; list: unknown[] } | string {
-  if (settings.hooks !== undefined && !rec(settings.hooks)) return '"hooks" em formato desconhecido; nada foi alterado';
+  if (settings.hooks !== undefined && !rec(settings.hooks)) return tr('"hooks" em formato desconhecido; nada foi alterado');
   const hooks = rec(settings.hooks) ?? {};
-  if (hooks[EVENT] !== undefined && !Array.isArray(hooks[EVENT])) return `"hooks.${EVENT}" em formato desconhecido; nada foi alterado`;
+  if (hooks[EVENT] !== undefined && !Array.isArray(hooks[EVENT])) return tr('"hooks.{0}" em formato desconhecido; nada foi alterado', [EVENT]);
   return { hooks, list: (hooks[EVENT] as unknown[] | undefined) ?? [] };
 }
 
@@ -135,11 +121,11 @@ export function planInstall(settings: Settings, entry: Rec): PlanAction {
   });
   const matchAll = (m: unknown) => m === undefined || m === '' || m === '*';
   if (mine.length === 1 && matchAll(mine[0].group.matcher) && JSON.stringify(mine[0].hook) === JSON.stringify(entry)) {
-    return { action: 'none', message: 'já instalado' };
+    return { action: 'none', message: tr('já instalado') };
   }
   const rest = withoutOurs(ev.list).list;
   const next: Settings = { ...settings, hooks: { ...ev.hooks, [EVENT]: [...rest, { matcher: '*', hooks: [entry] }] } };
-  return { action: 'install', settings: next, message: mine.length ? 'atualizado (novo caminho do Habblaud, do node ou das opções)' : 'instalado' };
+  return { action: 'install', settings: next, message: mine.length ? tr('atualizado (novo caminho do Habblaud, do node ou das opções)') : tr('instalado') };
 }
 
 /** Plano de remoção: tira só os hooks do Habblaud (e o que ficar vazio por causa disso). */
@@ -147,14 +133,14 @@ export function planUninstall(settings: Settings): PlanAction {
   const ev = eventList(settings);
   if (typeof ev === 'string') return { action: 'skip', message: ev };
   const { list, removed } = withoutOurs(ev.list);
-  if (!removed) return { action: 'none', message: 'não estava instalado' };
+  if (!removed) return { action: 'none', message: tr('não estava instalado') };
   const hooks: Rec = { ...ev.hooks };
   if (list.length) hooks[EVENT] = list;
   else delete hooks[EVENT];
   const next: Settings = { ...settings };
   if (Object.keys(hooks).length) next.hooks = hooks;
   else delete next.hooks;
-  return { action: 'uninstall', settings: next, message: 'hook do Habblaud removido' };
+  return { action: 'uninstall', settings: next, message: tr('hook do Habblaud removido') };
 }
 
 /** Hook do Habblaud instalado nesta conta (o primeiro), ou undefined. */
@@ -215,17 +201,17 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
     if (a === '--dry-run') dryRun = true;
     else if (a === '--node') {
       nodeCmd = argv[++i];
-      if (!nodeCmd) throw new FatalError('--node precisa de um caminho.');
+      if (!nodeCmd) throw new FatalError(tr('--node precisa de um caminho.'));
     } else if (a === '--port') {
       port = Number(argv[++i]);
-      if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new FatalError('--port precisa de um número entre 1 e 65535.');
+      if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new FatalError(tr('--port precisa de um número entre 1 e 65535.'));
     } else if (a === '--timeout') {
       timeoutS = Number(argv[++i]);
-      if (!Number.isInteger(timeoutS) || timeoutS < 5 || timeoutS > 1_800) throw new FatalError('--timeout precisa de um número de segundos entre 5 e 1800.');
+      if (!Number.isInteger(timeoutS) || timeoutS < 5 || timeoutS > 1_800) throw new FatalError(tr('--timeout precisa de um número de segundos entre 5 e 1800.'));
     } else if ((a === 'install' || a === 'uninstall' || a === 'status') && !command) command = a;
-    else throw new FatalError(`opção desconhecida: ${a}\n\n${USAGE}`);
+    else throw new FatalError(tr('opção desconhecida: {0}\n\n{1}', [a, USAGE]));
   }
-  if (!command) throw new FatalError(`diga o que fazer: install, uninstall ou status.\n\n${USAGE}`);
+  if (!command) throw new FatalError(tr('diga o que fazer: install, uninstall ou status.\n\n{0}', [USAGE]));
   return { command, dryRun, nodeCmd, port, timeoutS };
 }
 
@@ -244,7 +230,7 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
   const { env, home, out } = ctx;
   const dirs = discoverClaudeDirs(env, home);
   if (!dirs.length) {
-    out('Nenhuma conta do Claude Code encontrada (~/.claude* com projects/ ou sessions/). Use HABBLAUD_CLAUDE_DIRS se estiverem em outro lugar.');
+    out(tr('Nenhuma conta do Claude Code encontrada (~/.claude* com projects/ ou sessions/). Use HABBLAUD_CLAUDE_DIRS se estiverem em outro lugar.'));
     return 1;
   }
   const nodeCmd = opts.nodeCmd ?? detectNodeCommand(env, home);
@@ -263,15 +249,15 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
     if (opts.command === 'status') {
       const h = installedHook(read.settings);
       if (!h) {
-        out(`• ${label}: não instalado`);
+        out(tr('• {0}: não instalado', [label]));
         continue;
       }
       const path = typeof h.command === 'string' ? scriptPathOf(h.command) : undefined;
       if (path && resolve(path) !== resolve(ctx.hookPath)) {
-        const gone = !existsSync(path) ? ' (esse arquivo não existe mais: o hook falha e vale só o terminal)' : '';
-        out(`! ${label}: o hook aponta para ${path}${gone}; rode npm run hooks:install para atualizar`);
+        const gone = !existsSync(path) ? tr(' (esse arquivo não existe mais: o hook falha e vale só o terminal)') : '';
+        out(tr('! {0}: o hook aponta para {1}{2}; rode npm run hooks:install para atualizar', [label, path, gone]));
       }
-      out(`• ${label}: instalado (${String(h.command)}; tempo limite ${String(h.timeout ?? '?')} s)`);
+      out(tr('• {0}: instalado ({1}; tempo limite {2} s)', [label, String(h.command), String(h.timeout ?? '?')]));
       continue;
     }
     const plan = opts.command === 'install' ? planInstall(read.settings, entry) : planUninstall(read.settings);
@@ -285,31 +271,31 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
       continue;
     }
     if (opts.dryRun) {
-      out(`~ ${label}: ${plan.message} (simulação: nada gravado)`);
+      out(tr('~ {0}: {1} (simulação: nada gravado)', [label, plan.message]));
       out(`    hooks.${EVENT} → ${JSON.stringify(rec(plan.settings.hooks)?.[EVENT] ?? null)}`);
       continue;
     }
     try {
       const backup = writeSettings(file, plan.settings, read.raw, ctx.now);
-      out(`✓ ${label}: ${plan.message}${backup ? ` · backup em ${tildify(backup, home)}` : ''}`);
+      out(`✓ ${label}: ${plan.message}${backup ? tr(' · backup em {0}', [tildify(backup, home)]) : ''}`);
       changed++;
     } catch (err) {
-      out(`✗ ${label}: não consegui gravar (${(err as Error).message})`);
+      out(tr('✗ {0}: não consegui gravar ({1})', [label, (err as Error).message]));
       failures++;
     }
   }
   if (opts.command === 'status') {
     const health = await (ctx.health ?? fetchHealth)(opts.port);
-    if (!health) out(`Habblaud em http://127.0.0.1:${opts.port}: fora do ar (com ele parado, o hook sai na hora e o terminal segue normal).`);
-    else if (health.permissions) out(`Habblaud em http://127.0.0.1:${opts.port}: respondendo pedidos de permissão (com alguma página aberta).`);
-    else out(`Habblaud em http://127.0.0.1:${opts.port}: no ar, mas responder pelo escritório está desligado (porta exposta na rede ou HABBLAUD_TERMINAL=0).`);
+    if (!health) out(tr('Habblaud em http://127.0.0.1:{0}: fora do ar (com ele parado, o hook sai na hora e o terminal segue normal).', [opts.port]));
+    else if (health.permissions) out(tr('Habblaud em http://127.0.0.1:{0}: respondendo pedidos de permissão (com alguma página aberta).', [opts.port]));
+    else out(tr('Habblaud em http://127.0.0.1:{0}: no ar, mas responder pelo escritório está desligado (porta exposta na rede ou HABBLAUD_TERMINAL=0).', [opts.port]));
   }
   if (opts.command === 'install' && changed) {
     out('');
-    out('Pronto. Com o Habblaud aberto no navegador, os pedidos de permissão aparecem no escritório e você');
-    out('pode aprovar ou recusar por lá; o diálogo continua no terminal e vale o que responder primeiro.');
-    out('Sessões abertas costumam recarregar o settings.json sozinhas; se não, reabra a sessão.');
-    out('Para desfazer: npm run hooks:uninstall');
+    out(tr('Pronto. Com o Habblaud aberto no navegador, os pedidos de permissão aparecem no escritório e você'));
+    out(tr('pode aprovar ou recusar por lá; o diálogo continua no terminal e vale o que responder primeiro.'));
+    out(tr('Sessões abertas costumam recarregar o settings.json sozinhas; se não, reabra a sessão.'));
+    out(tr('Para desfazer: npm run hooks:uninstall'));
   }
   return failures ? 1 : 0;
 }
@@ -326,7 +312,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((err: unknown) => {
-    console.error(err instanceof FatalError ? `[hooks] Erro: ${err.message}` : `[hooks] Erro inesperado: ${String(err)}`);
+    console.error(err instanceof FatalError ? tr('[hooks] Erro: {0}', [err.message]) : tr('[hooks] Erro inesperado: {0}', [String(err)]));
     process.exitCode = 1;
   });
 }

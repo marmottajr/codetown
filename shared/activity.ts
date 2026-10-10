@@ -340,7 +340,7 @@ function filesLabel(files: string[]): string | undefined {
   if (!names.length) return undefined;
   if (names.length === 1) return names[0];
   if (names.length === 2) return `${names[0]} e ${names[1]}`;
-  return `${names[0]} e mais ${names.length - 1}`;
+  return tr('{0} e mais {1}', [names[0], names.length - 1]);
 }
 
 const GREP_VALUED = new Set(['-e', '-f', '-A', '-B', '-C', '-m', '-d', '-D', '--regexp', '--file', '--max-count', '--context', '--include', '--exclude', '--exclude-dir', '-g', '-t', '-T', '--glob', '--type', '--type-not', '-j', '--threads', '-M', '--max-columns']);
@@ -643,7 +643,7 @@ function describeMcp(name: string, input: Record<string, unknown>): ActivityDesc
   if (/github/i.test(srv)) return make('mcp', '🐙', `GitHub: ${humanize(tool)}`);
   if (/gmail|mail/i.test(srv)) return make('mcp', '✉️', `E-mail: ${humanize(tool)}`);
   if (/drive|docs|notion|confluence/i.test(srv)) return make('mcp', '📄', `${srv}: ${humanize(tool)}`);
-  if (/sql|postgres|mysql|mongo|elastic|redis|db/i.test(srv)) return make('mcp', '🗄️', `Banco (${srv}): ${humanize(tool)}`);
+  if (/sql|postgres|mysql|mongo|elastic|redis|db/i.test(srv)) return make('mcp', '🗄️', tr('Banco ({0}): {1}', [srv, humanize(tool)]));
   return make('mcp', '🔌', `${srv}: ${humanize(tool)}`);
 }
 
@@ -665,13 +665,13 @@ export function describeTool(name: string, rawInput: unknown): ActivityDescripti
     case 'NotebookEdit':
       return make('edit', '📓', tr('Editando notebook {0}', [basename(file)]), file);
     case 'Glob':
-      return make('search', '🔎', tr('Procurando {0}', [truncate(str(input.pattern) || 'arquivos', 30)]), str(input.pattern));
+      return make('search', '🔎', tr('Procurando {0}', [truncate(str(input.pattern) || tr('arquivos'), 30)]), str(input.pattern));
     case 'Grep': {
       const pat = str(input.pattern);
       return make('search', '🔎', pat ? tr('Buscando “{0}”', [truncate(pat, 26)]) : tr('Buscando no código'), pat);
     }
     case 'LS':
-      return make('read', '📂', tr('Listando {0}', [basename(file) || 'pasta']), file);
+      return make('read', '📂', tr('Listando {0}', [basename(file) || tr('pasta')]), file);
     case 'Bash':
       return describeCommand(str(input.command), str(input.description));
     case 'BashOutput':
@@ -694,7 +694,7 @@ export function describeTool(name: string, rawInput: unknown): ActivityDescripti
     case 'TodoWrite': {
       const todos = Array.isArray(input.todos) ? (input.todos as Array<Record<string, unknown>>) : [];
       const done = todos.filter((t) => t.status === 'completed').length;
-      return make('plan', '🗒️', tr('Atualizando a lista de tarefas'), todos.length ? `${done}/${todos.length} concluídas` : undefined);
+      return make('plan', '🗒️', tr('Atualizando a lista de tarefas'), todos.length ? tr('{0}/{1} concluídas', [done, todos.length]) : undefined);
     }
     case 'TaskCreate':
       return make('plan', '🗒️', tr('Nova tarefa: {0}', [str(input.subject) || tr('sem título')]), str(input.description));

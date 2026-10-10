@@ -19,7 +19,7 @@ const dateTimeFmt = new Intl.DateTimeFormat(LOCALE, { day: '2-digit', month: 'sh
 /** Tempo relativo no passado: "agora", "há 5 s", "há 3 min", "há 2 h", "há 4 d". */
 export function relativeTime(at: number, now: number): string {
   const diff = now - at;
-  if (!Number.isFinite(diff) || diff < 5 * SECOND) return 'agora';
+  if (!Number.isFinite(diff) || diff < 5 * SECOND) return tr('agora');
   if (diff < MINUTE) return tr('há {0} s', [Math.floor(diff / SECOND)]);
   if (diff < HOUR) return tr('há {0} min', [Math.floor(diff / MINUTE)]);
   if (diff < DAY) return tr('há {0} h', [Math.floor(diff / HOUR)]);
@@ -58,7 +58,7 @@ export function formatElapsed(ms: number): string {
 /** Contagem regressiva: "em 2 h 10 min", "em 5 min", "em menos de 1 min", "agora". */
 export function formatCountdown(target: number, now: number): string {
   const diff = target - now;
-  if (diff <= 0) return 'agora';
+  if (diff <= 0) return tr('agora');
   if (diff < MINUTE) return tr('em menos de 1 min');
   return `em ${formatDuration(diff)}`;
 }
@@ -131,13 +131,13 @@ export function usageWindowView(win: { utilization: number; resetsAt?: number } 
     return {
       pct: null,
       renewed: true,
-      reset: 'renovada',
-      resetShort: 'renovada',
+      reset: tr('renovada'),
+      resetShort: tr('renovada'),
       summary: tr('renovada depois da última leitura (uso atual desconhecido)'),
     };
   }
   const pct = clampPercent(win.utilization);
-  if (resetsAt === undefined) return { pct, renewed: false, reset: '', resetShort: '', summary: `${pct}% usado` };
+  if (resetsAt === undefined) return { pct, renewed: false, reset: '', resetShort: '', summary: tr('{0}% usado', [pct]) };
   const diff = resetsAt - now;
   let reset: string;
   if (diff < DAY) reset = formatCountdown(resetsAt, now);

@@ -42,6 +42,7 @@ import {
   type TranscriptSignal,
   type TranscriptState,
 } from './transcript';
+import { tr } from '../../shared/i18n';
 
 export interface WatcherOptions {
   accounts: AccountsService;
@@ -235,7 +236,7 @@ export class ClaudeWatcher implements AgentSource {
     try {
       this.poll(false);
     } catch (err) {
-      log.warnOnce(`poll:${errMsg(err)}`, `Falha no ciclo de leitura: ${errMsg(err)}`);
+      log.warnOnce(`poll:${errMsg(err)}`, tr('Falha no ciclo de leitura: {0}', [errMsg(err)]));
     }
   }
 
@@ -270,7 +271,7 @@ export class ClaudeWatcher implements AgentSource {
         try {
           this.syncSession(key, acc.id, acc.dir, entry, boot);
         } catch (err) {
-          log.warnOnce(`session:${key}:${errMsg(err)}`, `Sessão ${key}: ${errMsg(err)}`);
+          log.warnOnce(`session:${key}:${errMsg(err)}`, tr('Sessão {0}: {1}', [key, errMsg(err)]));
         }
       }
     }
@@ -301,7 +302,7 @@ export class ClaudeWatcher implements AgentSource {
         account: accountId,
         sessionId: entry.sessionId,
         cwd: entry.cwd,
-        role: entry.agent ? `Agente ${entry.agent}` : 'Agente principal',
+        role: entry.agent ? tr('Agente {0}', [entry.agent]) : tr('Agente principal'),
         startedAt: entry.startedAt ?? this.now(),
         status: st.status ?? 'idle',
         waitingFor: st.waitingFor,
@@ -377,7 +378,7 @@ export class ClaudeWatcher implements AgentSource {
     let owner = job.owner;
     if (!office.has(owner) || (owner !== t.key && office.isSubDone(owner))) owner = t.key;
     const exit = fin.summary ? /exit code (-?\d+)/i.exec(fin.summary)?.[1] : undefined;
-    const detail = [exit !== undefined ? `Código de saída ${exit}` : undefined, job.command].filter(Boolean).join(' — ') || fin.summary;
+    const detail = [exit !== undefined ? tr('Código de saída {0}', [exit]) : undefined, job.command].filter(Boolean).join(' — ') || fin.summary;
     const input: { id: string; label: string; startedAt: number; command?: string } = { id: job.taskId ?? job.toolUseId, label: job.label, startedAt: job.startedAt };
     if (job.command) input.command = job.command;
     office.shellDone(owner, input, fin.outcome, fin.at, detail ? { live, summary: detail } : { live });
@@ -445,7 +446,7 @@ export class ClaudeWatcher implements AgentSource {
     for (let i = 0; i < 4; i++) {
       const r = t.tail.read();
       if (r.reset) {
-        log.warn(`Transcript da sessão ${t.key} foi truncado/substituído; relendo.`);
+        log.warn(tr('Transcript da sessão {0} foi truncado/substituído; relendo.', [t.key]));
         this.loadMain(t, t.tail.path);
         return;
       }
@@ -536,7 +537,7 @@ export class ClaudeWatcher implements AgentSource {
         mergePrefix(state, prefix.state);
         done(prefix.signals, prefix.activities, prefix.shellEvents);
       })
-      .catch((err) => log.warnOnce(`prefix:${path}`, `Não foi possível ler o início de um transcript (${errMsg(err)}).`));
+      .catch((err) => log.warnOnce(`prefix:${path}`, tr('Não foi possível ler o início de um transcript ({0}).', [errMsg(err)])));
   }
 
   /**
@@ -715,7 +716,7 @@ export class ClaudeWatcher implements AgentSource {
       } catch {
         t.known.set(file.path, 0);
       }
-      log.warnOnce(`sub-open:${file.path}`, `Subagente ${file.agentId} ignorado: ${errMsg(err)}`);
+      log.warnOnce(`sub-open:${file.path}`, tr('Subagente {0} ignorado: {1}', [file.agentId, errMsg(err)]));
     }
   }
 
@@ -796,7 +797,7 @@ export class ClaudeWatcher implements AgentSource {
         try {
           r = sub.tail.read();
         } catch (err) {
-          log.warnOnce(`sub:${sub.id}`, `Subagente ${sub.id}: ${errMsg(err)}`);
+          log.warnOnce(`sub:${sub.id}`, tr('Subagente {0}: {1}', [sub.id, errMsg(err)]));
           break;
         }
         for (const line of r.lines) {

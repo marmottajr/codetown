@@ -8,6 +8,7 @@
 import { createReadStream, statSync, type Stats } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
+import { tr } from '../../shared/i18n';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -102,19 +103,19 @@ export function createStaticHandler(distDir: string): (req: IncomingMessage, res
   return (req, res, pathname) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' });
-      return void res.end('Método não permitido');
+      return void res.end(tr('Método não permitido'));
     }
     const indexStat = fileStat(index);
     if (!indexStat) {
       res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-      return void res.end('Cliente não compilado. Rode "npm run build" (ou use "npm run dev").');
+      return void res.end(tr('Cliente não compilado. Rode "npm run build" (ou use "npm run dev").'));
     }
     let rel: string;
     try {
       rel = decodeURIComponent(pathname);
     } catch {
       res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-      return void res.end('Caminho inválido');
+      return void res.end(tr('Caminho inválido'));
     }
     const file = resolve(root, `.${rel}`);
     const inside = file === root || file.startsWith(root + sep);
@@ -122,7 +123,7 @@ export function createStaticHandler(distDir: string): (req: IncomingMessage, res
     if (st) return send(req, res, file, st, rel.startsWith(HASHED_DIR) ? IMMUTABLE : REVALIDATE);
     if (rel.startsWith('/assets/') || rel.startsWith(HASHED_DIR)) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-      return void res.end('Não encontrado');
+      return void res.end(tr('Não encontrado'));
     }
     // SPA: qualquer outra rota cai no index.html.
     send(req, res, index, indexStat, REVALIDATE);

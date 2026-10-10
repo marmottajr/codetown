@@ -61,7 +61,7 @@ interface DaySource {
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' });
   const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
-  if (!res.ok || !body) throw new Error(body?.error ?? `erro ${res.status}`);
+  if (!res.ok || !body) throw new Error(body?.error ?? tr('erro {0}', [res.status]));
   return body;
 }
 

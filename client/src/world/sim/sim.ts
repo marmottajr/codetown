@@ -1372,7 +1372,7 @@ export class Sim {
     const steps: Step[] = [];
     this.pushLeave(ch, steps);
     const held = ch.rng() < 0.5 ? 'papers' : 'box';
-    const title = ch.info.title ?? 'resultado';
+    const title = ch.info.title ?? tr('resultado');
     steps.push(
       { t: 'go', tx: target.x, ty: target.y, held },
       {

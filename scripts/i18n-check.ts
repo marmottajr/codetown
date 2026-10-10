@@ -6,19 +6,19 @@ import { join, relative } from 'node:path';
 import { FR } from '../shared/locales/fr';
 
 const ROOT = join(import.meta.dirname, '..');
-const DIRS = ['client/src', 'shared', 'server'];
+const DIRS = ['client/src', 'shared', 'server', 'scripts'];
 const DICTS: Record<string, Readonly<Record<string, string>>> = { fr: FR };
 
 /** Primeiro argumento literal de cada tr('...') do código (sem os testes). */
 export function collectKeys(root = ROOT): Map<string, string[]> {
   const keys = new Map<string, string[]>();
-  const re = /\btr\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g;
+  const re = /\btr\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
       if (statSync(p).isDirectory()) {
         if (name !== 'node_modules' && name !== 'dist' && name !== 'locales') walk(p);
-      } else if (p.endsWith('.ts') && !p.endsWith('.test.ts')) {
+      } else if (p.endsWith('.ts') && !p.endsWith('.test.ts') && name !== 'i18n-check.ts') {
         const src = readFileSync(p, 'utf8');
         for (const m of src.matchAll(re)) {
           const key = unescapeJs(m[2]);

@@ -79,7 +79,7 @@ export class Sidebar implements UiComponent {
     });
     const searchIcon = h('span', { class: 'ui-search__icon', attrs: { 'aria-hidden': 'true' } });
     searchIcon.innerHTML = ICONS.search;
-    const search = h('label', { class: 'ui-search' }, searchIcon, this.input, h('kbd', { class: 'ui-kbd', text: '/', title: 'Atalho: /' }));
+    const search = h('label', { class: 'ui-search' }, searchIcon, this.input, h('kbd', { class: 'ui-kbd', text: '/', title: tr('Atalho: /') }));
 
     this.filters = h('div', { class: 'ui-acc-filters', role: 'group', attrs: { 'aria-label': tr('Filtrar por conta') } });
     this.filterList = new KeyedList<AccountInfo, HTMLButtonElement>(this.filters, {

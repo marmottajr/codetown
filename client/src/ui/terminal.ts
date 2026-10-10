@@ -480,7 +480,7 @@ function resultBlock(r: ResultEntry, copy: Copier): HTMLElement {
   else out.append(h('span', { class: 'ui-term__empty', text: r.error ? tr('(erro sem mensagem)') : tr('(sem saída)'), attrs: { 'data-chrome': '' } }));
   if (r.truncated) out.append(h('span', { class: 'ui-term__cut', text: tr('(resultado cortado)'), attrs: { 'data-chrome': '' } }));
   const el = h('div', { class: `ui-term__result${r.error ? ' is-error' : ''}` }, h('span', { class: 'ui-term__elbow', text: '⎿', attrs: { 'aria-hidden': 'true' } }), out);
-  if (text) el.append(copy(copyTextOf(r), 'resultado'));
+  if (text) el.append(copy(copyTextOf(r), tr('resultado')));
   return el;
 }
 
@@ -507,7 +507,7 @@ function toolRow(t: ToolEntry, now: number, copy: Copier): ToolRefs {
   const title = h('div', { class: 'ui-term__title' }, h('strong', { text: name }), args ? document.createTextNode(args) : null);
   const input = toolInput(t);
   // Título + argumentos com o próprio botão de copiar (o comando; sem argumentos, o título).
-  const what = t.inputKind === 'command' || t.tool === 'Bash' ? 'comando' : input ? tr('entrada da ferramenta') : 'ferramenta';
+  const what = t.inputKind === 'command' || t.tool === 'Bash' ? tr('comando') : input ? tr('entrada da ferramenta') : tr('ferramenta');
   const call = h('div', { class: 'ui-term__call' }, title, input, copy(copyTextOf(t), what));
   const slot = h('div', { class: 'ui-term__slot' });
   const el = row('tool', t.at, now, mark(DOT, 'ui-term__dot'), h('div', { class: 'ui-term__col' }, call, slot));
@@ -533,7 +533,7 @@ function entryRow(e: PlainEntry, now: number, copy: Copier): HTMLElement {
       const body = h('div', { class: 'ui-term__col ui-md' });
       body.append(renderMarkdown(e.text));
       const el = row('assistant', e.at, now, mark(DOT, 'ui-term__dot'), body);
-      el.append(copy(copyTextOf(e), 'resposta'));
+      el.append(copy(copyTextOf(e), tr('resposta')));
       return el;
     }
     case 'thinking': {
@@ -544,7 +544,7 @@ function entryRow(e: PlainEntry, now: number, copy: Copier): HTMLElement {
     case 'system': {
       const text = h('span', { class: 'ui-term__sys-text', text: e.text });
       const col = h('div', { class: 'ui-term__col' }, text);
-      if (e.detail?.trim()) col.append(expander('detalhes', 'ui-term__sys-more', e.detail.trim(), 'ui-term__sys-detail'));
+      if (e.detail?.trim()) col.append(expander(tr('detalhes'), 'ui-term__sys-more', e.detail.trim(), 'ui-term__sys-detail'));
       const el = row('system', e.at, now, mark('※'), col);
       if (e.level === 'warn' || e.level === 'error') el.classList.add(`is-${e.level}`);
       return el;
@@ -654,7 +654,7 @@ export class TerminalPanel implements UiComponent, TerminalControl {
     this.provEl = createProviderTag('ui-prov--xs');
     this.roleEl = h('span', { class: 'ui-role' });
     this.roomEl = h('span', { class: 'ui-term__room' });
-    this.reconnEl = h('span', { class: 'ui-term__reconn', text: 'reconectando…', hidden: true, role: 'status' });
+    this.reconnEl = h('span', { class: 'ui-term__reconn', text: tr('reconectando…'), hidden: true, role: 'status' });
     this.findBtn = iconButton(ICONS.search, tr('Buscar na conversa ({0})', [findKey]), () => this.toggleSearch(), 'ui-icon-btn--sm ui-term__find');
     setAttr(this.findBtn, 'aria-expanded', 'false');
     const close = iconButton(ICONS.close, tr('Fechar terminal (Esc)'), () => this.close(), 'ui-icon-btn--sm ui-term__close');
@@ -842,7 +842,7 @@ export class TerminalPanel implements UiComponent, TerminalControl {
     setHidden(this.roleEl, !a);
     if (a) setVariant(this.roleEl, 'ui-role--', a.kind);
     const room = a ? this.ctx.store.room(a.roomId) : undefined;
-    setText(this.roomEl, room ? `sala ${room.name}` : '');
+    setText(this.roomEl, room ? tr('sala {0}', [room.name]) : '');
     setTitle(this.roomEl, room?.path ?? '');
     setHidden(this.roomEl, !room);
     setAttr(this.el, 'aria-label', tr('Terminal de {0}', [name]));

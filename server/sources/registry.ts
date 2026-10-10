@@ -136,7 +136,7 @@ export class RegistryReader {
     } catch (err) {
       this.cache.clear();
       const code = (err as NodeJS.ErrnoException).code;
-      return { entries: [], ok: false, error: code === 'ENOENT' ? tr('pasta sessions/ não encontrada') : tr('sessions/ ilegível ({0})', [code ?? 'erro']) };
+      return { entries: [], ok: false, error: code === 'ENOENT' ? tr('pasta sessions/ não encontrada') : tr('sessions/ ilegível ({0})', [code ?? tr('erro')]) };
     }
     const seen = new Set<string>();
     const entries: RegistryEntry[] = [];

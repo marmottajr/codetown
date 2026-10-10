@@ -32,7 +32,7 @@ async function renameRequest(id: string, name: string): Promise<void> {
   } catch {
     throw new Error(tr('o Habblaud não respondeu'));
   }
-  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `erro ${res.status}`);
+  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? tr('erro {0}', [res.status]));
 }
 
 export class RoomRenamer {

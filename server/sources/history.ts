@@ -211,7 +211,7 @@ export class SessionHistory implements HistoryProvider {
       this.reads++;
       meta = await readSessionMeta(c.path, c.size);
     } catch (err) {
-      log.warnOnce(`history:${errMsg(err)}`, `Histórico de sessões: transcript ilegível (${errMsg(err)}).`);
+      log.warnOnce(`history:${errMsg(err)}`, tr('Histórico de sessões: transcript ilegível ({0}).', [errMsg(err)]));
       meta = {};
     }
     this.cache.set(c.path, { mtimeMs: c.mtimeMs, size: c.size, meta });

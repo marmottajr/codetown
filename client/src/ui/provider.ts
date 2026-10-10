@@ -58,7 +58,7 @@ export function accountChipLabel(account: Pick<AccountInfo, 'name' | 'email' | '
   if (!account) return fallbackId ? `${fallbackId}${provider === 'codex' ? ' · Codex' : ''}` : tr('Conta desconhecida');
   if (provider !== 'codex') return `${account.name}${account.email ? ` (${account.email})` : ''}`;
   const tag = showsProviderTag(provider, account.name) ? ' · Codex' : '';
-  return `${account.name}${tag}${account.plan ? ` · plano ${account.plan}` : ''}`;
+  return `${account.name}${tag}${account.plan ? tr(' · plano {0}', [account.plan]) : ''}`;
 }
 
 /**

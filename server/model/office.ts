@@ -623,8 +623,8 @@ export class Office {
     }
     if (opts.notify !== false) {
       const parent = info.parentId ? this.agents.get(info.parentId)?.info : undefined;
-      const what = info.title ? `“${info.title}”` : 'o trabalho';
-      this.notice('deliver', id, 'success', tr('📦 {0} entregou {1} para {2}', [info.name, what, parent?.name ?? 'o agente principal']), info.roomId);
+      const what = info.title ? `“${info.title}”` : tr('o trabalho');
+      this.notice('deliver', id, 'success', tr('📦 {0} entregou {1} para {2}', [info.name, what, parent?.name ?? tr('o agente principal')]), info.roomId);
     }
     this.markDirty();
   }

@@ -68,7 +68,7 @@ export class SourceSet {
   start(): Promise<void> {
     const pending: Promise<void>[] = [];
     for (const s of this.list) {
-      const failed = (err: unknown) => log.error(`Fonte de agentes ${s.provider}: falha ao iniciar (${errMsg(err)}).`);
+      const failed = (err: unknown) => log.error(tr('Fonte de agentes {0}: falha ao iniciar ({1}).', [s.provider, errMsg(err)]));
       try {
         const r = s.start();
         if (r) pending.push(r.catch(failed));
@@ -84,7 +84,7 @@ export class SourceSet {
       try {
         s.stop();
       } catch (err) {
-        log.warn(`Fonte de agentes ${s.provider}: falha ao parar (${errMsg(err)}).`);
+        log.warn(tr('Fonte de agentes {0}: falha ao parar ({1}).', [s.provider, errMsg(err)]));
       }
     }
   }
@@ -172,7 +172,7 @@ export class HistorySet implements SessionLookup {
     });
     if (failures.length && failures.length === results.length) throw failures[0].err;
     for (const f of failures) {
-      log.warnOnce(`history-list:${f.provider}:${errMsg(f.err)}`, `Histórico de sessões (${f.provider}): falha ao listar (${errMsg(f.err)}).`);
+      log.warnOnce(`history-list:${f.provider}:${errMsg(f.err)}`, tr('Histórico de sessões ({0}): falha ao listar ({1}).', [f.provider, errMsg(f.err)]));
     }
     return out.sort((a, b) => b.lastAt - a.lastAt).slice(0, this.limit);
   }

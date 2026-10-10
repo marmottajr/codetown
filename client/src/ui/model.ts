@@ -422,7 +422,7 @@ export function sortByUrgency(agents: readonly AgentInfo[]): AgentInfo[] {
 export function shortcutHint(accounts: readonly Pick<AccountInfo, 'short'>[]): string {
   const keys = accounts.map((a) => a.short.toLowerCase()).filter((s) => /^[a-z0-9]{1,3}$/.test(s));
   if (keys.length === 0) return '';
-  if (keys.length === 1) return `atalho ${keys[0]}`;
+  if (keys.length === 1) return tr('atalho {0}', [keys[0]]);
   return tr('atalhos {0} ou {1}', [keys.slice(0, -1).join(', '), keys[keys.length - 1]]);
 }
 

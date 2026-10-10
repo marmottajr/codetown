@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { UpdateStatus } from '../../shared/types';
 import { errMsg, log } from '../log';
+import { tr } from '../../shared/i18n';
 
 export const CHECK_EVERY_MS = 6 * 3_600_000;
 export const RETRY_MS = 3_600_000;
@@ -130,7 +131,7 @@ export class UpdateChecker {
         publishedAt: latest && typeof j.publishedAt === 'number' ? j.publishedAt : undefined,
       };
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warn(`updates.json ilegível (${errMsg(err)}); verificando de novo.`);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log.warn(tr('updates.json ilegível ({0}); verificando de novo.', [errMsg(err)]));
     }
   }
 
@@ -170,7 +171,7 @@ export class UpdateChecker {
       log.clearOnce('updates');
     } catch (err) {
       this.error = describeError(err);
-      log.warnOnce('updates', `Verificação de versão nova falhou: ${this.error}.`);
+      log.warnOnce('updates', tr('Verificação de versão nova falhou: {0}.', [this.error]));
     }
     this.schedule(this.error ? RETRY_MS : CHECK_EVERY_MS);
     this.announce();
@@ -201,7 +202,7 @@ export class UpdateChecker {
       const body = ((await res.json()) ?? {}) as { tag_name?: unknown; html_url?: unknown; published_at?: unknown };
       const tag = typeof body.tag_name === 'string' ? body.tag_name : '';
       const v = parseVersion(tag);
-      if (!v) log.warnOnce(`updates:tag:${tag.slice(0, 40)}`, `A release mais recente de ${repo} tem uma tag fora do padrão de versão (${tag.slice(0, 40)}): ignorada.`);
+      if (!v) log.warnOnce(`updates:tag:${tag.slice(0, 40)}`, tr('A release mais recente de {0} tem uma tag fora do padrão de versão ({1}): ignorada.', [repo, tag.slice(0, 40)]));
       const latest = v ? `${v.nums.join('.')}${v.pre ? `-${v.pre}` : ''}` : undefined;
       const published = typeof body.published_at === 'string' ? Date.parse(body.published_at) : NaN;
       this.cache = {
@@ -213,9 +214,9 @@ export class UpdateChecker {
         publishedAt: latest && Number.isFinite(published) ? published : undefined,
       };
     } else if (res.status === 403 || res.status === 429) {
-      throw new Error('limite de consultas do GitHub atingido; tento de novo mais tarde');
+      throw new Error(tr('limite de consultas do GitHub atingido; tento de novo mais tarde'));
     } else {
-      throw new Error(`o GitHub respondeu ${res.status}`);
+      throw new Error(tr('o GitHub respondeu {0}', [res.status]));
     }
     this.save();
   }
@@ -229,7 +230,7 @@ export class UpdateChecker {
       writeFileSync(tmp, `${JSON.stringify(this.cache, null, 2)}\n`);
       renameSync(tmp, file);
     } catch (err) {
-      log.warnOnce('updates:save', `Não deu para gravar ${file}: ${errMsg(err)}.`);
+      log.warnOnce('updates:save', tr('Não deu para gravar {0}: {1}.', [file, errMsg(err)]));
     }
   }
 
@@ -244,7 +245,7 @@ export class UpdateChecker {
     const s = this.status();
     if (!s.available || s.latest === this.announced) return;
     this.announced = s.latest;
-    log.info(`⬆️  Nova versão do Habblaud: v${s.latest} (em uso: v${this.opts.current}). Novidades: ${s.url}`);
+    log.info(tr('⬆️  Nova versão do Habblaud: v{0} (em uso: v{1}). Novidades: {2}', [s.latest, this.opts.current, s.url]));
   }
 }
 
@@ -256,7 +257,7 @@ function safeReleaseUrl(url: unknown, repo: string): string {
 
 function describeError(err: unknown): string {
   const name = (err as { name?: unknown })?.name;
-  if (name === 'TimeoutError' || name === 'AbortError') return 'o GitHub não respondeu a tempo';
-  if (err instanceof TypeError) return 'sem conexão com o GitHub';
+  if (name === 'TimeoutError' || name === 'AbortError') return tr('o GitHub não respondeu a tempo');
+  if (err instanceof TypeError) return tr('sem conexão com o GitHub');
   return errMsg(err);
 }

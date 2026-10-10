@@ -190,7 +190,7 @@ export class CodexHistory implements HistoryProvider {
     try {
       summary = await readRolloutSummary(c.path, c.size);
     } catch (err) {
-      log.warnOnce(`codex-history:${errMsg(err)}`, `Histórico do Codex: rollout ilegível (${errMsg(err)}).`);
+      log.warnOnce(`codex-history:${errMsg(err)}`, tr('Histórico do Codex: rollout ilegível ({0}).', [errMsg(err)]));
       summary = {};
     }
     this.cache.set(c.path, { mtimeMs: c.mtimeMs, size: c.size, summary });

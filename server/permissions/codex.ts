@@ -68,7 +68,7 @@ export function codexToolView(tool: string, input: Rec, cwd?: string): CodexTool
     case 'Bash': {
       const command = str(input.command);
       const target = NETWORK.exec(str(input.description)?.trim() ?? '')?.[1];
-      if (target) return { title: `Rede(${line(target, TITLE_ARG_MAX)})`, text: line(tr('Acessar a rede: {0}', [target]), TEXT_MAX), icon: '🌐', ...shown(command, 'command') };
+      if (target) return { title: tr('Rede({0})', [line(target, TITLE_ARG_MAX)]), text: line(tr('Acessar a rede: {0}', [target]), TEXT_MAX), icon: '🌐', ...shown(command, 'command') };
       const view = toolView('Bash', { command: command ?? '' }, cwd);
       const desc = describeTool('Bash', { command: command ?? '', description: str(input.description) });
       return { title: view.title, text: desc.text, icon: desc.icon, ...shown(command, 'command') };

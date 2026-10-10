@@ -171,7 +171,7 @@ function updateShellItem(li: HTMLElement, j: ShellJob, now: number): void {
   setTitle(r.time, tr('Rodando há {0} (desde {1})', [formatDuration(elapsed), formatClock(j.startedAt)]));
   setText(r.badge, shellKindLabel(j));
   setVariant(r.badge, 'ui-shell__badge--', SHELL_KIND_VARIANT(j));
-  setText(r.since, `desde ${formatClock(j.startedAt, false)}`);
+  setText(r.since, tr('desde {0}', [formatClock(j.startedAt, false)]));
   setTitle(r.since, tr('Iniciado em {0} · id {1}', [formatDateTime(j.startedAt), j.id]));
   setHidden(r.details, !j.command);
   setText(r.command, j.command ?? '');
@@ -480,7 +480,7 @@ class AgentView {
     setText(this.accName, account?.name ?? a.account);
     updateProviderTag(this.accProv, provider, account?.name ?? '');
     // E-mail (Claude Code) ou, no Codex (sem e-mail), o plano.
-    const accSub = account?.email ?? (codex && account?.plan ? `plano ${account.plan}` : '');
+    const accSub = account?.email ?? (codex && account?.plan ? tr('plano {0}', [account.plan]) : '');
     setText(this.accEmail, accSub);
     setHidden(this.accEmail, !accSub);
     setText(this.roomName, room?.name ?? a.roomId);

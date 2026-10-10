@@ -48,8 +48,8 @@ export class SocialSection {
     this.phrase = h('p', { class: 'ui-social__phrase' });
     this.friends = h('span', { class: 'ui-social__names' });
     this.rivals = h('span', { class: 'ui-social__names' });
-    this.friendsRow = h('p', { class: 'ui-social__bond' }, h('span', { class: 'ui-social__bond-label', text: '💛 Amizades' }), this.friends);
-    this.rivalsRow = h('p', { class: 'ui-social__bond' }, h('span', { class: 'ui-social__bond-label', text: '⚔️ Rivalidades' }), this.rivals);
+    this.friendsRow = h('p', { class: 'ui-social__bond' }, h('span', { class: 'ui-social__bond-label', text: tr('💛 Amizades') }), this.friends);
+    this.rivalsRow = h('p', { class: 'ui-social__bond' }, h('span', { class: 'ui-social__bond-label', text: tr('⚔️ Rivalidades') }), this.rivals);
     this.ledger = h('ol', { class: 'ui-social__ledger' });
     this.ledgerBox = h('details', { class: 'ui-social__extract' }, h('summary', { text: tr('Extrato') }), this.ledger);
     const wallet = h(
@@ -81,7 +81,7 @@ export class SocialSection {
     setText(this.extra, `🪙 ${s.coins}`);
     setText(this.doing, s.doing ?? '');
     setHidden(this.doing, !s.doing);
-    setText(this.coins, `${s.coins} moedinhas`);
+    setText(this.coins, tr('{0} moedinhas', [s.coins]));
     setText(this.record, recordText(s.wins, s.losses));
     setText(this.earned, tr('{0} ganhos trabalhando', [coinDelta(s.earned)]));
     setText(this.phrase, tr('Bordão: “{0}”', [s.catchphrase]));

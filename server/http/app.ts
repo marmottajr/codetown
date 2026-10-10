@@ -66,7 +66,7 @@ const TERMINAL_ROUTE = /^\/api\/agents\/([^/]+)\/terminal$/;
 
 /** PUT|DELETE /api/agents/:id/character: personagem do projeto (ver Office.setCharacter). */
 const CHARACTER_ROUTE = /^\/api\/agents\/([^/]+)\/character$/;
-const NOT_EDITABLE = 'agente não encontrado: só o agente principal de uma sessão aberta tem personagem editável';
+const NOT_EDITABLE = tr('agente não encontrado: só o agente principal de uma sessão aberta tem personagem editável');
 
 /** Conexão vinda do próprio computador (127.x, ::1 ou ::ffff:127.x). */
 function isLoopbackAddress(addr: string | undefined): boolean {
@@ -115,7 +115,7 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
 export function readJson(req: IncomingMessage): Promise<unknown> {
   if (!isJsonContentType(req.headers['content-type'])) {
     req.resume();
-    return Promise.reject(new HttpError(415, 'envie o corpo como JSON (Content-Type: application/json)'));
+    return Promise.reject(new HttpError(415, tr('envie o corpo como JSON (Content-Type: application/json)')));
   }
   return new Promise((ok, fail) => {
     const chunks: Buffer[] = [];
@@ -123,7 +123,7 @@ export function readJson(req: IncomingMessage): Promise<unknown> {
     req.on('data', (c: Buffer) => {
       size += c.length;
       // Grande demais: continua drenando (sem guardar) para conseguir responder 413.
-      if (size > MAX_BODY) return void fail(new HttpError(413, 'corpo grande demais'));
+      if (size > MAX_BODY) return void fail(new HttpError(413, tr('corpo grande demais')));
       chunks.push(c);
     });
     req.on('end', () => {
@@ -133,7 +133,7 @@ export function readJson(req: IncomingMessage): Promise<unknown> {
       try {
         ok(JSON.parse(raw));
       } catch {
-        fail(new HttpError(400, 'JSON inválido'));
+        fail(new HttpError(400, tr('JSON inválido')));
       }
     });
     req.on('error', fail);
@@ -181,7 +181,7 @@ export function modSummary(
       name: a.name,
       room: rooms.get(a.roomId) ?? a.roomId,
       account: a.account,
-      waitingFor: a.waitingFor ?? 'responder no terminal',
+      waitingFor: a.waitingFor ?? tr('responder no terminal'),
       since: a.statusSince,
       answerable: !!a.permission,
     }));
@@ -216,7 +216,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     const seed = parseSeed(body?.seed);
     const parts = parseAppearanceParts(body?.parts);
     if (!name || seed === null || !parts) {
-      throw new HttpError(400, `esperado {name: texto de 1 a ${NAME_MAX} caracteres, seed: inteiro de 0 a 4294967295, parts: peças da aparência}`);
+      throw new HttpError(400, tr('esperado {name: texto de 1 a {0} caracteres, seed: inteiro de 0 a 4294967295, parts: peças da aparência}', [NAME_MAX]));
     }
     const r = office.setCharacter(id, { name, seed, parts });
     if (r.result === 'not-found') return sendJson(res, 404, { error: NOT_EDITABLE });
@@ -383,7 +383,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
             const b = body as { id?: unknown; name?: unknown };
             if (typeof b?.id !== 'string' || typeof b.name !== 'string') throw new HttpError(400, 'esperado {id, name}');
             const name = deps.renameRoom?.(b.id, b.name);
-            if (name === undefined) throw new HttpError(404, 'sala não encontrada');
+            if (name === undefined) throw new HttpError(404, tr('sala não encontrada'));
             sendJson(res, 200, { name });
           })
           .catch((err) => fail(res, err));
