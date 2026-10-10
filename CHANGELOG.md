@@ -12,6 +12,14 @@ do meio (0.**3**.0).
 
 ### Adicionado
 
+- **Antigravity no escritório.** As conversas do Antigravity CLI (`agy`) entram como as do Claude Code, do Codex e do
+  OpenCode: cada pasta de trabalho é uma sala, cada conversa um personagem com o selo **Antigravity**, com status e a
+  atividade da ferramenta. Só por hook: `npm run antigravity:install` (`antigravity:status` e `antigravity:uninstall`)
+  registra o hook `habblaud` no `~/.gemini/config/hooks.json` (backup antes; os outros hooks ficam; `--dry-run` só mostra
+  o plano). O hook só observa, não imprime nada e nunca atrasa o `agy` (1,5 s no máximo). Nenhum arquivo do `agy` é lido.
+  `HABBLAUD_ANTIGRAVITY=0` desliga. Implementado e coberto por testes automáticos, e conferido de ponta a ponta no `agy`
+  1.3.3, no Linux. Sem aprovar pelo escritório (o `agy` não aceita aprovação por hook), sem mensagens, sem uso, terminal
+  nem histórico. Uma rodada abortada pelo `agy` sem `Stop` deixa o agente como trabalhando por até 30 minutos.
 - **OpenCode no escritório.** As sessões do OpenCode entram como as do Claude Code e do Codex: cada projeto é uma sala,
   cada sessão um personagem com o selo **OpenCode**, com atividade, subagentes e status. Sem instalar nada, o Habblaud
   lê o banco do OpenCode (`opencode.db`) só para leitura, e apenas as tabelas `project`, `session`, `message`, `part` e

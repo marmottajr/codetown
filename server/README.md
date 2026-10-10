@@ -399,6 +399,28 @@ Terceira fonte, ao lado das do Claude Code e do Codex (`sources/opencode/`); age
   elas a resposta do registro de permissão (`skip`: `no-viewers`, `unknown-session`, `unsupported-tool`, `too-many`).
   A ajuda do app (`client/src/ui/help.ts`, seção `opencode`) e o README (solução de problemas) descrevem o mesmo.
 
+## Antigravity
+
+Quarta fonte (`sources/antigravity/`); agentes do Antigravity CLI (`agy`) levam `provider: 'antigravity'`. Ids:
+`antigravity:<conversationId>` (UUID), conta fixa `antigravity` (registrada no primeiro evento). Só por eventos, sem ler
+nenhum arquivo do `agy`:
+
+- **Hook** (`mod/habblaud-antigravity/hook.mjs`, copiado por `npm run antigravity:install` para
+  `~/.habblaud/antigravity-hook.mjs` e registrado em `~/.gemini/config/hooks.json` como o hook `habblaud`): recebe o JSON
+  do `agy` no stdin, manda `{event, conversationId, workspacePaths, stepIdx?, fullyIdle?, tool?: {name, head?}}` e sai
+  com 0 sem imprimir nada (o `agy` bloqueia o agente enquanto o hook roda). Contrato: `docs/hooks.md` embutido no `agy`
+  1.3.3.
+- **Rota** `POST /api/antigravity/events` (`antigravity/http.ts`; só com `Host` local e conexão pelo loopback;
+  `conversationId` que não é UUID ou evento fora dos cinco = 400; 404 com `HABBLAUD_ANTIGRAVITY=0`; `/api/health` traz
+  `antigravityEvents` e `antigravitySource`). Campos fora do contrato são descartados.
+- **Fonte** (`source.ts`, `activity.ts`): a conversa entra no primeiro evento (sala = `workspacePaths[0]`). `PreInvocation`,
+  `PreToolUse`, `PostToolUse` e `PostInvocation` = trabalhando; `Stop` com `fullyIdle` diferente de `false` = ocioso
+  (`PostInvocation` é seguido de `PreInvocation` na mesma rodada). A atividade vem do nome da ferramenta e de um texto
+  curto (`run_command` = Bash, `view_file` = Read, `write_to_file` = Write...), com o `stepIdx` como id (o mesmo
+  evento duas vezes não repete). Sai depois de 30 min sem evento (não há evento de fim de sessão).
+- **Sem** aprovar pelo escritório (só `deny` funciona por hook no `agy` 1.3.3; `allow` não aprova), mensagens, uso,
+  terminal nem histórico.
+
 ## Variáveis de ambiente
 
 | Variável | Padrão | Uso |
