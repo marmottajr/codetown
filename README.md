@@ -776,7 +776,8 @@ organização) são lidos no host pelo `docker:up` e passados ao container.
 - **Sem credenciais:** o Habblaud não lê senhas nem tokens de acesso. Do `.claude.json` de cada conta aproveita só o
   e-mail, a organização e o cache do `/usage`; o uso ao vivo vem do mod (ou do tap de statusline).
 - **Segredos mascarados:** tokens e senhas com formato conhecido (`Bearer`, `-u usuário:senha`, `TOKEN=`, chaves
-  `sk-…`, `ghp_…`, `AKIA…`, JWTs, senhas em URLs) viram `***` antes de chegar ao navegador.
+  `sk-…`, `ghp_…`, `AKIA…`, JWTs, senhas em URLs) viram `***` antes de chegar ao navegador, sempre antes de qualquer
+  corte do texto (um token cortado ao meio escaparia da máscara), inclusive em títulos de tarefas e erros.
 - **Protegido contra sites maliciosos:** o servidor recusa endereços que não sejam `localhost`/IP (DNS rebinding) e
   `POST` vindos de outras origens (CSRF), e não deixa a página ser embutida em outros sites.
 - **Terminal só local:** a conversa completa das sessões (e o histórico das sessões encerradas, com os

@@ -324,7 +324,7 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   de Codex (`isCodexHome`: `thread-writer-locks/`, `archived_sessions/`, `config.toml`, `auth.json` ou
   `sessions/AAAA/`, sem `projects/`, que só o Claude Code cria). Uma pasta do Codex nunca vira conta do Claude Code.
   `auth.json` e `config.toml` nunca são lidos; o plano vem de `rate_limits.plan_type`.
-- **Sessões abertas** (`sources/codex/files.ts`, `locks.ts`, `source.ts`): `thread-writer-locks/<threadId>.lock`
+- **Sessões abertas** (`sources/codex/files.ts`, `locks.ts`, `source-presence.ts`): `thread-writer-locks/<threadId>.lock`
   existindo há 3 s (os locks rápidos de manutenção ficam de fora). A trava é só **sondada**, nunca adquirida (se o
   Habblaud a segurasse quando o Codex retoma a thread, o Codex falharia): no Windows, ler 1 byte dá `EBUSY` = segura;
   no Linux, uma linha `FLOCK WRITE` do `/proc/locks` com o dispositivo:inode do arquivo; no macOS, no Docker e no
@@ -337,7 +337,7 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   principal só entra quando o rollout (criado no 1º prompt) ou um hook disser o cwd. Sem a pasta de locks: escrita no
   rollout nos últimos 30 min. Evento de hook segura a presença por 60 s. O mtime nunca decide a presença: só escolhe o
   que abrir.
-- **Rollout** (`sources/codex/rollout.ts`, `reader.ts`): `sessions/AAAA/MM/DD/rollout-*-<threadId>.jsonl` (a pasta é a
+- **Rollout** (`sources/codex/rollout.ts` e os `rollout-*.ts`, `reader.ts`): `sessions/AAAA/MM/DD/rollout-*-<threadId>.jsonl` (a pasta é a
   data de criação; sessão retomada continua no arquivo antigo; um thread revertido tem mais de um arquivo e vale o de
   última linha mais recente, com o mtime só desempatando) e `archived_sessions/`, lidos com `FileTail`. Ao abrir:
   a 1ª linha (`session_meta`) e `scanBackward`, do fim para o começo em blocos de 1 MB, até a fronteira de turno mais
@@ -347,8 +347,8 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   `task_started`/`task_complete`/`turn_aborted`; atividades por `item_completed` (`CommandExecution` como o Bash,
   `FileChange`, `McpToolCall`, mensagens e raciocínio). Só o 1º `session_meta` vale, e num subagente com fork as
   linhas herdadas do pai (`ordinal < subagent_history_start_ordinal`) ficam de fora. Segredos mascarados antes de
-  qualquer corte, também nos textos que o `shared/activity.ts` corta depois (`maskedCut`: mascara até 16 KiB, cortando
-  no último espaço, e só então trunca). Tokens sem somar o cache de novo (no Codex ele já está dentro da entrada); sem
+  qualquer corte (`maskedCut`, em `shared/activity.ts`, o mesmo do lado do Claude: mascara até 16 KiB, cortando no
+  último espaço, e só então trunca). Tokens sem somar o cache de novo (no Codex ele já está dentro da entrada); sem
   custo.
   - Comando (`command.ts`): o de dentro do invólucro do shell (`sh -lc`, `pwsh`/`powershell -Command`, `cmd /c`), com
     o `parsed_cmd` do `CommandExecution` quando vem; os eventos do GitHub saem desse comando.
@@ -511,12 +511,12 @@ O repositório é também um marketplace de plugins do Claude Code (`.claude-plu
 - `config.ts`, `log.ts`, `index.ts` — configuração, logs curtos (nunca conteúdo de conversas) e entrada.
 - `accounts/` — detecção de contas (`detect.ts`, também usado pelo `docker-up`), uso (`usage.ts`), tap de statusline (`statusline.ts`), serviço (`service.ts`).
 - `sources/` — registro de sessões, leitura incremental (`tail.ts`), parser de transcripts (atividades em `transcript.ts`; conversa do terminal em `terminal.ts`; eventos do GitHub em `github.ts`), subagentes, o histórico de sessões (`history.ts`) e o orquestrador (`watcher.ts`).
-- `sources/codex/` — fonte do Codex: contas (`accounts.ts`), arquivos (`files.ts`), sondagem das travas (`locks.ts`), varredura reversa (`reader.ts`), parser do rollout (`rollout.ts`), comando de dentro do shell (`command.ts`), comandos em segundo plano (`shells.ts`), terminal (`terminal.ts`), histórico (`history.ts`), a fonte (`source.ts`) e o canal paralelo (`appserver/`: WebSocket em `ws.ts`, JSON-RPC em `rpc.ts`, cliente do app-server em `client.ts` e o serviço por conta em `service.ts`).
+- `sources/codex/` — fonte do Codex: contas (`accounts.ts`), arquivos (`files.ts`), sondagem das travas (`locks.ts`), varredura reversa (`reader.ts`), parser do rollout (`rollout.ts`, com a máscara em `rollout-mask.ts`, `session_meta` e uso em `rollout-meta.ts`, estado e helpers de texto em `rollout-state.ts`, descrição das ferramentas em `rollout-tools.ts` e leitura de valores em `rollout-util.ts`), comando de dentro do shell (`command.ts`), comandos em segundo plano (`shells.ts`), terminal (`terminal.ts`), histórico (`history.ts`), a fonte (`source.ts`, com tipos em `source-types.ts`, presença em `source-presence.ts`, eventos dos hooks em `source-hooks.ts`, uso do plano em `source-usage.ts`, jobs de shell em `source-shells.ts`, árvore de subagentes em `source-tree.ts`, começo do rollout em `source-scan.ts` e o fs.watch em `source-watch.ts`) e o canal paralelo (`appserver/`: WebSocket em `ws.ts`, JSON-RPC em `rpc.ts`, cliente do app-server em `client.ts` e o serviço por conta em `service.ts`).
 - `codex/` — eventos dos hooks do Codex e a guarda deles (`http.ts`) e a chave local do hook (`key.ts`).
 - `model/` — escritório (`office.ts`), salas/slots (`rooms.ts`), nomes persistidos (`names.ts`).
 - `http/` — proteções de borda (`guard.ts`), rotas (`app.ts`), SSE (`sse.ts`), terminal (`terminal.ts`) e o histórico dele (`sessions.ts`), timelapse (`timeline.ts`), Meu dia (`stats.ts`), estáticos (`static.ts`).
 - `history/` — gravador da linha do tempo do timelapse (`timeline.ts`) e as estatísticas do Meu dia: amostragem, persistência e retenção (`daystats.ts`; o acumulador puro fica em `shared/daystats.ts`).
-- `permissions/` — responder pelo escritório (permissões e perguntas): registro dos pedidos (`registry.ts`), rotas (`http.ts`) e a busca da chamada no transcript (`transcript.ts`).
+- `permissions/` — responder pelo escritório (permissões e perguntas): registro dos pedidos (`registry.ts`, com a validação e as regras de decisão em `registry-parse.ts`), rotas (`http.ts`) e a busca da chamada no transcript (`transcript.ts`).
 - `messages/` — mensagens pelo escritório: fila, presença das sessões e prazos (`registry.ts`) e rotas (`http.ts`).
 - `updates/` — verificação de versão nova nas releases do GitHub (`checker.ts`).
 
