@@ -3,10 +3,12 @@
 //   npm run antigravity:install     # registra o hook "habblaud" no hooks.json do agy e copia o script
 //   npm run antigravity:uninstall   # remove só o que a instalação acrescentou
 //   npm run antigravity:status      # mostra se o hook está registrado e atualizado, e se o Habblaud responde
-//   (opções: --dry-run, --port <n>)
+//   (opções: --dry-run, --port <n>, --aprovar, --espera <s>)
 //
-// O hook (mod/habblaud-antigravity/hook.mjs) manda ao escritório, na hora, o que as sessões do agy fazem. Ele só observa:
-// não imprime nada e sai com 0 (o agy bloqueia o agente enquanto o hook roda, ver o cabeçalho do hook). É uma CÓPIA do
+// O hook (mod/habblaud-antigravity/hook.mjs) manda ao escritório, na hora, o que as sessões do agy fazem. Por padrão só
+// observa: não imprime nada e sai com 0 (o agy bloqueia o agente enquanto o hook roda, ver o cabeçalho do hook). Com
+// `--aprovar` ele também segura cada `run_command` até você aprovar ou recusar no escritório (`approvals: true` na
+// configuração, e o timeout do hook do PreToolUse sobe para a espera + 5 s; o timeout do agy é em segundos). É uma CÓPIA do
 // arquivo, para continuar funcionando se o repositório mudar de lugar: depois de atualizar o Habblaud, rode
 // npm run antigravity:install de novo (o status avisa quando a cópia ficou para trás).
 //
@@ -29,6 +31,11 @@ export const CONFIG_NAME = 'antigravity-hook.json';
 export const HOOK_NAME = 'habblaud';
 /** Versão do agy em que o contrato dos hooks foi conferido. */
 export const TESTED_AGY = '1.3.3';
+export const DEFAULT_WAIT_S = 25;
+export const MIN_WAIT_S = 5;
+export const MAX_WAIT_S = 120;
+/** Timeout (segundos) dos hooks que só observam. */
+const OBSERVE_TIMEOUT_S = 10;
 const EVENTS_GROUPED = ['PreToolUse', 'PostToolUse'] as const;
 const EVENTS_FLAT = ['PreInvocation', 'PostInvocation', 'Stop'] as const;
 
@@ -42,6 +49,11 @@ const USAGE = `Uso: npm run antigravity:<install|uninstall|status> [-- opções]
 Opções:
   --dry-run        mostra o que mudaria, sem gravar nada
   --port <n>       porta do Habblaud (padrão: HABBLAUD_PORT ou ${DEFAULT_PORT})
+  --aprovar        também aprovar ou recusar os comandos (run_command) pelo escritório: o hook segura o comando até a
+                   sua resposta. Sem a opção, o hook só observa (rodar de novo sem ela desliga). Usa o comportamento
+                   \`{}\` do agy, que a documentação dele não descreve (conferido no agy ${TESTED_AGY}).
+  --espera <s>     quanto o hook espera a sua resposta antes de deixar o agy perguntar (padrão: ${DEFAULT_WAIT_S} s; de
+                   ${MIN_WAIT_S} a ${MAX_WAIT_S}); só vale com --aprovar
   -h, --help       mostra esta ajuda
 
 Depois de instalar, abra uma nova sessão do agy (use /hooks nele para ver o hook carregado).`;
@@ -52,6 +64,8 @@ export interface RunOptions {
   command: 'install' | 'uninstall' | 'status';
   dryRun: boolean;
   port: number;
+  approvals: boolean;
+  waitS: number;
 }
 
 export interface Health {
@@ -75,6 +89,8 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   let dryRun = false;
   const envPort = Number.parseInt(env.HABBLAUD_PORT ?? '', 10);
   let port = Number.isInteger(envPort) && envPort > 0 && envPort < 65_536 ? envPort : DEFAULT_PORT;
+  let approvals = false;
+  let waitS = DEFAULT_WAIT_S;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-h' || a === '--help') return 'help';
@@ -82,11 +98,15 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
     else if (a === '--port') {
       port = Number(argv[++i]);
       if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new FatalError('--port precisa de um número entre 1 e 65535.');
+    } else if (a === '--aprovar') approvals = true;
+    else if (a === '--espera') {
+      waitS = Number(argv[++i]);
+      if (!Number.isInteger(waitS) || waitS < MIN_WAIT_S || waitS > MAX_WAIT_S) throw new FatalError(`--espera precisa de um número de segundos entre ${MIN_WAIT_S} e ${MAX_WAIT_S}.`);
     } else if ((a === 'install' || a === 'uninstall' || a === 'status') && !command) command = a;
     else throw new FatalError(`opção desconhecida: ${a}\n\n${USAGE}`);
   }
   if (!command) throw new FatalError(`diga o que fazer: install, uninstall ou status.\n\n${USAGE}`);
-  return { command, dryRun, port };
+  return { command, dryRun, port, approvals, waitS };
 }
 
 export const hooksFile = (home: string): string => join(home, '.gemini', 'config', 'hooks.json');
@@ -96,13 +116,21 @@ export const configPath = (home: string): string => join(home, '.habblaud', CONF
 type Json = Record<string, unknown>;
 
 /** A entrada "habblaud" do hooks.json: os cinco eventos, no formato do agy (docs/hooks.md do agy 1.3.3). */
-export function hookEntry(copyPath: string): Json {
-  const handler = (event: string) => ({ type: 'command', command: `node ${copyPath} ${event}`, timeout: 10 });
+export function hookEntry(copyPath: string, preToolTimeoutS = OBSERVE_TIMEOUT_S): Json {
+  const handler = (event: string, timeout: number) => ({ type: 'command', command: `node ${copyPath} ${event}`, timeout });
   const entry: Json = {};
-  for (const e of EVENTS_GROUPED) entry[e] = [{ matcher: '*', hooks: [handler(e)] }];
-  for (const e of EVENTS_FLAT) entry[e] = [handler(e)];
+  for (const e of EVENTS_GROUPED) entry[e] = [{ matcher: '*', hooks: [handler(e, e === 'PreToolUse' ? preToolTimeoutS : OBSERVE_TIMEOUT_S)] }];
+  for (const e of EVENTS_FLAT) entry[e] = [handler(e, OBSERVE_TIMEOUT_S)];
   return entry;
 }
+
+/** O que a configuração do hook guarda e o timeout do PreToolUse que ela pede (a espera + 5 s com aprovações). */
+export interface HookConfig {
+  port: number;
+  approvals?: true;
+  permissionTimeoutS?: number;
+}
+export const preToolTimeout = (cfg: Pick<HookConfig, 'approvals' | 'permissionTimeoutS'>): number => (cfg.approvals ? (cfg.permissionTimeoutS ?? DEFAULT_WAIT_S) + 5 : OBSERVE_TIMEOUT_S);
 
 function stamp(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
@@ -154,15 +182,27 @@ async function fetchHealth(port: number): Promise<Health | undefined> {
 }
 
 const hooksText = (h: Json): string => `${JSON.stringify(h, null, 2)}\n`;
-const configText = (port: number): string => `${JSON.stringify({ port }, null, 2)}\n`;
+const configOf = (opts: Pick<RunOptions, 'port' | 'approvals' | 'waitS'>): HookConfig => (opts.approvals ? { port: opts.port, approvals: true, permissionTimeoutS: opts.waitS } : { port: opts.port });
+const configText = (cfg: HookConfig): string => `${JSON.stringify(cfg, null, 2)}\n`;
 
-function readConfigPort(home: string): number | undefined {
+/** A configuração gravada (undefined = não existe ou ilegível). */
+export function readHookConfig(home: string): Partial<HookConfig> | undefined {
   try {
-    const j = JSON.parse(readFileSync(configPath(home), 'utf8')) as { port?: unknown };
-    return typeof j.port === 'number' ? j.port : undefined;
+    const j = JSON.parse(readFileSync(configPath(home), 'utf8')) as unknown;
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return undefined;
+    const r = j as Record<string, unknown>;
+    const out: Partial<HookConfig> = {};
+    if (typeof r.port === 'number') out.port = r.port;
+    if (r.approvals === true) out.approvals = true;
+    if (typeof r.permissionTimeoutS === 'number') out.permissionTimeoutS = r.permissionTimeoutS;
+    return out;
   } catch {
     return undefined;
   }
+}
+
+function readConfigPort(home: string): number | undefined {
+  return readHookConfig(home)?.port;
 }
 
 /** Executa o comando. Devolve o código de saída. */
@@ -192,11 +232,12 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
       out(`✗ ${hooksLabel} existe, mas não é um objeto JSON válido. Corrija ou mova o arquivo e rode de novo. Nada foi gravado.`);
       return 1;
     }
-    const entry = hookEntry(copy);
+    const cfg = configOf(opts);
+    const entry = hookEntry(copy, preToolTimeout(cfg));
     const nextHooks: Json = { ...curHooks, [HOOK_NAME]: entry };
     const steps: Array<{ label: string; file: string; text: string; same: boolean; existing: string | undefined; backup: boolean }> = [
       { label: copyLabel, file: copy, text: source, same: readText(copy) === source, existing: readText(copy), backup: true },
-      { label: cfgLabel, file: cfgFile, text: configText(opts.port), same: readConfigPort(home) === opts.port, existing: readText(cfgFile), backup: true },
+      { label: cfgLabel, file: cfgFile, text: configText(cfg), same: JSON.stringify(readHookConfig(home)) === JSON.stringify(cfg), existing: readText(cfgFile), backup: true },
       { label: hooksLabel, file: hooks, text: hooksText(nextHooks), same: JSON.stringify(curHooks[HOOK_NAME]) === JSON.stringify(entry), existing: curHooksText, backup: true },
     ];
     let changed = 0;
@@ -221,7 +262,10 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
     if (changed && !opts.dryRun && !failures) {
       out('');
       out('Pronto. Abra uma nova sessão do agy (no agy, /hooks mostra o hook "habblaud" carregado). Com o Habblaud aberto,');
-      out('o agente aparece no escritório quando você mandar o primeiro pedido. O hook só observa e nunca bloqueia o agy.');
+      if (opts.approvals) {
+        out('o agente aparece no escritório quando você mandar o primeiro pedido. Com página do Habblaud aberta, cada comando (run_command)');
+        out(`espera sua resposta lá por até ${opts.waitS} s; sem resposta, o agy mostra o prompt dele. Isso usa o comportamento \`{}\` do agy (não documentado; conferido no agy ${TESTED_AGY}).`);
+      } else out('o agente aparece no escritório quando você mandar o primeiro pedido. O hook só observa e nunca bloqueia o agy.');
       out('Para desfazer: npm run antigravity:uninstall');
     }
     return failures ? 1 : 0;
@@ -261,7 +305,8 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
   }
 
   // status
-  const entry = hookEntry(copy);
+  const stored = readHookConfig(home);
+  const entry = hookEntry(copy, preToolTimeout(stored ?? {}));
   if (curHooks === undefined) out(`! ${hooksLabel}: existe, mas não é um objeto JSON válido`);
   else if (!(HOOK_NAME in curHooks)) out(`• ${hooksLabel}: hook "${HOOK_NAME}" não registrado (o agy não aparece no escritório sem ele)`);
   else if (JSON.stringify(curHooks[HOOK_NAME]) !== JSON.stringify(entry)) out(`! ${hooksLabel}: hook "${HOOK_NAME}" registrado, mas diferente do esperado; rode npm run antigravity:install para atualizar`);
@@ -271,6 +316,11 @@ export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
   else if (source !== undefined && cur !== source) out(`! ${copyLabel}: diferente do hook deste repositório; rode npm run antigravity:install para atualizar`);
   else out(`• ${copyLabel}: instalado${source === undefined ? '' : ' e atualizado'}`);
   out(`Contrato dos hooks conferido no agy ${TESTED_AGY}; outra versão pode mudar o formato.`);
+  out(
+    stored?.approvals
+      ? `Aprovar pelo escritório: ligado (espera ${stored.permissionTimeoutS ?? DEFAULT_WAIT_S} s; só run_command). Para desligar: npm run antigravity:install sem --aprovar.`
+      : 'Aprovar pelo escritório: desligado (o hook só observa). Para ligar: npm run antigravity:install -- --aprovar.',
+  );
   const port = readConfigPort(home) ?? opts.port;
   const health = await (ctx.health ?? fetchHealth)(port);
   if (!health) out(`Habblaud em http://127.0.0.1:${port}: fora do ar (com ele parado, o hook não faz nada e o agy segue normal).`);

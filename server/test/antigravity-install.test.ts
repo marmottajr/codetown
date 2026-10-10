@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { configPath, DEFAULT_PORT, HOOK_NAME, HOOK_SOURCE, hookCopy, hookEntry, hooksFile, parseArgs, run, type Health, type RunContext, type RunOptions } from '../../scripts/antigravity-install';
+import { configPath, DEFAULT_PORT, DEFAULT_WAIT_S, HOOK_NAME, HOOK_SOURCE, hookCopy, hookEntry, hooksFile, parseArgs, preToolTimeout, readHookConfig, run, type Health, type RunContext, type RunOptions } from '../../scripts/antigravity-install';
 import { tempDir } from './fixtures';
 
 let tmp: ReturnType<typeof tempDir>;
@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 afterEach(() => tmp.cleanup());
 
-const opts = (command: RunOptions['command'], over: Partial<RunOptions> = {}): RunOptions => ({ command, dryRun: false, port: 4851, ...over });
+const opts = (command: RunOptions['command'], over: Partial<RunOptions> = {}): RunOptions => ({ command, dryRun: false, port: 4851, approvals: false, waitS: 40, ...over });
 const ctx = (over: Partial<RunContext> = {}): RunContext => ({ home, now: NOW, hookPath: HOOK_SOURCE, out: (l) => out.push(l), health: async () => undefined, ...over });
 const exec = (command: RunOptions['command'], over: Partial<RunOptions> = {}, c: Partial<RunContext> = {}) => run(opts(command, over), ctx(c));
 const backups = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.includes('backup')) : []);
@@ -225,7 +225,7 @@ describe('antigravity-install: status (AG-18)', () => {
     out = [];
     await exec('status', {}, health({ antigravityEvents: false }));
     const text = out.join('\n');
-    expect(text.match(/npm run antigravity:install/g)).toHaveLength(2);
+    expect(text.match(/rode npm run antigravity:install para atualizar/g)).toHaveLength(2);
     expect(text).toContain('Antigravity desligado');
   });
 
@@ -239,8 +239,8 @@ describe('antigravity-install: status (AG-18)', () => {
 
 describe('antigravity-install: argumentos', () => {
   it('comando, --dry-run e --port', () => {
-    expect(parseArgs(['install'], {})).toEqual({ command: 'install', dryRun: false, port: DEFAULT_PORT });
-    expect(parseArgs(['uninstall', '--dry-run', '--port', '5000'], {})).toEqual({ command: 'uninstall', dryRun: true, port: 5000 });
+    expect(parseArgs(['install'], {})).toEqual({ command: 'install', dryRun: false, port: DEFAULT_PORT, approvals: false, waitS: DEFAULT_WAIT_S });
+    expect(parseArgs(['uninstall', '--dry-run', '--port', '5000'], {})).toEqual({ command: 'uninstall', dryRun: true, port: 5000, approvals: false, waitS: DEFAULT_WAIT_S });
     expect(parseArgs(['status'], { HABBLAUD_PORT: '4800' })).toMatchObject({ port: 4800 });
     expect(parseArgs(['--help'], {})).toBe('help');
   });
@@ -251,5 +251,83 @@ describe('antigravity-install: argumentos', () => {
     expect(() => parseArgs(['install', '--foo'], {})).toThrow(/opção desconhecida/);
     expect(() => parseArgs(['install', '--port', '0'], {})).toThrow(/--port/);
     expect(() => parseArgs(['install', '--port', 'abc'], {})).toThrow(/--port/);
+  });
+
+  it('--aprovar e --espera (de 5 a 120 s)', () => {
+    expect(parseArgs(['install', '--aprovar'], {})).toMatchObject({ approvals: true, waitS: DEFAULT_WAIT_S });
+    expect(parseArgs(['install', '--aprovar', '--espera', '60'], {})).toMatchObject({ approvals: true, waitS: 60 });
+    for (const bad of ['4', '121', 'abc', '2.5']) expect(() => parseArgs(['install', '--espera', bad], {}), bad).toThrow(/--espera/);
+  });
+});
+
+describe('antigravity-install: --aprovar (AG-19)', () => {
+  const preTool = () => (readHooks()[HOOK_NAME] as Record<string, Array<{ hooks: Array<{ timeout: number }> }>>).PreToolUse[0].hooks[0].timeout;
+
+  it('sem --aprovar: a configuração só tem a porta e o timeout do PreToolUse fica em 10 s', async () => {
+    await exec('install');
+    expect(JSON.parse(readFileSync(CONFIG(), 'utf8'))).toEqual({ port: 4851 });
+    expect(preTool()).toBe(10);
+  });
+
+  it('com --aprovar: grava approvals e a espera, e só o PreToolUse sobe o timeout (espera + 5 s)', async () => {
+    expect(await exec('install', { approvals: true, waitS: 40 })).toBe(0);
+    expect(JSON.parse(readFileSync(CONFIG(), 'utf8'))).toEqual({ port: 4851, approvals: true, permissionTimeoutS: 40 });
+    expect(preTool()).toBe(45);
+    expect(readHookConfig(home)).toEqual({ port: 4851, approvals: true, permissionTimeoutS: 40 });
+    const e = readHooks()[HOOK_NAME] as Record<string, unknown>;
+    expect(e).toEqual(hookEntry(COPY(), 45));
+    for (const ev of ['PostToolUse']) expect(JSON.stringify(e[ev])).toContain('"timeout":10');
+    for (const ev of ['PreInvocation', 'PostInvocation', 'Stop']) expect((e[ev] as Array<{ timeout: number }>)[0].timeout, ev).toBe(10);
+  });
+
+  it('o timeout acompanha a espera (preToolTimeout) e o padrão de 25 s vira 30', () => {
+    expect(preToolTimeout({})).toBe(10);
+    expect(preToolTimeout({ approvals: true })).toBe(30);
+    expect(preToolTimeout({ approvals: true, permissionTimeoutS: 120 })).toBe(125);
+  });
+
+  it('rodar de novo sem --aprovar desliga: configuração só com a porta e timeout 10, com backup', async () => {
+    await exec('install', { approvals: true, waitS: 40 });
+    await exec('install');
+    expect(JSON.parse(readFileSync(CONFIG(), 'utf8'))).toEqual({ port: 4851 });
+    expect(preTool()).toBe(10);
+    expect(backups(join(home, '.habblaud')).length).toBeGreaterThan(0);
+  });
+
+  it('--aprovar duas vezes seguidas é idempotente', async () => {
+    await exec('install', { approvals: true, waitS: 40 });
+    const hooksOnce = readFileSync(HOOKS(), 'utf8');
+    const cfgOnce = readFileSync(CONFIG(), 'utf8');
+    out = [];
+    await exec('install', { approvals: true, waitS: 40 });
+    expect(readFileSync(HOOKS(), 'utf8')).toBe(hooksOnce);
+    expect(readFileSync(CONFIG(), 'utf8')).toBe(cfgOnce);
+    expect(out.every((l) => l.startsWith('='))).toBe(true);
+  });
+
+  it('--dry-run com --aprovar não grava nada', async () => {
+    await exec('install', { approvals: true, dryRun: true });
+    expect(existsSync(join(home, '.habblaud'))).toBe(false);
+    expect(existsSync(join(home, '.gemini'))).toBe(false);
+  });
+
+  it('o aviso final diz que usa o comportamento não documentado do agy', async () => {
+    await exec('install', { approvals: true, waitS: 40 });
+    const text = out.join('\n');
+    expect(text).toContain('40 s');
+    expect(text).toContain('não documentado');
+  });
+
+  it('status: diz se as aprovações estão ligadas e reconhece o hook com o timeout maior (sem pedir para atualizar)', async () => {
+    await exec('install');
+    out = [];
+    await exec('status', {}, { health: async () => undefined });
+    expect(out.join('\n')).toContain('Aprovar pelo escritório: desligado');
+    await exec('install', { approvals: true, waitS: 40 });
+    out = [];
+    await exec('status', {}, { health: async () => undefined });
+    const text = out.join('\n');
+    expect(text).toContain('Aprovar pelo escritório: ligado (espera 40 s');
+    expect(text).not.toContain('diferente do esperado');
   });
 });
