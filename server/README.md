@@ -420,11 +420,13 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   `acceptForSession`. Numa thread assinada, o hook recebe `{skip: 'parallel'}`. Assinada, a thread fica carregada no
   daemon com a trava de escritor presa, então a fonte avisa o turno de cada uma (`onTurn` → `setTurnOpen`): 60 s depois
   de o turno fechar (`UNSUBSCRIBE_AFTER_MS`) o serviço a desassina (`thread/unsubscribe`; os cartões dela fecham e os
-  pedidos novos voltam ao hook) e a assina de novo quando um turno abre, se ela ainda estiver carregada. No boot e a
-  cada reconexão, a thread carregada de turno fechado é assinada de novo e solta 60 s depois. O daemon só descarrega a
+  pedidos novos voltam ao hook) e a assina de novo quando um turno abre, se ela ainda estiver carregada. No boot, e
+  quando outro cliente carrega de novo uma thread de turno fechado (`thread/started`), ela é assinada de novo e solta
+  60 s depois; uma reconexão ao mesmo daemon não reassina a que já passou dos 60 s. O daemon só descarrega a
   thread depois de ela ficar ociosa e sem inscritos, num prazo do próprio Codex (`thread_unload_delay_secs`: cerca de
   1 a 2 min no teste com o 0.160.1; o código do Codex prevê até 30 min), e é aí que a trava some e o TUI fechado sai
-  do escritório: no pior caso, 60 s mais o prazo do Codex, contados de novo a cada reinício ou reconexão do Habblaud.
+  do escritório: no pior caso, 60 s mais o prazo do Codex, contados de novo a cada reinício do Habblaud ou nova carga da
+  thread.
   Sem daemon, confere de novo a cada 30 s; um `thread/loaded/list` que falha com a conexão de pé avisa uma vez e lista
   de novo em 30 s; um `thread/resume` com erro avisa uma vez por conta e thread e é tentado de novo a cada 30 s. A
   conexão que não fica pronta em 15 s (`HANDSHAKE_TIMEOUT_MS`) cai, e ela ou um handshake/`initialize` recusado deixa

@@ -528,9 +528,9 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
   descarrega a conversa depois de ela ficar ociosa e sem ninguém inscrito, num prazo do próprio Codex (no teste com o
   0.160.1, cerca de 1 a 2 minutos; o código do Codex prevê até 30 minutos, `thread_unload_delay_secs`); até lá a trava
   continua presa, e o personagem pode continuar no escritório mesmo com o terminal fechado. O Habblaud segura a
-  conversa só 60 segundos depois de o turno fechar (e de novo por uns 60 segundos quando é reiniciado ou se liga de
-  novo ao daemon, o que recomeça a contagem do Codex), então um terminal fechado sai no tempo do Codex: no pior caso,
-  esses 60 segundos mais o prazo do Codex.
+  conversa só 60 segundos depois de o turno fechar (e de novo por uns 60 segundos quando é reiniciado ou quando outro
+  cliente do Codex volta a carregar a conversa, o que recomeça a contagem do Codex), então um terminal fechado sai no
+  tempo do Codex: no pior caso, esses 60 segundos mais o prazo do Codex.
   No Windows e no Linux (fora do Docker), a sessão sai segundos depois de o processo que segura a trava dela fechar (o
   app, a CLI fora do daemon ou o próprio daemon, ao descarregar a conversa), mesmo que ele tenha caído sem avisar. O
   subagente que ainda não concluiu espera 2 minutos antes de sair, porque volta com o mesmo id quando o pai manda um
