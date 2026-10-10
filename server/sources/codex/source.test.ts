@@ -1,14 +1,16 @@
 // Integração da fonte do Codex: um CODEX_HOME temporário (rollouts e locks sintéticos), o AccountsService e o Office.
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentInfo, Notice } from '../../../shared/types';
 import { AccountsService } from '../../accounts/service';
-import { setQuiet } from '../../log';
+import { log, setQuiet } from '../../log';
 import { NameStore } from '../../model/names';
 import { Office } from '../../model/office';
 import { codexHome, R, SOURCES, threadId } from '../../test/codex-fixtures';
-import { CodexSource } from './source';
+import { MAX_LINE_BYTES } from '../tail';
+import { CodexSource, scanPrefix } from './source';
 
 setQuiet(true);
 
@@ -497,5 +499,32 @@ describe('fonte do Codex: contas', () => {
     // Sem o rollout legível não há projeto: fica fora (um hook com o cwd o traria).
     expect(ctx.agent()).toBeUndefined();
     expect(ctx.source.transcriptPathOf(KEY)).toBeUndefined();
+  });
+});
+
+describe('scanPrefix do Codex', () => {
+  it('ignora linha acima do teto e lê as vizinhas', async () => {
+    const dir = join(tmpdir(), `habblaud-codex-prefix-${process.pid}`);
+    mkdirSync(dir, { recursive: true });
+    const warn = vi.spyOn(log, 'warnOnce').mockImplementation(() => {});
+    try {
+      const file = join(dir, 'rollout.jsonl');
+      const body = Buffer.concat([
+        Buffer.from(`${R.turnContext({ model: 'antes' })}\n`),
+        Buffer.from('{"timestamp":"2026-10-10T00:00:00.000Z","type":"turn_context","payload":{"model":"'),
+        Buffer.alloc(MAX_LINE_BYTES, 0x6e),
+        Buffer.from('"}}\n'),
+        Buffer.from(`${R.taskStarted('t1')}\n`),
+      ]);
+      writeFileSync(file, body);
+      const { state } = await scanPrefix(file, body.length, 'codex:teste', 0);
+      // Booleano de propósito: o valor errado seria a linha gigante, e o diff não pode imprimi-la.
+      expect(state.model === 'antes').toBe(true);
+      expect(state.turnOpen).toBe(true);
+      expect(warn).toHaveBeenCalledWith(`oversize-line:${file}`, expect.stringContaining('8 MiB'));
+    } finally {
+      warn.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

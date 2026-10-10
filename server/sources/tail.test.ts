@@ -1,8 +1,19 @@
 import { appendFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { log } from '../log';
 import { tempDir } from '../test/fixtures';
-import { FileTail } from './tail';
+import { FileTail, MAX_LINE_BYTES } from './tail';
+
+function drain(t: FileTail): string[] {
+  const all: string[] = [];
+  for (let i = 0; i < 80; i++) {
+    const r = t.read();
+    all.push(...r.lines);
+    if (!r.more) return all;
+  }
+  throw new Error('leitura não terminou');
+}
 
 describe('FileTail', () => {
   let tmp: ReturnType<typeof tempDir>;
@@ -96,5 +107,34 @@ describe('FileTail', () => {
     const all = [...r1.lines];
     for (let i = 0; i < 5; i++) all.push(...t.read().lines);
     expect(all).toEqual(['aaaa', 'bbbb', 'cccc']);
+  });
+
+  it('descarta a linha parcial que passa do teto e segue na próxima', () => {
+    writeFileSync(file, Buffer.alloc(MAX_LINE_BYTES + 64 * 1024, 0x61));
+    const t = new FileTail(file, { maxChunk: 256 * 1024 });
+    const warn = vi.spyOn(log, 'warnOnce').mockImplementation(() => {});
+    try {
+      expect(drain(t)).toEqual([]);
+      appendFileSync(file, '\n{"ok":1}\n');
+      const lines = drain(t);
+      // O tamanho vem antes do texto: uma falha não despeja a linha gigante no diff.
+      expect(lines.map((l) => l.length)).toEqual([8]);
+      expect(lines).toEqual(['{"ok":1}']);
+      expect(warn).toHaveBeenCalledWith(`oversize-line:${file}`, expect.stringContaining('8 MiB'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('entrega uma linha do tamanho exato do teto', () => {
+    expect(MAX_LINE_BYTES).toBe(8 * 1024 * 1024);
+    writeFileSync(file, Buffer.concat([Buffer.alloc(MAX_LINE_BYTES, 0x62), Buffer.from('\nok\n')]));
+    const t = new FileTail(file, { maxChunk: 256 * 1024 });
+    const lines = drain(t);
+    expect(lines.length).toBe(2);
+    expect(lines[0]?.length).toBe(MAX_LINE_BYTES);
+    expect(lines[0]?.charCodeAt(0)).toBe(0x62);
+    expect(lines[0]?.charCodeAt(MAX_LINE_BYTES - 1)).toBe(0x62);
+    expect(lines[1]).toBe('ok');
   });
 });
