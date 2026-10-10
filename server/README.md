@@ -419,7 +419,7 @@ nenhum arquivo do `agy`:
   curto (`run_command` = Bash, `view_file` = Read, `write_to_file` = Write...), com o `stepIdx` como id (o mesmo
   evento duas vezes não repete). Sai depois de 30 min sem evento (não há evento de fim de sessão).
 - **Aprovar pelo escritório** (opt-in: `npm run antigravity:install -- --aprovar`, que grava `approvals: true` e
-  `permissionTimeoutS` em `~/.habblaud/antigravity-hook.json` e sobe o `timeout` do hook PreToolUse para a espera + 5 s;
+  `permissionTimeoutS` em `~/.habblaud/antigravity-hook.json` e sobe o `timeout` do hook PreToolUse para a espera + 8 s;
   `permissions/antigravity.ts` + o mesmo `POST /api/permissions` com `provider: 'antigravity'` e `session_id` =
   `conversationId`; só `allow` e `deny`, `interrupt` ou `suggestion` = 400): o hook só segura o `run_command`. Allow
   imprime `{}` (comportamento do `agy` 1.3.3 não documentado: `allow`, `ask` e `permissionOverrides` não aprovam) e deny

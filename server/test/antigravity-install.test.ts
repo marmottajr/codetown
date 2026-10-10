@@ -269,21 +269,21 @@ describe('antigravity-install: --aprovar (AG-19)', () => {
     expect(preTool()).toBe(10);
   });
 
-  it('com --aprovar: grava approvals e a espera, e só o PreToolUse sobe o timeout (espera + 5 s)', async () => {
+  it('com --aprovar: grava approvals e a espera, e só o PreToolUse sobe o timeout (espera + 8 s)', async () => {
     expect(await exec('install', { approvals: true, waitS: 40 })).toBe(0);
     expect(JSON.parse(readFileSync(CONFIG(), 'utf8'))).toEqual({ port: 4851, approvals: true, permissionTimeoutS: 40 });
-    expect(preTool()).toBe(45);
+    expect(preTool()).toBe(48);
     expect(readHookConfig(home)).toEqual({ port: 4851, approvals: true, permissionTimeoutS: 40 });
     const e = readHooks()[HOOK_NAME] as Record<string, unknown>;
-    expect(e).toEqual(hookEntry(COPY(), 45));
+    expect(e).toEqual(hookEntry(COPY(), 48));
     for (const ev of ['PostToolUse']) expect(JSON.stringify(e[ev])).toContain('"timeout":10');
     for (const ev of ['PreInvocation', 'PostInvocation', 'Stop']) expect((e[ev] as Array<{ timeout: number }>)[0].timeout, ev).toBe(10);
   });
 
-  it('o timeout acompanha a espera (preToolTimeout) e o padrão de 25 s vira 30', () => {
+  it('o timeout acompanha a espera (preToolTimeout) e o padrão de 25 s vira 33', () => {
     expect(preToolTimeout({})).toBe(10);
-    expect(preToolTimeout({ approvals: true })).toBe(30);
-    expect(preToolTimeout({ approvals: true, permissionTimeoutS: 120 })).toBe(125);
+    expect(preToolTimeout({ approvals: true })).toBe(33);
+    expect(preToolTimeout({ approvals: true, permissionTimeoutS: 120 })).toBe(128);
   });
 
   it('rodar de novo sem --aprovar desliga: configuração só com a porta e timeout 10, com backup', async () => {

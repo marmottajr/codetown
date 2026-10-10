@@ -8,7 +8,7 @@
 // O hook (mod/habblaud-antigravity/hook.mjs) manda ao escritório, na hora, o que as sessões do agy fazem. Por padrão só
 // observa: não imprime nada e sai com 0 (o agy bloqueia o agente enquanto o hook roda, ver o cabeçalho do hook). Com
 // `--aprovar` ele também segura cada `run_command` até você aprovar ou recusar no escritório (`approvals: true` na
-// configuração, e o timeout do hook do PreToolUse sobe para a espera + 5 s; o timeout do agy é em segundos). É uma CÓPIA do
+// configuração, e o timeout do hook do PreToolUse sobe para a espera + 8 s; o timeout do agy é em segundos). É uma CÓPIA do
 // arquivo, para continuar funcionando se o repositório mudar de lugar: depois de atualizar o Habblaud, rode
 // npm run antigravity:install de novo (o status avisa quando a cópia ficou para trás).
 //
@@ -124,13 +124,13 @@ export function hookEntry(copyPath: string, preToolTimeoutS = OBSERVE_TIMEOUT_S)
   return entry;
 }
 
-/** O que a configuração do hook guarda e o timeout do PreToolUse que ela pede (a espera + 5 s com aprovações). */
+/** O que a configuração do hook guarda e o timeout do PreToolUse que ela pede (a espera + 8 s com aprovações (margem para o envio, o registro e a última rodada da espera)). */
 export interface HookConfig {
   port: number;
   approvals?: true;
   permissionTimeoutS?: number;
 }
-export const preToolTimeout = (cfg: Pick<HookConfig, 'approvals' | 'permissionTimeoutS'>): number => (cfg.approvals ? (cfg.permissionTimeoutS ?? DEFAULT_WAIT_S) + 5 : OBSERVE_TIMEOUT_S);
+export const preToolTimeout = (cfg: Pick<HookConfig, 'approvals' | 'permissionTimeoutS'>): number => (cfg.approvals ? (cfg.permissionTimeoutS ?? DEFAULT_WAIT_S) + 8 : OBSERVE_TIMEOUT_S);
 
 function stamp(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
