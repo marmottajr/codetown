@@ -365,8 +365,9 @@
   --step: 3px;
 }
 
-/* Conta do OpenCode: o mesmo chip "vazado" do Codex (outra ferramenta, sem logotipo). */
-.ui-acc-chip[data-provider='opencode'] {
+/* Conta do OpenCode e do Antigravity: o mesmo chip "vazado" do Codex (outra ferramenta, sem logotipo). */
+.ui-acc-chip[data-provider='opencode'],
+.ui-acc-chip[data-provider='antigravity'] {
   --step: 2px;
   border-radius: 0;
   background: #161b26;
@@ -386,7 +387,8 @@
   );
 }
 
-.ui-acc-chip--lg[data-provider='opencode'] {
+.ui-acc-chip--lg[data-provider='opencode'],
+.ui-acc-chip--lg[data-provider='antigravity'] {
   --step: 3px;
 }
 

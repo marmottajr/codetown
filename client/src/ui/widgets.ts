@@ -19,7 +19,7 @@ export function updateAccountChip(chip: HTMLElement, account: AccountInfo | unde
   const p = accountProvider(account, fallbackId, provider);
   setText(chip, account?.short ?? fallbackShort(fallbackId, p));
   setStyleVar(chip, '--acc', account?.color ?? '#8b98b3');
-  setAttr(chip, 'data-provider', p === 'codex' || p === 'opencode' ? p : null);
+  setAttr(chip, 'data-provider', p === 'codex' || p === 'opencode' || p === 'antigravity' ? p : null);
   const label = accountChipLabel(account, fallbackId, p);
   setTitle(chip, label);
   setAttr(chip, 'aria-label', label);
@@ -32,7 +32,10 @@ export function createProviderTag(extra = ''): HTMLElement {
 
 /** Mostra o selo só para o Codex (e não repete quando o nome da conta já diz "Codex"). */
 export function updateProviderTag(tag: HTMLElement, provider: Provider, accountName = ''): void {
-  if (provider === 'opencode') {
+  if (provider === 'antigravity') {
+    setText(tag, PROVIDER_NAME.antigravity);
+    setTitle(tag, 'Agente do Antigravity (Google)');
+  } else if (provider === 'opencode') {
     setText(tag, PROVIDER_NAME.opencode);
     setTitle(tag, 'Agente do OpenCode');
   } else if (provider === 'codex') {

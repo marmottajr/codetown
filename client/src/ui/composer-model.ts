@@ -33,6 +33,7 @@ export function composerMode(agent: AgentInfo | undefined, env: ComposerEnv): Co
   if (env.replaying) return { kind: 'off', text: 'Sem mensagens no timelapse: o escritório mostrado é o de outro momento' };
   if (agent?.kind === 'sub') return { kind: 'off', text: 'Subagentes não recebem mensagens: escreva para o agente principal' };
   if (!agent || agent.status === 'offline' || agent.status === 'done') return { kind: 'off', text: 'Sessão encerrada' };
+  if (agent.provider === 'antigravity') return { kind: 'off', text: 'Para responder, use o terminal do Antigravity' }; // sem caminho para entrar numa sessão aberta do agy
   const codex = agent.provider === 'codex';
   const opencode = agent.provider === 'opencode';
   if (!env.enabled) return { kind: 'off', text: opencode ? 'Para responder, use o OpenCode' : codex ? 'Para responder, use o Codex' : 'Para responder, use o terminal do Claude Code' };
