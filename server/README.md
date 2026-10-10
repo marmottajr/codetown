@@ -418,8 +418,14 @@ nenhum arquivo do `agy`:
   (`PostInvocation` é seguido de `PreInvocation` na mesma rodada). A atividade vem do nome da ferramenta e de um texto
   curto (`run_command` = Bash, `view_file` = Read, `write_to_file` = Write...), com o `stepIdx` como id (o mesmo
   evento duas vezes não repete). Sai depois de 30 min sem evento (não há evento de fim de sessão).
-- **Sem** aprovar pelo escritório (só `deny` funciona por hook no `agy` 1.3.3; `allow` não aprova), mensagens, uso,
-  terminal nem histórico.
+- **Aprovar pelo escritório** (opt-in: `npm run antigravity:install -- --aprovar`, que grava `approvals: true` e
+  `permissionTimeoutS` em `~/.habblaud/antigravity-hook.json` e sobe o `timeout` do hook PreToolUse para a espera + 5 s;
+  `permissions/antigravity.ts` + o mesmo `POST /api/permissions` com `provider: 'antigravity'` e `session_id` =
+  `conversationId`; só `allow` e `deny`, `interrupt` ou `suggestion` = 400): o hook só segura o `run_command`. Allow
+  imprime `{}` (comportamento do `agy` 1.3.3 não documentado: `allow`, `ask` e `permissionOverrides` não aprovam) e deny
+  imprime `{"decision":"deny","reason":...}`; sem página, pulo, tempo esgotado ou Habblaud parado não imprime nada e o
+  `agy` mostra o prompt dele.
+- **Sem** mensagens, uso, terminal nem histórico.
 
 ## Variáveis de ambiente
 

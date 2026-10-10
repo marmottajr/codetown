@@ -586,9 +586,19 @@ aparecendo com a atividade da ferramenta, ocioso no fim da rodada, e o `agy` nor
 - **Presença:** não há evento de fim de sessão, então a conversa sai depois de 30 minutos sem eventos. Uma rodada que o
   `agy` aborta sem terminar (por exemplo, no modo `-p` quando uma ferramenta é negada) não dispara `Stop`: o agente fica
   como "trabalhando" até esses 30 minutos.
-- **Limites:** não há aprovar pelo escritório (testado no `agy` 1.3.3: o hook só consegue recusar; `allow` e
-  `permissionOverrides` não aprovam nada), nem mandar mensagem, nem uso (cotas), terminal ou histórico. Sessões com
-  `--dangerously-skip-permissions` são relatadas como sem hooks e não aparecem (não testado aqui).
+- **Aprovar e recusar pelo escritório (opcional):** `npm run antigravity:install -- --aprovar` (e `--espera <s>`, de 5 a
+  120, padrão 25). Com alguma página do Habblaud aberta, cada comando (`run_command`) do `agy` espera a sua resposta no
+  cartão **Pede permissão** (com o selo Antigravity): **Aprovar** deixa o comando rodar sem o prompt do `agy`;
+  **Recusar** bloqueia e o `agy` mostra o seu motivo (opcional) ao modelo. Sem resposta, sem página aberta ou com o
+  Habblaud parado, nada muda e vale o prompt do `agy`. Não há "sempre permitir" nem "interromper", e só o `run_command`
+  é segurado: edições, URLs e MCP seguem com o prompt do `agy`. **Atenção:** o `agy` só documenta `allow`, `deny` e
+  `ask`, e no `agy` 1.3.3 `allow` e `permissionOverrides` não aprovam nada; o que aprova é o hook imprimir `{}`, um
+  comportamento que a documentação dele não descreve. Foi conferido no `agy` 1.3.3, no modo interativo e no `-p`, e
+  pode mudar numa versão futura (se `{}` passar a recusar, o comando é bloqueado e você vê o aviso no `agy`). A
+  aprovação vale por cima das suas regras `ask` do `agy` para esse comando: o cartão é o seu consentimento. Rodar o
+  `install` de novo sem `--aprovar` desliga.
+- **Limites:** sem mandar mensagem, uso (cotas), terminal ou histórico. Sessões com `--dangerously-skip-permissions`
+  são relatadas como sem hooks e não aparecem (não testado aqui).
 - `HABBLAUD_ANTIGRAVITY=0` desliga. O contrato dos hooks foi conferido no `agy` 1.3.3; outra versão pode mudar o formato.
 
 ### GitHub no escritório
@@ -876,7 +886,8 @@ das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e 
 - **Antigravity:** o Habblaud não abre nenhum arquivo do `agy` (conversas, `brain/`, token de login, `settings.json`).
   O hook só manda o evento, o id da conversa, a pasta de trabalho, o número do passo e, na ferramenta, o nome e um texto
   curto (o comando, o arquivo ou o resumo dela): o texto dos pedidos, a saída das ferramentas e o transcript nunca saem
-  do `agy`. O `npm run antigravity:install` grava só `~/.gemini/config/hooks.json` (uma chave, "habblaud", com backup
+  do `agy`. Com `--aprovar`, o comando completo de cada `run_command` (mascarando segredos) também vai ao cartão de
+  aprovação. O `npm run antigravity:install` grava só `~/.gemini/config/hooks.json` (uma chave, "habblaud", com backup
   antes de mudar), `~/.habblaud/antigravity-hook.mjs` e `~/.habblaud/antigravity-hook.json`; o hook só fala com
   `127.0.0.1`.
 - **O que aparece na tela:** resumos das atividades (ferramenta, arquivo, comando ou consulta), títulos das sessões,
