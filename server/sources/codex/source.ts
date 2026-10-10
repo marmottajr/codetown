@@ -64,6 +64,7 @@ import type { CodexLive } from './live';
 import { createLockProber, type LockProber } from './locks';
 import { isTurnBoundary, lineTimestamp, scanBackward } from './reader';
 import {
+  codexAgentPath,
   createCodexState,
   describeCodexTool,
   isThreadId,
@@ -1250,7 +1251,8 @@ export class CodexSource implements AgentSource, CodexLive {
         if (t !== rootT) this.reconcile(t, now, 'hook');
         const toolName = str(input.tool_name) ?? 'ferramenta';
         const toolInput = rec(input.tool_input) ?? {};
-        const { desc, tool } = describeCodexTool(toolName, toolInput);
+        // Quem chama (o destino do send_message): o thread raiz é o "/root"; o subagente, o caminho do session_meta dele.
+        const { desc, tool } = describeCodexTool(toolName, toolInput, undefined, { agentPath: t === rootT ? '/root' : codexAgentPath(t.meta) });
         const id = str(input.tool_use_id);
         const act: Activity = { id: `${t.key}#${id ?? `hook${now.toString(36)}`}`, at: now, ...desc, tool };
         if (t.inOffice) office.addActivity(t.key, act, true);

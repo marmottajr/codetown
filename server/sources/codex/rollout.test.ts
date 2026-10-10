@@ -829,6 +829,35 @@ describe('multiagente v2: SubAgentActivity, spawn_agent e agent_message (P11)', 
     expect(spawnsOf(results)).toEqual([]);
     expect(state.title).toBe('Tarefa do filho');
   });
+
+  it('send_message: o rótulo pelo destino (raiz, pai, subagente) quando os dados bastam; senão, neutro', () => {
+    const label = (target: string | undefined, agentPath?: string, name = 'send_message') =>
+      describeCodexTool(name, target === undefined ? {} : { target, message: 'x' }, 'collaboration', agentPath === undefined ? undefined : { agentPath }).desc.text;
+    const SUB = 'Mensagem para um subagente';
+    const ROOT = 'Mensagem para o agente principal';
+    const PARENT = 'Mensagem para o agente pai';
+    const ANY = 'Mensagem entre agentes';
+    // O principal é o /root: tudo o que ele manda vai para um subagente.
+    expect([label('/root/revisar_testes', '/root'), label('revisar_testes', '/root'), label(undefined, '/root')]).toEqual([SUB, SUB, SUB]);
+    // O neto: a raiz, o pai, um filho dele (absoluto ou relativo, que é sempre abaixo de quem manda) e um primo.
+    const NETO = '/root/tarefa_filho/tarefa_neto';
+    expect([label('/root', NETO), label('/root/tarefa_filho', NETO), label(`${NETO}/bisneto`, NETO), label('bisneto', NETO), label('/root/outra', NETO)]).toEqual([ROOT, PARENT, SUB, SUB, ANY]);
+    // Sem saber quem manda: só a raiz e o relativo são certos.
+    expect([label('/root'), label('filho'), label('/root/filho'), label(undefined)]).toEqual([ROOT, SUB, ANY, ANY]);
+    // followup_task e send_input seguem como eram.
+    expect([label('/root', NETO, 'followup_task'), label('/root', NETO, 'send_input')]).toEqual([SUB, SUB]);
+  });
+
+  it('send_message no rollout: o caminho de quem manda vem do session_meta (agent_path do thread_spawn; o principal é o /root)', () => {
+    const NETO = threadId(22);
+    const netoSource = { subagent: { thread_spawn: { parent_thread_id: CHILD, depth: 2, agent_path: '/root/tarefa_filho/tarefa_neto', agent_nickname: 'Hubble', agent_role: 'worker' } } };
+    expect(parseSessionMeta({ id: NETO, session_id: T, source: netoSource }).agentPath).toBe('/root/tarefa_filho/tarefa_neto');
+    const send = (target: string) => R.functionCall('call_m', 'send_message', { target, message: fernet('m') }, AT, 'collaboration');
+    expect(texts(feed([R.meta(NETO, { at: AT, sessionId: T, source: netoSource }), send('/root/tarefa_filho')]).results)).toEqual(['Mensagem para o agente pai']);
+    expect(texts(feed([R.meta(T, { at: AT }), send('/root/revisar_testes')]).results)).toEqual(['Mensagem para um subagente']);
+    // Subagente sem agent_path: destino absoluto que não é a raiz fica neutro.
+    expect(texts(feed([R.meta(CHILD, { at: AT, sessionId: T, source: SOURCES.sub(T, 'worker') }), send('/root/tarefa_filho')]).results)).toEqual(['Mensagem entre agentes']);
+  });
 });
 
 describe('Extension (web.search, clock.sleep, image_gen) e web::run (P12)', () => {

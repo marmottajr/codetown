@@ -150,6 +150,8 @@ export interface RolloutMeta {
   parentThreadId?: string;
   agentNickname?: string;
   agentRole?: string;
+  /** Caminho do subagente no multiagente v2 ("/root/tarefa_filho/tarefa_neto"), quando o thread_spawn o traz. */
+  agentPath?: string;
   /** subagent_history_start_ordinal: as linhas com ordinal menor são a história herdada do pai (fork). */
   historyStart?: number;
 }
@@ -179,6 +181,15 @@ function sourceInfo(src: unknown): { internal: boolean; spawn?: Rec } {
 
 const INTERNAL_THREAD_SOURCES = new Set(['guardian_review', 'memory_consolidation']);
 
+/** Caminho absoluto de agente do multiagente v2: "/root" e nomes em minúsculas, dígitos e `_`. */
+const AGENT_PATH = /^\/root(?:\/[a-z0-9_]+)*$/;
+
+/** Caminho do próprio agente: o principal é o "/root"; o subagente, o do thread_spawn (se veio). */
+export function codexAgentPath(meta: RolloutMeta | undefined): string | undefined {
+  if (!meta || meta.internal) return undefined;
+  return meta.parentThreadId ? meta.agentPath : '/root';
+}
+
 export function parseSessionMeta(payload: Rec, at?: number): RolloutMeta {
   const src = sourceInfo(payload.source);
   const meta: RolloutMeta = {
@@ -206,6 +217,8 @@ export function parseSessionMeta(payload: Rec, at?: number): RolloutMeta {
   const role = str(src.spawn ? (looseGet(src.spawn, 'agent_role') ?? looseGet(src.spawn, 'agent_type')) : undefined) ?? str(payload.agent_role);
   if (nickname) meta.agentNickname = truncate(nickname, 40);
   if (role) meta.agentRole = truncate(role, 40);
+  const agentPath = str(src.spawn ? looseGet(src.spawn, 'agent_path') : undefined);
+  if (agentPath && AGENT_PATH.test(agentPath)) meta.agentPath = agentPath;
   const historyStart = num(payload.subagent_history_start_ordinal);
   if (historyStart !== undefined && historyStart >= 0) meta.historyStart = historyStart;
   return meta;
@@ -528,11 +541,25 @@ function webRunDesc(input: Rec): { desc: ActivityDescription; tool: string } {
 }
 
 /**
+ * Rótulo do send_message pelo destino (`target`: caminho absoluto "/root/…" ou relativo a quem manda) e pelo caminho de
+ * quem manda, quando conhecido. O relativo é sempre abaixo de quem manda (o Codex não aceita ".." nem "root" nele); sem
+ * dados que bastem, o rótulo é neutro.
+ */
+function messageLabel(target: unknown, self: string | undefined): string {
+  const t = typeof target === 'string' ? target.trim() : '';
+  if (t === '/root') return 'Mensagem para o agente principal';
+  if (t && !t.startsWith('/')) return 'Mensagem para um subagente';
+  if (self && (t ? t.startsWith(`${self}/`) : self === '/root')) return 'Mensagem para um subagente';
+  if (self && t && t === self.slice(0, self.lastIndexOf('/'))) return 'Mensagem para o agente pai';
+  return 'Mensagem entre agentes';
+}
+
+/**
  * Atividade de uma ferramenta do Codex pelo nome que ela tem no rollout, no hook ou no app (exec_command, shell,
  * Bash, apply_patch, mcp__…, spawn_agent, exec do code mode...). `name` volta normalizado (Bash, Edit, Write,
- * mcp__…) para o Activity.tool.
+ * mcp__…) para o Activity.tool. `from.agentPath` = o caminho de quem chama (codexAgentPath), para o destino do send_message.
  */
-export function describeCodexTool(rawName: string, input: Rec, namespace?: string): { desc: ActivityDescription; tool: string } {
+export function describeCodexTool(rawName: string, input: Rec, namespace?: string, from: { agentPath?: string } = {}): { desc: ActivityDescription; tool: string } {
   const name =
     namespace && /^mcp__/.test(namespace) ? `${namespace.replace(/_+$/, '')}__${rawName}` : namespace && DOTTED_NAMESPACES.has(namespace) ? `${namespace}.${rawName}` : rawName;
   switch (name) {
@@ -581,8 +608,9 @@ export function describeCodexTool(rawName: string, input: Rec, namespace?: strin
     case 'wait':
     case 'wait_agent':
       return { desc: { kind: 'delegate', icon: '⏳', text: 'Esperando os subagentes' }, tool: name };
-    case 'send_input':
     case 'send_message':
+      return { desc: { kind: 'communicate', icon: '💬', text: messageLabel(input.target, from.agentPath) }, tool: name };
+    case 'send_input':
     case 'followup_task':
       return { desc: { kind: 'communicate', icon: '💬', text: 'Mensagem para um subagente' }, tool: name };
     case 'close_agent':
@@ -826,6 +854,11 @@ class RolloutLineParser {
 
   private changed(): void {
     this.out.changed = true;
+  }
+
+  /** Quem chama, para o describeCodexTool (o destino do send_message). */
+  private from(): { agentPath?: string } {
+    return { agentPath: codexAgentPath(this.s.meta) };
   }
 
   private paginated(): boolean {
@@ -1079,7 +1112,7 @@ class RolloutLineParser {
           this.spawned(id, Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids[0] : undefined, prompt ? titleText(prompt) : '');
         }
         this.done(id);
-        const { desc, tool: name } = describeCodexTool(tool, { prompt: item.prompt });
+        const { desc, tool: name } = describeCodexTool(tool, { prompt: item.prompt }, undefined, this.from());
         this.push(desc, { key: id, tool: name, callId: id });
         this.progress();
         return;
@@ -1095,7 +1128,7 @@ class RolloutLineParser {
       case 'DynamicToolCall': {
         this.sawPaginated();
         this.done(id);
-        const { desc, tool } = describeCodexTool(str(item.tool) ?? 'ferramenta', rec(item.arguments) ?? {}, str(item.namespace));
+        const { desc, tool } = describeCodexTool(str(item.tool) ?? 'ferramenta', rec(item.arguments) ?? {}, str(item.namespace), this.from());
         this.push(desc, { key: id, tool, callId: id });
         return;
       }
@@ -1274,7 +1307,7 @@ class RolloutLineParser {
           this.changed();
         }
         // Atividade em andamento: o item concluído (paginated) chega depois com o mesmo id e não duplica.
-        const { desc, tool } = describeCodexTool(name, input, str(p.namespace));
+        const { desc, tool } = describeCodexTool(name, input, str(p.namespace), this.from());
         this.push(desc, { key: callId, tool, callId });
         if (name === 'request_user_input') this.ask(callId ?? this.autoKey(), input.questions);
         if (name === 'spawn_agent' && callId) this.rememberSpawn(callId, spawnTitle(input));

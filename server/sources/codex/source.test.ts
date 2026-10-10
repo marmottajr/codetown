@@ -1895,3 +1895,24 @@ describe('fonte do Codex: turno que termina com erro (task_complete com error, e
     }
   });
 });
+
+describe('fonte do Codex: rótulo do send_message pelo destino', () => {
+  it('PreToolUse do hook: o principal (raiz) manda a um subagente; o neto (agent_path no session_meta) manda ao pai', () => {
+    const ctx = setup();
+    const at = ctx.now() - 10_000;
+    const N = threadId(3);
+    const NETO = `.codex:${N}`;
+    const netoSource = { subagent: { thread_spawn: { parent_thread_id: C, depth: 2, agent_path: '/root/tarefa_filho/tarefa_neto', agent_nickname: 'Hubble', agent_role: 'worker' } } };
+    ctx.home.rollout(T, [R.meta(T, { at }), R.taskStarted('p1', at), R.user(T, 'p1', 'u', 'Delegue', at)]);
+    ctx.home.rollout(C, [R.meta(C, { at, sessionId: T, source: SOURCES.sub(T, 'worker') }), R.taskStarted('s1', at), R.user(C, 's1', 'su', 'Delegue ao neto', at)]);
+    ctx.home.rollout(N, [R.meta(N, { at, sessionId: T, source: netoSource }), R.taskStarted('n1', at), R.user(N, 'n1', 'nu', 'Revise', at)]);
+    for (const id of [T, C, N]) ctx.home.lock(id, at);
+    ctx.source.boot();
+    const send = (agent: string | undefined, id: string, target: string) =>
+      ctx.hook({ hook_event_name: 'PreToolUse', session_id: T, ...(agent ? { agent_id: agent } : {}), cwd: '/projetos/loja', turn_id: 'x', tool_name: 'send_message', tool_use_id: id, tool_input: { target, message: 'x' } });
+    send(undefined, 'call_r', '/root/tarefa_filho');
+    send(N, 'call_n', '/root/tarefa_filho');
+    expect(ctx.agent()?.activity).toMatchObject({ id: `${KEY}#call_r`, text: 'Mensagem para um subagente' });
+    expect(ctx.agent(NETO)?.activity).toMatchObject({ id: `${NETO}#call_n`, text: 'Mensagem para o agente pai' });
+  });
+});
