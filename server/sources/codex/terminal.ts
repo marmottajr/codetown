@@ -157,6 +157,8 @@ class CodexTerminalParser implements TerminalParser {
   private cwd?: string;
   private lastAt?: number;
   private seq = 0;
+  /** Turno aberto (task_started) ou fechado (task_complete/turn_aborted); undefined = ainda não se sabe. */
+  private turnOpen?: boolean;
   /** Chamadas vistas (call_id → nome): só a saída de uma chamada conhecida vira resultado. */
   private readonly calls = new Map<string, string>();
 
@@ -283,8 +285,13 @@ class CodexTerminalParser implements TerminalParser {
     switch (p.type) {
       case 'item_completed':
         return this.item(rec(p.item), at, key);
+      case 'task_started':
+      case 'turn_started':
+        this.turnOpen = true;
+        return;
       case 'task_complete':
       case 'turn_complete': {
+        this.turnOpen = false;
         const ms = num(p.duration_ms);
         const err = rec(p.error);
         if (err) this.sys(`${str(p.turn_id) ?? key}:err`, at, `Erro: ${oneLine(str(err.message) ?? 'desconhecido', 160)}`, { level: 'error' });
@@ -292,6 +299,7 @@ class CodexTerminalParser implements TerminalParser {
         return;
       }
       case 'turn_aborted':
+        this.turnOpen = false;
         if (p.reason === 'interrupted' || p.reason === undefined) this.sys(`${str(p.turn_id) ?? key}:int`, at, 'Interrompido pelo usuário', { level: 'warn' });
         return;
       // ---- legacy
@@ -372,6 +380,9 @@ class CodexTerminalParser implements TerminalParser {
   }
 
   private command(id: string, at: number, cmd: unknown, output: string, exitCode: number | undefined, status: string | undefined): void {
+    // Encerrado pelo próprio Codex no fim do turno (0.160.1: código -1 depois do task_complete, com ou sem saída), como
+    // no rollout.ts: não é um comando do agente nem um erro; fica de fora.
+    if (this.turnOpen === false && exitCode === -1) return;
     this.tool(id, at, 'Bash', bashView(cmd, this.cwd));
     if (status === 'declined') return this.result(id, at, 'Recusado pelo usuário', true);
     const failed = status === 'failed' || (exitCode !== undefined && exitCode !== 0);

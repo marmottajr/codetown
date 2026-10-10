@@ -90,6 +90,28 @@ describe('terminal do Codex', () => {
     expect(out[2]).toMatchObject({ kind: 'system', text: 'Interrompido pelo usuário', level: 'warn' });
   });
 
+  it('0.160.1: comando encerrado pelo Codex no fim do turno (failed, código -1, depois do task_complete) fica de fora, com ou sem saída; com o turno aberto, o -1 aparece', () => {
+    const at = Date.parse('2026-10-09T12:00:00Z');
+    const out = entries([
+      R.meta(T, { at }),
+      R.taskStarted('turn1', at + 1),
+      R.command(T, 'turn1', 'exec-1', 'npm test', { output: 'ok', at: at + 2 }),
+      R.taskComplete('turn1', at + 3, 3_000),
+      R.command(T, 'turn1', 'exec-2', 'npm run dev', { exit: -1, status: 'failed', output: '', at: at + 4 }),
+      R.command(T, 'turn1', 'exec-3', 'npm run watch', { exit: -1, status: 'failed', output: 'compilando…\n'.repeat(20), at: at + 5 }),
+    ]);
+    expect(shape(out)).toEqual([
+      ['tool', 'Bash(npm test)'],
+      ['result', 'ok'],
+      ['system', 'Turno concluído em 3s'],
+    ]);
+    const open = entries([R.taskStarted('turn2', at), R.command(T, 'turn2', 'exec-4', 'npm test', { exit: -1, status: 'failed', output: '', at: at + 1 })]);
+    expect(results(open)).toMatchObject([{ toolUseId: 'exec-4', error: true, text: 'Código de saída -1' }]);
+    // Interrompido também fecha o turno.
+    const aborted = entries([R.taskStarted('turn3', at), R.turnAborted('turn3', at + 1), R.command(T, 'turn3', 'exec-5', 'npm run dev', { exit: -1, status: 'failed', at: at + 2 })]);
+    expect(tools(aborted)).toEqual([]);
+  });
+
   it('legacy: prompt, resposta, raciocínio e o par function_call / saída', () => {
     const out = entries([
       R.meta(T, { history: null }),
