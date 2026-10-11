@@ -2,7 +2,8 @@
 // - 'statusline': rate_limits que o Claude Code envia ao statusline, gravados pelo
 //   scripts/statusline-tap.mjs (recomendado: ao vivo);
 // - 'cache': cachedUsageUtilization gravado pelo próprio Claude Code (quando alguém roda /usage);
-// - 'codex': rate_limits dos arquivos de sessão do Codex, empurrados pela fonte do Codex (AccountsService.setUsage).
+// - 'codex': rate_limits dos arquivos de sessão do Codex, empurrados pela fonte do Codex (AccountsService.setUsage);
+// - 'opencode': custo e tokens somados do banco local do OpenCode (sem janelas de cota), empurrados pela fonte dele.
 // Vale sempre a fonte com os números mais recentes (maior fetchedAt). Nenhuma delas lê credenciais
 // nem faz chamadas de rede: são só arquivos que o Claude Code já grava na máquina.
 import type { AccountInfo, AccountUsage, UsageWindow } from '../../shared/types';
@@ -61,6 +62,41 @@ export function usageFromWindows(raw: unknown, source: UsageSource, fetchedAt: n
   return five || week || opus || sonnet ? usage : undefined;
 }
 
+/** Nome mostrado de cada cota do Antigravity (`quota` do statusline do agy); chave desconhecida vira o nome dela. */
+const ANTIGRAVITY_LABELS: Record<string, string> = { 'gemini-weekly': 'Gemini', '3p-weekly': 'Terceiros' };
+const ANTIGRAVITY_MAIN = 'gemini-weekly';
+
+function antigravityLabel(key: string): string {
+  if (Object.hasOwn(ANTIGRAVITY_LABELS, key)) return ANTIGRAVITY_LABELS[key];
+  const name = key.replace(/[-_]?weekly$/i, '').replace(/[^\w. -]/g, '').slice(0, 24).trim();
+  return name ? name[0].toUpperCase() + name.slice(1) : 'Cota';
+}
+
+/**
+ * `quota` do statusline do `agy` ({"<cota>": {remaining_fraction, reset_time}}) -> AccountUsage. A barra principal é a
+ * `gemini-weekly` (senão a primeira) e as outras vão em `extra`. Usado = (1 - restante) * 100. Sem nenhuma cota
+ * válida -> undefined.
+ */
+export function usageFromAntigravity(raw: unknown, fetchedAt: number): AccountUsage | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const buckets: Array<{ key: string; window: UsageWindow }> = [];
+  for (const [key, v] of Object.entries(raw as Record<string, unknown>).slice(0, 12)) {
+    if (!v || typeof v !== 'object') continue;
+    const remaining = num((v as Record<string, unknown>).remaining_fraction);
+    if (remaining === undefined) continue;
+    const window: UsageWindow = { utilization: Math.min(100, Math.max(0, (1 - remaining) * 100)) };
+    const resets = toEpochMs((v as Record<string, unknown>).reset_time);
+    if (resets !== undefined) window.resetsAt = resets;
+    buckets.push({ key, window });
+  }
+  if (!buckets.length) return undefined;
+  const main = buckets.find((b) => b.key === ANTIGRAVITY_MAIN) ?? buckets[0];
+  const usage: AccountUsage = { source: 'antigravity', fetchedAt, sevenDay: main.window, labels: { sevenDay: antigravityLabel(main.key) } };
+  const extra = buckets.filter((b) => b !== main).map((b) => ({ label: antigravityLabel(b.key), window: b.window }));
+  if (extra.length) usage.extra = extra;
+  return usage;
+}
+
 /** `cachedUsageUtilization` do .claude.json ({fetchedAtMs, utilization:{...}}) -> AccountUsage. */
 export function usageFromCache(cached: unknown): AccountUsage | undefined {
   if (!cached || typeof cached !== 'object') return undefined;
@@ -80,6 +116,11 @@ export function rollover(usage: AccountUsage, now: number): AccountUsage {
   for (const key of WINDOW_KEYS) {
     const w = usage[key];
     if (w?.resetsAt !== undefined && w.resetsAt <= now) delete out[key];
+  }
+  if (usage.extra) {
+    const extra = usage.extra.filter((e) => e.window.resetsAt === undefined || e.window.resetsAt > now);
+    if (extra.length) out.extra = extra;
+    else delete out.extra;
   }
   return out;
 }

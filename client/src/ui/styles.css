@@ -365,6 +365,33 @@
   --step: 3px;
 }
 
+/* Conta do OpenCode e do Antigravity: o mesmo chip "vazado" do Codex (outra ferramenta, sem logotipo). */
+.ui-acc-chip[data-provider='opencode'],
+.ui-acc-chip[data-provider='antigravity'] {
+  --step: 2px;
+  border-radius: 0;
+  background: #161b26;
+  color: var(--acc);
+  box-shadow:
+    inset 0 0 0 var(--step) var(--acc),
+    inset 0 calc(var(--step) * -2) 0 rgba(0, 0, 0, 0.3);
+  clip-path: polygon(
+    var(--step) 0,
+    calc(100% - var(--step)) 0,
+    100% var(--step),
+    100% calc(100% - var(--step)),
+    calc(100% - var(--step)) 100%,
+    var(--step) 100%,
+    0 calc(100% - var(--step)),
+    0 var(--step)
+  );
+}
+
+.ui-acc-chip--lg[data-provider='opencode'],
+.ui-acc-chip--lg[data-provider='antigravity'] {
+  --step: 3px;
+}
+
 /* Selo de texto "Codex" ao lado do nome da conta (fonte do sistema: na Pixelify o "C" parece "O"). */
 .ui-prov {
   display: inline-flex;
@@ -1051,6 +1078,14 @@
   row-gap: 1px;
 }
 
+/* Cartão de uma barra só (Antigravity): mesma altura das duas linhas dos outros (15 + 1 + 15 px), barra centralizada,
+   e a coluna do rótulo cabe o nome inteiro da cota ("Gemini"), inclusive na forma curta. */
+.ui-usage-card__meters.is-single {
+  grid-template-columns: 46px minmax(16px, 1fr) 32px auto;
+  min-height: 31px;
+  align-content: center;
+}
+
 /* Números antigos: barras e percentuais em cinza (legíveis), sem apagar o bloco inteiro. */
 .ui-usage-card__meters.is-dim .ui-meter {
   --lv: #a3abbd;
@@ -1156,6 +1191,10 @@
     column-gap: 5px;
   }
 
+  .ui-usage-card__meters.is-single {
+    grid-template-columns: 44px minmax(14px, 1fr) 30px auto;
+  }
+
   .ui-meter__label-long,
   .ui-meter__reset-long {
     display: none;
@@ -1249,10 +1288,16 @@
   }
 }
 
-/* Cartão minúsculo (3 contas no celular): fica só o botão, que já diz que falta ativar. */
+/* Cartão minúsculo (3 contas no celular): fica só o botão, que já diz que falta ativar. O custo do OpenCode (has-cost) não some. */
 @container usage-card (max-width: 112px) {
-  .ui-usage-card__msg-text {
+  .ui-usage-card__msg:not(.has-cost) .ui-usage-card__msg-text {
     display: none;
+  }
+
+  /* "US$ 4,21 · 7 d" precisa caber inteiro nos ~79px do corpo do cartão (4 cartões em 1000px). */
+  .ui-usage-card__msg.has-cost {
+    font-size: 10px;
+    letter-spacing: -0.2px;
   }
 
   .ui-usage-card__how {

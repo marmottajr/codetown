@@ -7,6 +7,7 @@
 #     (uso de 5h/semanal capturado pelo tap de statusline) em /usage;
 #   - do Codex, SOMENTE <pasta>/sessions, <pasta>/archived_sessions e <pasta>/thread-writer-locks em
 #     /codex/<conta>/... (nunca auth.json, config.toml, history.jsonl, logs nem os bancos SQLite);
+#   - do OpenCode, nada: o banco dele é SQLite e não é montado (veja o README, seção OpenCode);
 #   - HABBLAUD_CLAUDE_DIRS, HABBLAUD_CODEX_DIRS, HABBLAUD_ACCOUNTS e HABBLAUD_USAGE_DIR.
 # O Compose mescla o override automaticamente em qualquer `docker compose ...` rodado nesta pasta.
 name: habblaud

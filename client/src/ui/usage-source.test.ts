@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountInfo } from '../../../shared/types';
-import { cardState, codexUsageNote, showsUsageAge, sourceLabel, usageMessage, usageSubtitle } from './usage';
+import { cardState, codexUsageNote, showsUsageAge, sourceLabel, usageHowVisible, usageMessage, usageSetupVisible, usageSubtitle } from './usage';
 
 const MIN = 60_000;
 type Acc = Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider' | 'email' | 'plan' | 'configDir'>;
@@ -48,5 +48,27 @@ describe('cartão de uso de uma conta do Codex', () => {
     expect(usageSubtitle({ email: 'a@b.c', configDir: '~/.claude' })).toBe('a@b.c');
     expect(usageSubtitle({ configDir: '~/.claude' })).toBe('~/.claude');
     expect(codexUsageNote({ usageStatus: 'ok' }, 0)).toBe('');
+  });
+});
+
+describe('cartão de uso: Ativar só onde faz sentido', () => {
+  const base = { usageStatus: 'ok' as const };
+  it('OpenCode sem uso: sem botão, mensagem neutra, sem o passo a passo da dica', () => {
+    const oc = { ...base, provider: 'opencode' as const };
+    expect(usageHowVisible(oc)).toBe(false);
+    expect(usageMessage(oc)).toEqual(['o OpenCode não tem cota única', 'sem dados de cota']);
+    expect(usageSetupVisible(oc)).toBe(false);
+  });
+  it('Claude sem uso: botão e "sem dados de uso" continuam, com o passo a passo', () => {
+    const cl = { ...base, provider: 'claude' as const };
+    expect(usageHowVisible(cl)).toBe(true);
+    expect(usageMessage(cl)).toEqual(['sem dados de uso', 'sem dados']);
+    expect(usageSetupVisible(cl)).toBe(true);
+    expect(usageHowVisible({ ...base })).toBe(true);
+  });
+  it('Codex sem uso: botão ("Como funciona") continua, sem o passo a passo; sem cota esconde o botão', () => {
+    expect(usageHowVisible(codex())).toBe(true);
+    expect(usageSetupVisible(codex())).toBe(false);
+    expect(usageHowVisible(codex({ usage: { source: 'codex', noQuota: true, fetchedAt: 0 } }))).toBe(false);
   });
 });
