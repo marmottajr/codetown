@@ -365,6 +365,31 @@
   --step: 3px;
 }
 
+/* Conta do OpenCode: o mesmo chip "vazado" do Codex (outra ferramenta, sem logotipo). */
+.ui-acc-chip[data-provider='opencode'] {
+  --step: 2px;
+  border-radius: 0;
+  background: #161b26;
+  color: var(--acc);
+  box-shadow:
+    inset 0 0 0 var(--step) var(--acc),
+    inset 0 calc(var(--step) * -2) 0 rgba(0, 0, 0, 0.3);
+  clip-path: polygon(
+    var(--step) 0,
+    calc(100% - var(--step)) 0,
+    100% var(--step),
+    100% calc(100% - var(--step)),
+    calc(100% - var(--step)) 100%,
+    var(--step) 100%,
+    0 calc(100% - var(--step)),
+    0 var(--step)
+  );
+}
+
+.ui-acc-chip--lg[data-provider='opencode'] {
+  --step: 3px;
+}
+
 /* Selo de texto "Codex" ao lado do nome da conta (fonte do sistema: na Pixelify o "C" parece "O"). */
 .ui-prov {
   display: inline-flex;
