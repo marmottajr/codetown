@@ -354,6 +354,25 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   `/ack` (mesma trava das mensagens). `canMessage` = há entregador (binário achado, ou auxiliar visto há até 10 s).
   Retorno 0 = entrou na fila da sessão (`delivered`); o Codex consome a fila a cada ~10 s, quando a sessão fica ociosa.
 
+## OpenCode
+
+Terceira fonte, ao lado das do Claude Code e do Codex (`sources/opencode/`); agentes do OpenCode levam
+`provider: 'opencode'`. Ids: `opencode:<sessionId>` (`ses_` + 26 caracteres), conta fixa `opencode`. Só lê o disco:
+
+- **Disco** (`sources/opencode/files.ts`, `source.ts`, `activity.ts`): lê `<dados>/opencode.db` (`HABBLAUD_OPENCODE_DIR`,
+  `$XDG_DATA_HOME/opencode` ou `~/.local/share/opencode`) com `node:sqlite` em modo somente leitura, carregado por
+  import dinâmico (Node 22.13 ou mais novo; sem ele a fonte fica desligada com uma linha no log). É o único arquivo do
+  Habblaud que abre SQLite: só as tabelas `project`, `session`, `message`, `part` e `todo`, com colunas nomeadas e
+  `json_extract` do que a fonte usa; nunca `auth.json`, `opencode.jsonc`, logs, `tool-output/` nem as tabelas `event` e
+  `account`, e o texto das mensagens e o `output` das ferramentas nunca chegam ao processo. Consulta a cada 1 s (o
+  `fs.watch` do `-wal` só adianta), todas as leituras de um ciclo numa única transação. Uma sessão aparece com
+  `time_updated` nos últimos 30 min e sem `time_archived`; `parent_id` vira subagente; a sala é `session.directory` (ou
+  `project.worktree`); trabalhando = a última mensagem do assistente sem `time.completed`; a atividade vem da última
+  parte `tool` (`tool` e `state.title`). Falha de leitura (SQLITE_BUSY, JSON ruim) mantém o último resultado. Sem o
+  `opencode.db` a fonte fica dormente e confere a cada 5 s se ele já apareceu (sem log).
+- **Docker:** `scripts/docker-up.ts` não monta nenhum SQLite, então a leitura
+  do OpenCode só funciona no modo Node.
+
 ## Variáveis de ambiente
 
 | Variável | Padrão | Uso |
@@ -365,6 +384,8 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
 | `HABBLAUD_CODEX` | ligado | `0` desliga a fonte do Codex |
 | `HABBLAUD_CODEX_DIRS` | — | pastas do Codex separadas por vírgula; substitui a detecção (`CODEX_HOME` e `~/.codex*`) |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH | binário do Codex para o `codex queue` (modo Node e `npm run codex:bridge`) |
+| `HABBLAUD_OPENCODE` | ligado | `0` desliga a fonte do OpenCode (leitura do banco) |
+| `HABBLAUD_OPENCODE_DIR` | `$XDG_DATA_HOME/opencode` ou `~/.local/share/opencode` | pasta de dados do OpenCode (onde fica o `opencode.db`) |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0`, `false`, `off` ou `no` desligam só as mensagens pelo escritório |
 | `HABBLAUD_CLAUDE_DIRS` | — | config dirs separados por vírgula; substitui a detecção (`~/.claude*` com `projects/` ou `sessions/` + `CLAUDE_CONFIG_DIR`) |
 | `HABBLAUD_DATA_DIR` | `~/.habblaud` (Docker: `/data`) | estado do Habblaud (nomes e personagens dos projetos persistidos em `names.json`, linha do tempo em `timeline/`, estatísticas do Meu dia em `stats/`, última verificação de versão em `updates.json`) |

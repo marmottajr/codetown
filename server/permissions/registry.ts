@@ -22,6 +22,7 @@ import type { Activity, AgentInfo, PermissionAnswer, PermissionDecision, Permiss
 import { errMsg, log } from '../log';
 import { toolView } from '../sources/terminal';
 import { codexToolView } from './codex';
+import { opencodeToolView } from './opencode';
 import { callSignature, scanToolCall } from './transcript';
 
 /** Tempo que o hook espera por padrão (ele manda o próprio em `timeout_ms`). */
@@ -121,7 +122,7 @@ interface AskFormat {
 interface Pending {
   /** Versão completa (com `input`): GET /api/permissions/:id. */
   info: PermissionRequestInfo;
-  /** Pedido do Codex (sem a busca da resposta no transcript). */
+  /** Pedido do Codex ou do OpenCode (sem a busca da resposta no transcript). */
   codex?: boolean;
   /** Pergunta (AskUserQuestion): o formato de `tool_input.questions`, por posição (undefined = entrada inválida). */
   askFormat?: Array<AskFormat | undefined>;
@@ -157,14 +158,14 @@ function isIndex(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0;
 }
 
-/** Pedido que se responde com `answer` (as perguntas do AskUserQuestion; o Codex não as manda pelo hook). */
+/** Pedido que se responde com `answer` (as perguntas do AskUserQuestion; o Codex não as manda pelo hook; o plugin do OpenCode manda as dele assim). */
 function isQuestion(info: { tool: string; provider?: string }): boolean {
   return info.tool === ASK_TOOL && info.provider !== 'codex';
 }
 
-/** O Codex não aceita interromper nem "sempre permitir" (o hook dele só aprova ou recusa com motivo). */
+/** O Codex e o OpenCode não aceitam interromper nem "sempre permitir" (só aprovar ou recusar com motivo). */
 function unsupportedByCodex(info: PermissionRequestInfo, d: PermissionDecision): boolean {
-  return info.provider === 'codex' && (d.interrupt === true || d.suggestion !== undefined);
+  return (info.provider === 'codex' || info.provider === 'opencode') && (d.interrupt === true || d.suggestion !== undefined);
 }
 
 /**
@@ -255,7 +256,7 @@ export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefin
  * `agent_id` é o thread do subagente (e `session_id`, o thread raiz).
  */
 export function parseHookInput(raw: unknown): {
-  provider?: 'codex';
+  provider?: 'codex' | 'opencode';
   account?: string;
   codexHome?: string;
   sessionId: string;
@@ -273,15 +274,16 @@ export function parseHookInput(raw: unknown): {
   if (!r || !sessionId || !tool) throw new InvalidRequest('esperado o JSON do hook PermissionRequest (session_id e tool_name)');
   const t = typeof r.timeout_ms === 'number' && Number.isFinite(r.timeout_ms) ? r.timeout_ms : DEFAULT_TIMEOUT_MS;
   const codex = r.provider === 'codex';
+  const opencode = r.provider === 'opencode';
   return {
-    ...(codex ? { provider: 'codex' as const, account: shortStr(r.account, 200), codexHome: shortStr(r.codexHome, 4_096) } : {}),
+    ...(codex ? { provider: 'codex' as const, account: shortStr(r.account, 200), codexHome: shortStr(r.codexHome, 4_096) } : opencode ? { provider: 'opencode' as const } : {}),
     sessionId,
     agentId: shortStr(r.agent_id, 200),
     agentType: shortStr(r.agent_type, 120),
     cwd: shortStr(r.cwd, 4_096),
     tool,
     input: rec(r.tool_input) ?? {},
-    suggestions: codex ? undefined : r.permission_suggestions,
+    suggestions: codex || opencode ? undefined : r.permission_suggestions,
     timeoutMs: Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, t)),
   };
 }
@@ -383,7 +385,8 @@ export class PermissionRegistry {
   register(raw: unknown): RegisterResult {
     const req = parseHookInput(raw);
     const codex = req.provider === 'codex';
-    const desc = codex ? codexToolView(req.tool, req.input, req.cwd) : describeTool(req.tool, req.input);
+    const opencode = req.provider === 'opencode';
+    const desc = codex ? codexToolView(req.tool, req.input, req.cwd) : opencode ? opencodeToolView(req.tool, req.input, req.cwd) : describeTool(req.tool, req.input);
     const questions = 'questions' in desc ? desc.questions : undefined;
     const ask = isQuestion(req);
     // Pergunta: todas precisam aparecer no escritório (o hook só responde se cada uma tiver resposta).
@@ -391,7 +394,9 @@ export class PermissionRegistry {
     if (this.opts.viewers() <= 0) return { skip: 'no-viewers' };
     const target = codex
       ? this.resolveCodexAgent(req.sessionId, req.agentId, req.agentType, this.opts.codexAccount?.(req.account, req.codexHome) ?? req.account)
-      : this.resolveAgent(req.sessionId, req.agentId, req.agentType);
+      : opencode
+        ? this.resolveOpencodeAgent(req.sessionId)
+        : this.resolveAgent(req.sessionId, req.agentId, req.agentType);
     if (!target) return { skip: 'unknown-session' };
     if (this.size >= this.maxPending) return { skip: 'too-many' };
 
@@ -401,6 +406,7 @@ export class PermissionRegistry {
     const view = 'title' in desc ? desc : toolView(req.tool, req.input, req.cwd);
     const info: PermissionRequestInfo = { id, tool: req.tool, title: view.title, text: desc.text, icon: desc.icon, createdAt: now, expiresAt: now + req.timeoutMs };
     if (codex) info.provider = 'codex';
+    else if (opencode) info.provider = 'opencode';
     if (view.input) info.input = view.input;
     if (view.inputKind) info.inputKind = view.inputKind;
     if (target.subagent) info.subagent = target.subagent;
@@ -412,12 +418,12 @@ export class PermissionRegistry {
       info,
       agentId: target.id,
       sessionId: req.sessionId,
-      signature: codex ? '' : callSignature(req.tool, req.input),
+      signature: codex || opencode ? '' : callSignature(req.tool, req.input),
       lastScanAt: 0,
       waiters: new Set(),
       idleSince: now,
     };
-    if (codex) p.codex = true;
+    if (codex || opencode) p.codex = true; // sem a busca da resposta no transcript (o OpenCode não grava um)
     if (req.agentId) p.hookAgentId = req.agentId;
     if (ask) p.askFormat = askFormat(req.input.questions);
     this.pending.set(id, p);
@@ -558,9 +564,9 @@ export class PermissionRegistry {
     if (agentId) {
       const subId = `${sessionId}:${agentId}`;
       const sub = office.get(subId);
-      if (present(sub) && sub.provider !== 'codex') return { id: subId };
+      if (present(sub) && sub.provider !== 'codex' && sub.provider !== 'opencode') return { id: subId };
     }
-    const main = office.list().find((a) => a.kind === 'main' && a.provider !== 'codex' && a.sessionId === sessionId && a.status !== 'offline');
+    const main = office.list().find((a) => a.kind === 'main' && a.provider !== 'codex' && a.provider !== 'opencode' && a.sessionId === sessionId && a.status !== 'offline');
     if (!main) return undefined;
     return agentId ? { id: main.id, subagent: agentType ?? 'subagente' } : { id: main.id };
   }
@@ -581,6 +587,15 @@ export class PermissionRegistry {
     const main = find(sessionId);
     if (!main) return undefined;
     return sub ? { id: main.id, subagent: agentType ?? 'subagente' } : { id: main.id };
+  }
+
+  /**
+   * Agente do OpenCode de um pedido: o da sessão `session_id` (a sessão filha de um subagente tem id próprio e, quando o
+   * Habblaud a mostra, é o agente dela que recebe o pedido). Sessão que o Habblaud não mostra: sem desvio.
+   */
+  private resolveOpencodeAgent(sessionId: string): { id: string; subagent?: string } | undefined {
+    const found = this.opts.office.list().find((a) => a.provider === 'opencode' && a.sessionId === sessionId && present(a));
+    return found ? { id: found.id } : undefined;
   }
 
   private queueOf(p: Pending): { queued?: number } {

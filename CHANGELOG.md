@@ -10,6 +10,16 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **OpenCode no escritório.** As sessões do OpenCode entram como as do Claude Code e do Codex: cada projeto é uma sala,
+  cada sessão um personagem com o selo **OpenCode**, com atividade das ferramentas, subagentes e status (trabalhando
+  ou ocioso). Sem instalar nada, o Habblaud lê o banco do OpenCode (`opencode.db`) só para leitura, e apenas as tabelas
+  `project`, `session`, `message`, `part` e `todo` (nunca o `auth.json`, a configuração nem os logs); isso pede o
+  Node 22.13 ou mais novo (no Node 22.12 a leitura fica desligada, com uma linha no log, e o resto segue).
+  `HABBLAUD_OPENCODE=0` desliga e `HABBLAUD_OPENCODE_DIR` escolhe a pasta de dados. A leitura do banco não funciona no
+  Docker (o `docker:up` não monta nenhum SQLite): para ver o OpenCode, rode o Habblaud sem Docker. Implementado e
+  coberto por testes automáticos, e conferido no OpenCode 1.18.35, no Linux, com uma pasta pessoal temporária e isolada.
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio
