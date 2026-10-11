@@ -4,7 +4,7 @@ import type { AccountInfo, Activity, AgentInfo, AgentStatus, Provider } from '..
 import { h, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
 import { WORDMARK } from './icons';
 import { shellDoneKind, shellLine, shellStage, statusLabel, type ShellWait } from './model';
-import { accountChipLabel, accountProvider, fallbackShort, showsProviderTag } from './provider';
+import { accountChipLabel, accountProvider, fallbackShort, PROVIDER_NAME, showsProviderTag } from './provider';
 
 /**
  * Chip quadrado com a letra curta da conta ("C", "D") na cor da conta. Conta do Codex: o chip fica vazado (fundo
@@ -19,7 +19,7 @@ export function updateAccountChip(chip: HTMLElement, account: AccountInfo | unde
   const p = accountProvider(account, fallbackId, provider);
   setText(chip, account?.short ?? fallbackShort(fallbackId, p));
   setStyleVar(chip, '--acc', account?.color ?? '#8b98b3');
-  setAttr(chip, 'data-provider', p === 'codex' ? 'codex' : null);
+  setAttr(chip, 'data-provider', p === 'codex' || p === 'opencode' ? p : null);
   const label = accountChipLabel(account, fallbackId, p);
   setTitle(chip, label);
   setAttr(chip, 'aria-label', label);
@@ -32,6 +32,13 @@ export function createProviderTag(extra = ''): HTMLElement {
 
 /** Mostra o selo só para o Codex (e não repete quando o nome da conta já diz "Codex"). */
 export function updateProviderTag(tag: HTMLElement, provider: Provider, accountName = ''): void {
+  if (provider === 'opencode') {
+    setText(tag, PROVIDER_NAME.opencode);
+    setTitle(tag, 'Agente do OpenCode');
+  } else if (provider === 'codex') {
+    setText(tag, PROVIDER_NAME.codex);
+    setTitle(tag, 'Agente do Codex (OpenAI)');
+  }
   setHidden(tag, !showsProviderTag(provider, accountName));
 }
 

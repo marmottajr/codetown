@@ -10,6 +10,33 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **OpenCode no escritório.** As sessões do OpenCode entram como as do Claude Code e do Codex: cada projeto é uma sala,
+  cada sessão um personagem com o selo **OpenCode**, com atividade, subagentes e status. Sem instalar nada, o Habblaud
+  lê o banco do OpenCode (`opencode.db`) só para leitura, e apenas as tabelas `project`, `session`, `message`, `part` e
+  `todo`; isso pede o Node 22.13 ou mais novo (no Node 22.12 a leitura fica desligada e o resto segue).
+  `HABBLAUD_OPENCODE=0` desliga e `HABBLAUD_OPENCODE_DIR` escolhe a pasta de dados. Implementado e coberto por testes
+  automáticos, e conferido de ponta a ponta no OpenCode 1.18.35, no Linux, com uma pasta pessoal temporária e isolada
+  (sessão, eventos ao vivo, entrega de mensagem e um pedido de permissão real aprovado e recusado); "sempre permitir" e
+  interromper não são oferecidos, de propósito.
+- **Plugin do OpenCode** (`npm run opencode:install`, `opencode:status` e `opencode:uninstall`): copia um plugin para
+  `~/.config/opencode/plugins/habblaud.js` (backup antes; `--dry-run` só mostra o plano). Com ele, o status chega ao
+  vivo, os pedidos de permissão do OpenCode podem ser aprovados ou recusados no cartão **Pede permissão** (sem "sempre
+  permitir") e a caixa **Mandar mensagem** entrega texto ao agente principal da sessão.
+- **Perguntas do OpenCode no escritório.** Quando o OpenCode faz uma pergunta (a ferramenta `question`), o agente fica
+  esperando e o cartão **Precisa de você** mostra o texto e as opções, com o plugin (na hora) ou sem ele (na próxima
+  leitura do banco; só a pergunta e as opções da ferramenta `question` são lidas). Com o plugin, dá para responder
+  (uma opção, várias ou texto livre) ou recusar pelo escritório, esperando até 10 minutos; sem resposta aqui, vale o
+  prompt do OpenCode, e responder lá também faz o cartão sumir. Reinicie o OpenCode depois de atualizar o plugin
+  (`npm run opencode:install`). Coberto por testes automáticos.
+- **Ajuda do app com uma seção do OpenCode**, ao lado da do Codex: o que aparece, o plugin opcional
+  (`npm run opencode:install` e reiniciar o OpenCode), aprovar, perguntas, mensagens e quais tabelas são lidas.
+- **Solução de problemas do OpenCode no README:** Node 22.13, pasta de dados, plugin que ficou para trás, porta do
+  `opencode:status`, página aberta e como depurar com `HABBLAUD_HOOK_DEBUG=1`.
+- **Docker e OpenCode:** a leitura do banco do OpenCode não funciona no Docker (o `docker:up` não monta nenhum SQLite);
+  para ver o OpenCode, rode o Habblaud sem Docker.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio
