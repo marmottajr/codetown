@@ -218,6 +218,11 @@ const ALIAS_TOOLS: Record<Provider, { invokes: RegExp; dir: RegExp }> = {
     invokes: /(?:^|[\s;&|(])(?:[\w.~/-]*\/)?codex(?=$|[\s;&|)])/,
     dir: /\bCODEX_HOME=(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/,
   },
+  // OpenCode tem uma pasta de dados por usuário (sem conta extra): o alias só importa para o comando invocado.
+  opencode: {
+    invokes: /(?:^|[\s;&|(])(?:[\w.~/-]*\/)?opencode(?=$|[\s;&|)])/,
+    dir: /\bHABBLAUD_OPENCODE_DIR=(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/,
+  },
 };
 
 /**
