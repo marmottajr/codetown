@@ -6,6 +6,10 @@
 // Pedido do Codex (`provider: 'codex'`): o hook dele só espera alguns segundos e o terminal só mostra a aprovação
 // depois que você responder aqui ou o prazo acabar; não há "sempre permitir" nem "interromper", e recusar pede um
 // motivo. O Codex nunca pergunta pelo escritório (sem cartão de pergunta).
+// Pedido do OpenCode (`provider: 'opencode'`): como o do Codex (só aprovar ou recusar, recusar pede um motivo, o prazo é
+// de segundos); a diferença é que o pedido do próprio OpenCode já está na tela dele enquanto o cartão espera:
+// responder aqui o resolve lá, e sem resposta vale o prompt do OpenCode. A PERGUNTA do OpenCode (AskUserQuestion) tem o
+// mesmo formulário do Claude Code (Responder; "Não responder" sem motivo obrigatório).
 import { ANSWER_OTHER_MAX, ASK_TOOL, checkAnswers } from '../../../shared/answers';
 import type { AgentInfo, AskQuestion, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo } from '../../../shared/types';
 import type { UiContext } from './context';
@@ -45,6 +49,12 @@ export function expiryText(expiresAt: number, now: number, seconds = false): str
 /** Aviso do cartão de um pedido do Codex. */
 export const CODEX_PERMISSION_NOTE = 'No Codex, a aprovação só aparece no terminal depois que você responder aqui ou o prazo acabar.';
 
+/** Aviso do cartão de um pedido do OpenCode. */
+export const OPENCODE_PERMISSION_NOTE = 'No OpenCode, o pedido já está na tela dele: responder aqui o resolve lá, e sem resposta aqui vale o prompt do OpenCode.';
+
+/** Aviso do cartão de um pedido do Antigravity. */
+export const ANTIGRAVITY_PERMISSION_NOTE = 'No Antigravity, o comando espera aqui até o prazo acabar; sem resposta aqui, o agy mostra o prompt dele.';
+
 /** O que o cartão oferece para um pedido (muda com a ferramenta). */
 export interface PermissionOptions {
   /** "Aprovar e não perguntar de novo" (as sugestões do Claude Code). */
@@ -59,8 +69,12 @@ export interface PermissionOptions {
   note: string;
 }
 
-export function permissionOptions(p: Pick<PermissionRequestInfo, 'provider' | 'suggestions'>, agent: Pick<AgentInfo, 'kind' | 'background'>): PermissionOptions {
+export function permissionOptions(p: Pick<PermissionRequestInfo, 'provider' | 'suggestions'> & { tool?: string }, agent: Pick<AgentInfo, 'kind' | 'background'>): PermissionOptions {
   if (p.provider === 'codex') return { always: false, interrupt: false, reasonRequired: true, seconds: true, note: CODEX_PERMISSION_NOTE };
+  // Antigravity: só aprovar ou recusar; o motivo da recusa é opcional (o hook manda `reason` se houver).
+  if (p.provider === 'antigravity') return { always: false, interrupt: false, reasonRequired: false, seconds: true, note: ANTIGRAVITY_PERMISSION_NOTE };
+  // Pergunta: recusar não leva texto (o plugin manda reject sem corpo), então o motivo não é obrigatório.
+  if (p.provider === 'opencode') return { always: false, interrupt: false, reasonRequired: p.tool !== ASK_TOOL, seconds: true, note: OPENCODE_PERMISSION_NOTE };
   // Subagente em segundo plano: o Claude Code só mostra o diálogo depois que o hook responde.
   const blocking = agent.kind === 'sub' && !!agent.background;
   return {
@@ -97,7 +111,7 @@ export function isLocalHostname(hostname: string): boolean {
   return name === 'localhost' || name.endsWith('.localhost') || name === '::1' || /^127(?:\.\d{1,3}){3}$/.test(name);
 }
 
-/** Pedido que se responde escolhendo (as perguntas do AskUserQuestion), não aprovando. O Codex nunca pergunta. */
+/** Pedido que se responde escolhendo (as perguntas do AskUserQuestion), não aprovando. O Codex nunca pergunta; o OpenCode pergunta como o Claude Code. */
 export function isQuestionRequest(p: Pick<PermissionRequestInfo, 'tool' | 'questions' | 'provider'> | undefined): boolean {
   return !!p && p.provider !== 'codex' && p.tool === ASK_TOOL && !!p.questions?.length;
 }
@@ -214,7 +228,9 @@ export class PermissionCard {
   private interrupt: HTMLInputElement;
   private interruptRow: HTMLElement;
   private denySubmit: HTMLButtonElement;
-  /** O que o cartão oferece para o pedido atual (Claude Code ou Codex). */
+  /** Nome do provider do pedido atual quando o cartão é o do Codex ou do OpenCode ('' = Claude Code). */
+  private hosted = '';
+  /** O que o cartão oferece para o pedido atual (Claude Code, Codex ou OpenCode). */
   private opts: PermissionOptions = { always: false, interrupt: true, reasonRequired: false, seconds: false, note: '' };
   private status: HTMLElement;
   private remote: HTMLElement;
@@ -328,7 +344,12 @@ export class PermissionCard {
     const now = this.ctx.now();
     const opts = (this.opts = permissionOptions(p, agent));
     const codex = p.provider === 'codex';
+    const opencode = p.provider === 'opencode';
+    const antigravity = p.provider === 'antigravity';
+    this.hosted = codex ? 'Codex' : opencode ? 'OpenCode' : antigravity ? 'Antigravity' : '';
     this.el.classList.toggle('is-codex', codex);
+    this.el.classList.toggle('is-opencode', opencode);
+    this.el.classList.toggle('is-antigravity', antigravity);
     const ask = isQuestionRequest(p);
     const kind = ask ? 'ask' : 'perm';
     if (this.el.dataset.kind !== kind) {
@@ -344,7 +365,11 @@ export class PermissionCard {
       this.timer,
       codex
         ? `Pedido feito às ${formatClock(p.createdAt)}. Sem resposta aqui até ${formatClock(p.expiresAt)}, o Codex segue sem a decisão do escritório e pede a aprovação no terminal.`
-        : `Pedido feito às ${formatClock(p.createdAt)}. Sem resposta aqui até ${formatClock(p.expiresAt)}, o Habblaud devolve o pedido ao terminal.`,
+        : opencode
+          ? `Pedido feito às ${formatClock(p.createdAt)}. Sem resposta aqui até ${formatClock(p.expiresAt)}, o OpenCode segue sem a decisão do escritório: vale o prompt dele.`
+          : antigravity
+            ? `Pedido feito às ${formatClock(p.createdAt)}. Sem resposta aqui até ${formatClock(p.expiresAt)}, o Antigravity segue sem a decisão do escritório: vale o prompt dele.`
+            : `Pedido feito às ${formatClock(p.createdAt)}. Sem resposta aqui até ${formatClock(p.expiresAt)}, o Habblaud devolve o pedido ao terminal.`,
     );
 
     // Pergunta: o formulário com as opções no lugar do título da ferramenta e da prévia dos argumentos.
@@ -380,10 +405,16 @@ export class PermissionCard {
     for (const b of [this.approveBtn, this.denyBtn, this.terminalBtn]) b.disabled = busy;
     for (const el of this.askForm.querySelectorAll('input')) el.disabled = busy;
     if (ask) this.syncAnswer();
-    setTitle(this.denyBtn, ask ? 'Não responder: o agente segue sem a resposta (com o motivo, se você escrever um)' : codex ? 'Recusar com um motivo (o Codex pede um)' : '');
+    setTitle(this.denyBtn, ask ? 'Não responder: o agente segue sem a resposta (com o motivo, se você escrever um)' : this.hosted ? `Recusar com um motivo (o ${this.hosted} pede um)` : '');
     setTitle(
       this.terminalBtn,
-      codex ? 'O Habblaud solta o pedido agora: o Codex mostra a aprovação no terminal' : 'O Habblaud deixa este pedido de lado: vale o que você responder no terminal',
+      codex
+        ? 'O Habblaud solta o pedido agora: o Codex mostra a aprovação no terminal'
+        : opencode
+          ? 'O Habblaud solta o pedido agora: responda no prompt do OpenCode'
+          : antigravity
+            ? 'O Habblaud solta o pedido agora: responda no prompt do Antigravity'
+            : 'O Habblaud deixa este pedido de lado: vale o que você responder no terminal',
     );
     this.suggestions.sync(opts.always ? (p.suggestions ?? []) : []);
     for (const b of this.suggestions.container.querySelectorAll('button')) b.disabled = busy;
@@ -394,7 +425,7 @@ export class PermissionCard {
       this.reason,
       'placeholder',
       opts.reasonRequired
-        ? 'Motivo (obrigatório no Codex, vai para o agente). Ex.: use pnpm em vez de npm'
+        ? `Motivo (obrigatório no ${this.hosted || 'Codex'}, vai para o agente). Ex.: use pnpm em vez de npm`
         : `Motivo (opcional, vai para o agente). Ex.: ${ask ? 'decida você, com o que for mais seguro' : 'use pnpm em vez de npm'}`,
     );
     setAttr(this.reason, 'aria-label', opts.reasonRequired ? 'Motivo da recusa (obrigatório)' : 'Motivo da recusa (opcional)');
@@ -440,11 +471,11 @@ export class PermissionCard {
       });
   }
 
-  /** Codex: "Recusar" só acende com um motivo escrito. */
+  /** Codex e OpenCode: "Recusar" só acende com um motivo escrito. */
   private syncDeny(): void {
     const missing = this.opts.reasonRequired && !this.reason.value.trim();
     this.denySubmit.disabled = this.isBusy() || missing;
-    setTitle(this.denySubmit, missing ? 'Escreva o motivo: o Codex recusa só com um motivo' : '');
+    setTitle(this.denySubmit, missing ? `Escreva o motivo: o ${this.hosted || 'Codex'} recusa só com um motivo` : '');
   }
 
   private toggleDeny(open = this.phase !== 'deny'): void {

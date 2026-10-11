@@ -10,6 +10,50 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Cota do Antigravity no cartão de uso (opcional).** `npm run antigravity:install -- --uso` mostra a cota semanal, a mesma
+  do `/usage` do `agy`: acrescenta um `statusLine` (com `stack_with_default`) ao `~/.gemini/antigravity-cli/settings.json`,
+  com backup, e nunca troca o `statusLine` de outra pessoa (avisa e sai com 1). Só as cotas são guardadas, em
+  `~/.habblaud/usage/antigravity-quota.json`: nada de e-mail, pasta, transcript nem token. A barra principal é a cota
+  semanal do Gemini, as outras cotas ficam na dica do cartão, e o cartão não tem a barra de 5 h. No Docker, o arquivo
+  é lido pela pasta de uso que o `docker:up` já monta somente leitura. O `antigravity:uninstall` remove só o que é do Habblaud.
+- **Antigravity no escritório.** As conversas do Antigravity CLI (`agy`) entram como as do Claude Code, do Codex e do
+  OpenCode: cada pasta de trabalho é uma sala, cada conversa um personagem com o selo **Antigravity**, com status e a
+  atividade da ferramenta. Só por hook: `npm run antigravity:install` (`antigravity:status` e `antigravity:uninstall`)
+  registra o hook `habblaud` no `~/.gemini/config/hooks.json` (backup antes; os outros hooks ficam; `--dry-run` só mostra
+  o plano). Por padrão o hook só observa, não imprime nada e sai sempre com 0: desiste de falar com o Habblaud em 1,5 s e nunca passa de 3 s. Nenhum arquivo do `agy` é lido.
+  Opcional: `npm run antigravity:install -- --aprovar` deixa aprovar ou recusar os comandos (`run_command`) no cartão
+  **Pede permissão**, esperando até 25 s (`--espera <s>`); sem resposta vale o prompt do `agy`. Usa o comportamento `{}`
+  do `agy`, que a documentação dele não descreve (conferido no `agy` 1.3.3, no modo interativo e no `-p`); só o
+  `run_command` é segurado e não há "sempre permitir".
+  `HABBLAUD_ANTIGRAVITY=0` desliga. Implementado e coberto por testes automáticos, e conferido de ponta a ponta no `agy`
+  1.3.3, no Linux. Sem mensagens, terminal nem histórico. Uma rodada abortada pelo `agy` sem `Stop` deixa o agente como trabalhando por até 30 minutos.
+- **OpenCode no escritório.** As sessões do OpenCode entram como as do Claude Code e do Codex: cada projeto é uma sala,
+  cada sessão um personagem com o selo **OpenCode**, com atividade, subagentes e status. Sem instalar nada, o Habblaud
+  lê o banco do OpenCode (`opencode.db`) só para leitura, e apenas as tabelas `project`, `session`, `message`, `part` e
+  `todo`; isso pede o Node 22.13 ou mais novo (no Node 22.12 a leitura fica desligada e o resto segue).
+  `HABBLAUD_OPENCODE=0` desliga e `HABBLAUD_OPENCODE_DIR` escolhe a pasta de dados. Implementado e coberto por testes
+  automáticos, e conferido de ponta a ponta no OpenCode 1.18.35, no Linux, com uma pasta pessoal temporária e isolada
+  (sessão, eventos ao vivo, entrega de mensagem e um pedido de permissão real aprovado e recusado); "sempre permitir" e
+  interromper não são oferecidos, de propósito.
+- **Plugin do OpenCode** (`npm run opencode:install`, `opencode:status` e `opencode:uninstall`): copia um plugin para
+  `~/.config/opencode/plugins/habblaud.js` (backup antes; `--dry-run` só mostra o plano). Com ele, o status chega ao
+  vivo, os pedidos de permissão do OpenCode podem ser aprovados ou recusados no cartão **Pede permissão** (sem "sempre
+  permitir") e a caixa **Mandar mensagem** entrega texto ao agente principal da sessão.
+- **Perguntas do OpenCode no escritório.** Quando o OpenCode faz uma pergunta (a ferramenta `question`), o agente fica
+  esperando e o cartão **Precisa de você** mostra o texto e as opções, com o plugin (na hora) ou sem ele (na próxima
+  leitura do banco; só a pergunta e as opções da ferramenta `question` são lidas). Com o plugin, dá para responder
+  (uma opção, várias ou texto livre) ou recusar pelo escritório, esperando até 10 minutos; sem resposta aqui, vale o
+  prompt do OpenCode, e responder lá também faz o cartão sumir. Reinicie o OpenCode depois de atualizar o plugin
+  (`npm run opencode:install`). Coberto por testes automáticos.
+- **Ajuda do app com uma seção do OpenCode**, ao lado da do Codex: o que aparece, o plugin opcional
+  (`npm run opencode:install` e reiniciar o OpenCode), aprovar, perguntas, mensagens e quais tabelas são lidas.
+- **Solução de problemas do OpenCode no README:** Node 22.13, pasta de dados, plugin que ficou para trás, porta do
+  `opencode:status`, página aberta e como depurar com `HABBLAUD_HOOK_DEBUG=1`.
+- **Docker e OpenCode:** a leitura do banco do OpenCode não funciona no Docker (o `docker:up` não monta nenhum SQLite);
+  para ver o OpenCode, rode o Habblaud sem Docker.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio
